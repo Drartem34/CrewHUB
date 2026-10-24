@@ -320,7 +320,8 @@
 │   ├── start.py             # запуск одним файлом
 │   ├── tui.py               # панель сервера в терміналі (rich)
 │   ├── recover_admin.py     # скидання пароля адміна з сервера
-│   ├── test_crewhub.py      # автотести (pytest)
+│   ├── test_crewhub.py      # автотести (unittest)
+│   ├── test_hardening.py    # тести на виправлені дірки й баги
 │   ├── requirements.txt     # залежності
 │   ├── templates/           # HTML-сторінки (Jinja2)
 │   ├── static/              # CSS, JS, іконки, APK
@@ -330,9 +331,7 @@
 │   ├── res/                 # ресурси, іконки
 │   ├── libs/                # zxing-core (сканер QR)
 │   └── build.sh             # збірка APK
-├── readme.html          # ця документація
-├── reports/             # звіти (стрес-тест)
-└── screenshots/         # скріни з тестової компанії</code></pre>
+└── readme.html          # ця документація</code></pre>
     </section>
 
     <section id="server">
@@ -452,7 +451,10 @@
         <p>База працює в режимі WAL (паралельне читання без блокувань), усі записи серіалізує глобальний замок (<code>_lock</code>), а <code>busy_timeout=15000</code> не дає впасти під навантаженням. Стрес-тест показав 0 помилок блокування. Єдине вузьке місце — ранковий пік, коли всі стартують зміну одночасно: записи йдуть по черзі. Для сотень людей цього вистачає; тисячам знадобився б Postgres.</p>
 
         <h3 class="block">💾 Бекапи й відновлення</h3>
-        <p>Сервер сам робить бекапи БД (<code>start_backups</code>, типово раз на добу), дзеркалить у окрему теку й прибирає старі (<code>_prune</code>). Плюс дані кожної людини лежать у теці <code>people/</code> — звідти людину можна відновити, просто повернувши теку.</p>
+        <p>Сервер сам робить бекапи БД (<code>start_backups</code>, типово раз на добу), дзеркалить у окрему теку й прибирає старі (<code>_prune</code>). «Завантажити копію» в «Правилах» кладе файл окремо (<code>backups/manual</code>) і щоденні копії не витісняє. Пошкоджену базу сервер відновлює з найсвіжішої <b>справної</b> копії. Плюс дані кожної людини лежать у теці <code>people/</code> (без хешів паролів): повернуту теку підключають командою <code>python profiles.py import "Ім'я"</code>, після чого людині скидають пароль.</p>
+
+        <h3 class="block">🧱 Надійність</h3>
+        <p>Фонові потоки (контроль Wi-Fi, бекап, папки) звітують про себе: <code>/health</code> відповідає 503, а адмін бачить банер, якщо котрийсь падає чи замовк. Журнал — <code>logs/crewhub.log</code> з ротацією. Усі значення з форм і «Правил» перевіряються: сміття не дає помилки 500 і не валить сервер. Сервер на VPS з UTC рахує час у <code>Europe/Kyiv</code> (або <code>CREWHUB_TZ</code>).</p>
     </section>
 
     <section id="start">
@@ -468,7 +470,7 @@
             <i class="fa-solid fa-triangle-exclamation"></i>
             <div>
                 <strong>Корисні змінні оточення</strong>
-                <p><code>CREWHUB_PORT</code> — порт (типово 5000); <code>CREWHUB_THREADS</code> — потоки Waitress (типово 48); <code>CREWHUB_DB</code> — шлях до бази; <code>CREWHUB_PLAIN=1</code> — вимкнути красиву панель.</p>
+                <p><code>CREWHUB_PORT</code> — порт (типово 5000); <code>CREWHUB_THREADS</code> — потоки Waitress (типово 48); <code>CREWHUB_DB</code> — шлях до бази; <code>CREWHUB_PLAIN=1</code> — вимкнути красиву панель; <code>CREWHUB_TZ</code> — часовий пояс (типово системний, на UTC-сервері Europe/Kyiv); <code>CREWHUB_TRUST_PROXY=1</code> — вірити <code>X-Forwarded-For</code> від власного локального проксі (pinggy з <code>xff</code> вмикає це сам).</p>
             </div>
         </div>
     </section>
@@ -489,12 +491,12 @@
     <section id="tests">
         <h2><i class="fa-solid fa-vial"></i> Тести і стрес-тест</h2>
         <p>Автотести запускаються так:</p>
-        <pre><code>cd test_app &amp;&amp; python3 -m pytest -q</code></pre>
+        <pre><code>cd test_app &amp;&amp; python3 -m unittest test_crewhub test_hardening</code></pre>
         <div class="alert-box ok">
             <i class="fa-solid fa-gauge-high"></i>
             <div>
                 <strong>Результати стрес-тесту</strong>
-                <p>200 одночасних стартів зміни — за 7.8 с, 0 помилок, ~200 МБ пам'яті. До 344 «пульсів» за секунду. SQLite WAL — 0 помилок блокування. Повний звіт: <code>reports/СТРЕС-ТЕСТ.md</code>.</p>
+                <p>200 одночасних стартів зміни — за 7.8 с, 0 помилок, ~200 МБ пам'яті. До 344 «пульсів» за секунду. SQLite WAL — 0 помилок блокування.</p>
             </div>
         </div>
     </section>

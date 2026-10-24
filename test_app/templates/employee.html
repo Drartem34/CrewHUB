@@ -39,7 +39,7 @@
       <div class="card-head"><h3>{{ icon('file') }} Особова папка</h3>
         <a class="btn sm" href="{{ url_for('admin_employee_folder', uid=u.id) }}">{{ icon('download', 'sm') }}Завантажити</a></div>
       <p class="muted small" style="margin:0">Усі дані {{ u.full_name }} лежать у папці <b>people/{{ u.folder or u.full_name }}</b> на сервері:
-        профіль, аватарка, зміни, відсутності, бонуси. Видалення папки видаляє акаунт.</p>
+        профіль, аватарка, зміни, відсутності, бонуси. Видалену папку сервер відтворить з бази; видалити працівника можна лише тут.</p>
     </div>
     <div class="card">
       <div class="card-head"><h3>{{ icon('phone') }} Телефон людини</h3><span class="muted small">з нього вмикається автозміна</span></div>

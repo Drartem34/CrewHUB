@@ -10,8 +10,8 @@
 ## Збірка
 
 ```bash
-sudo apt install android-sdk-platform-23 aapt apksigner zipalign dalvik-exchange openjdk-17-jdk
-./build.sh            # → build/CrewHub.apk
+sudo apt install aapt apksigner zipalign dalvik-exchange openjdk-17-jdk
+ANDROID_JAR=шлях/до/android.jar ./build.sh   # API 34; → build/CrewHub.apk (див. коментар у build.sh)
 ```
 
 Ключ підпису (`crewhub.keystore`) і пароль до нього (`keystore.pass`) `build.sh` створює сам при першій збірці.
@@ -20,16 +20,5 @@ sudo apt install android-sdk-platform-23 aapt apksigner zipalign dalvik-exchange
 
 Старий тестовий ключ (пароль `crewhub123`) був опублікований разом із кодом, тому його замінено. Застосунок,
 підписаний старим ключем, оновити поверх не вийде: видаліть його з телефона один раз і встановіть новий.
-
-## Демо без сервера (`demo/`)
-
-`CrewHub_Demo.apk` (пакет `ua.crewhub.demo`, ставиться поруч з робочим): інтерфейс, знятий з `test_app` з тестовими
-даними. `build_demo.py` відкриває всі сторінки від імені працівника й адміна і зберігає їх у `assets/www`;
-`demo.js` веде переходи між збереженими сторінками, рахує зміну на телефоні і не дає формам нічого зберігати.
-Застосунок віддає ці файли за адресою `https://demo.crewhub/` прямо з APK, мережа не потрібна.
-
-```bash
-bash demo/build.sh    # → demo/build/CrewHub_Demo.apk (потрібен Flask, як для сервера)
-```
 
 QR-сканер використовує libs/zxing-core-3.5.3.jar (ZXing, Apache 2.0); build.sh підключає всі jar з libs/ сам.
