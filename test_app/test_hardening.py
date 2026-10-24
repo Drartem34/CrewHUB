@@ -645,6 +645,33 @@ class HardeningTest(CrewHubBase):
         self.assertEqual(admin.get("/admin?tab=payroll").status_code, 200)
         self.assertLess(len(seen), 40, len(seen))  # раніше — по запиту на кожну суму на сторінці
 
+    def test_fast_weighted_seconds_matches_reference(self):
+        """Швидкий розрахунок надбавок дає ті самі гроші, що й старий (еталон нижче), і в дні переходу на літній час."""
+        import random
+        from datetime import datetime, timedelta
+
+        def reference(a, b, rules):
+            cuts = {a, b}
+            day = datetime.fromtimestamp(a).date() - timedelta(days=1)
+            while day <= datetime.fromtimestamp(b).date():
+                base = datetime.combine(day, datetime.min.time())
+                for mins in (0, rules["night_start"], rules["night_end"]):
+                    x = int((base + timedelta(minutes=mins)).timestamp())
+                    if a < x < b:
+                        cuts.add(x)
+                day += timedelta(days=1)
+            pts = sorted(cuts)
+            return sum((q - p) * core.time_factor((p + q) // 2, rules) for p, q in zip(pts, pts[1:]))
+        rnd = random.Random(3310)
+        anchors = [datetime(2026, 10, 24, 20, 0), datetime(2027, 3, 27, 20, 0), datetime(2026, 6, 5, 8, 0)]
+        for ns, ne in ((22 * 60, 6 * 60), (0, 6 * 60), (8 * 60, 20 * 60), (300, 300), (23 * 60 + 30, 0)):
+            rules = {"weekend": 2.0, "night": 3.0, "night_start": ns, "night_end": ne}
+            for _ in range(150):
+                a = int(rnd.choice(anchors).timestamp()) + rnd.randint(-40, 40) * 3600 + rnd.randint(0, 3599)
+                b = a + rnd.randint(1, 30 * 3600)
+                self.assertAlmostEqual(core.weighted_seconds(a, b, rules), reference(a, b, rules), places=6,
+                                       msg=f"{datetime.fromtimestamp(a)} – {datetime.fromtimestamp(b)} ніч {ns}–{ne}")
+
 
 if __name__ == "__main__":
     unittest.main()

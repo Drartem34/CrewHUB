@@ -5,6 +5,7 @@
 """
 import base64
 import csv
+import functools
 import hashlib
 import io
 import ipaddress
@@ -1007,25 +1008,53 @@ def time_factor(ts, rules):
     return f
 
 
+@functools.lru_cache(maxsize=8192)
+def _day_cuts(ordinal, night_start, night_end):
+    """Північ, початок і кінець ночі дня за місцевим часом (мітки часу). Ті самі дні повторюються в тисячах змін,
+    а перетворення місцевого часу з урахуванням літнього часу недешеве — рахуємо кожен день один раз."""
+    base = datetime.combine(date.fromordinal(ordinal), datetime.min.time())
+    return tuple(int((base + timedelta(minutes=m)).timestamp()) for m in (0, night_start, night_end))
+
+
 def weighted_seconds(a, b, rules):
-    """Секунди між a і b, помножені на множник часу (ріжемо інтервал по півночі і межах ночі)."""
+    """Секунди між a і b, помножені на множник часу: ріжемо інтервал по півночі й межах ночі, кожен шматок —
+    зі своїм множником (вихідний, ніч; при збігу більший)."""
     if b <= a:
         return 0.0
-    cuts = {a, b}
-    day = datetime.fromtimestamp(a).date() - timedelta(days=1)
-    last = datetime.fromtimestamp(b).date()
-    while day <= last:
-        base = datetime.combine(day, datetime.min.time())
-        for mins in (0, rules["night_start"], rules["night_end"]):
-            x = int((base + timedelta(minutes=mins)).timestamp())
-            if a < x < b:
-                cuts.add(x)
-        day += timedelta(days=1)
-    pts = sorted(cuts)
-    return sum((q - p) * time_factor((p + q) // 2, rules) for p, q in zip(pts, pts[1:]))
+    ns, ne = rules["night_start"], rules["night_end"]
+    marks = sorted({0, ns, ne, 1440})
+    total = 0.0
+    d = datetime.fromtimestamp(a).date().toordinal()
+    while True:
+        cuts = _day_cuts(d, ns, ne)
+        if cuts[0] >= b:
+            break
+        at = {0: cuts[0], ns: cuts[1], ne: cuts[2], 1440: _day_cuts(d + 1, ns, ne)[0]}
+        weekend = date.fromordinal(d).weekday() >= 5
+        for m1, m2 in zip(marks, marks[1:]):
+            lo, hi = max(at[m1], a), min(at[m2], b)
+            if hi <= lo:
+                continue
+            f = max(1.0, rules["weekend"]) if weekend else 1.0
+            if ns != ne and ((ns <= m1 < ne) if ns < ne else (m1 >= ns or m1 < ne)):
+                f = max(f, rules["night"])
+            total += (hi - lo) * f
+        d += 1
+    return total
 
 
-def shift_stats(conn, shift, at=None, rules=None):
+def breaks_by_shift(conn, shift_ids):
+    """Перерви багатьох змін одним запитом (а не окремим на кожну зміну): {shift_id: [перерви]}."""
+    out, ids = {}, list(shift_ids)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        for b in conn.execute(f"select * from breaks where shift_id in ({','.join('?' * len(chunk))}) order by started_at", chunk):
+            out.setdefault(b["shift_id"], []).append(b)
+    return out
+
+
+def shift_stats(conn, shift, at=None, rules=None, breaks=None):
+    """breaks — уже прочитані перерви цієї зміни (з breaks_by_shift), щоб не питати базу на кожну зміну."""
     at = at or now()
     rules = rules or pay_rules(conn)
     end = shift["ended_at"] or at
@@ -1033,7 +1062,7 @@ def shift_stats(conn, shift, at=None, rules=None):
     unpaid = paid_break = 0
     pay_units = weighted_seconds(shift["started_at"], end, rules)
     open_break = None
-    for b in conn.execute("select * from breaks where shift_id = ?", (shift["id"],)):
+    for b in (breaks if breaks is not None else conn.execute("select * from breaks where shift_id = ?", (shift["id"],))):
         b_end = b["ended_at"] or end
         dur = max(b_end - b["started_at"], 0)
         w = weighted_seconds(b["started_at"], b_end, rules)
@@ -1096,14 +1125,25 @@ def payroll(conn, d_from, d_to, user_id=None):
         args.append(user_id)
     rows = []
     rules = pay_rules(conn)
-    for u in conn.execute(q + " order by full_name", args):
-        shifts = conn.execute("select * from shifts where user_id = ? and started_at >= ? and started_at < ?",
-                              (u["id"], start, end)).fetchall()
-        stats = [shift_stats(conn, s, rules=rules) for s in shifts]
-        adj = conn.execute("select amount from adjustments where user_id = ? and day between ? and ?",
-                           (u["id"], d_from.isoformat(), d_to.isoformat())).fetchall()
-        bonuses = sum(a[0] for a in adj if a[0] > 0)
-        penalties = sum(a[0] for a in adj if a[0] < 0)
+    users = conn.execute(q + " order by full_name", args).fetchall()
+    # Зміни, перерви й бонуси всіх людей за період — трьома запитами, а не трьома на кожну людину
+    sq, sargs = "select * from shifts where started_at >= ? and started_at < ?", [start, end]
+    aq, aargs = "select user_id, amount from adjustments where day between ? and ?", [d_from.isoformat(), d_to.isoformat()]
+    if user_id:
+        sq, aq = sq + " and user_id = ?", aq + " and user_id = ?"
+        sargs.append(user_id)
+        aargs.append(user_id)
+    by_user, adj_by_user = {}, {}
+    for s in conn.execute(sq, sargs):
+        by_user.setdefault(s["user_id"], []).append(s)
+    for a in conn.execute(aq, aargs):
+        adj_by_user.setdefault(a["user_id"], []).append(a["amount"])
+    brk = breaks_by_shift(conn, [s["id"] for ss in by_user.values() for s in ss])
+    for u in users:
+        stats = [shift_stats(conn, s, rules=rules, breaks=brk.get(s["id"], [])) for s in by_user.get(u["id"], [])]
+        adj = adj_by_user.get(u["id"], [])
+        bonuses = sum(a for a in adj if a > 0)
+        penalties = sum(a for a in adj if a < 0)
         earned = round(sum(s["earnings"] for s in stats), 2)
         dpay = dayoff_pay(conn, u, d_from, d_to)
         dayoff = round(sum(x["amount"] for x in dpay), 2)
@@ -1873,16 +1913,22 @@ MONTHS_NOM = ["Січень", "Лютий", "Березень", "Квітень"
 def hours_by_day(conn, user_id=None, days=7):
     """Години по днях для міні-графіка (останні N днів, зміни рахуються за днем початку)."""
     today = date.today()
+    first = today - timedelta(days=days - 1)
+    start, end = day_bounds(first, today)
+    q, args = "select * from shifts where started_at >= ? and started_at < ?", [start, end]
+    if user_id:
+        q += " and user_id = ?"
+        args.append(user_id)
+    raw = conn.execute(q, args).fetchall()
+    brk, rules = breaks_by_shift(conn, [s["id"] for s in raw]), pay_rules(conn)
+    per_day = {}
+    for x in raw:  # усі зміни тижня одним запитом; години — за днем початку
+        d = datetime.fromtimestamp(x["started_at"]).date()
+        per_day[d] = per_day.get(d, 0) + shift_stats(conn, x, rules=rules, breaks=brk.get(x["id"], []))["worked_seconds"]
     out = []
     for i in range(days - 1, -1, -1):
         d = today - timedelta(days=i)
-        start, end = day_bounds(d, d)
-        q, args = "select * from shifts where started_at >= ? and started_at < ?", [start, end]
-        if user_id:
-            q += " and user_id = ?"
-            args.append(user_id)
-        secs = sum(shift_stats(conn, x)["worked_seconds"] for x in conn.execute(q, args))
-        out.append({"label": DAY_SHORT[d.weekday()], "date": d.strftime("%d.%m"), "hours": round(secs / 3600, 1),
+        out.append({"label": DAY_SHORT[d.weekday()], "date": d.strftime("%d.%m"), "hours": round(per_day.get(d, 0) / 3600, 1),
                     "today": d == today})
     top = max([x["hours"] for x in out] + [1])
     for x in out:
@@ -1906,9 +1952,11 @@ def month_nav(d_from):
 def timesheet(conn, user_id, month):
     d_from, d_to = month_range(month)
     start, end = day_bounds(d_from, d_to)
-    shifts = [shift_stats(conn, s) for s in conn.execute(
-        "select s.*, l.name as location from shifts s left join locations l on l.id = s.location_id"
-        " where s.user_id = ? and s.started_at >= ? and s.started_at < ? order by s.started_at desc", (user_id, start, end))]
+    raw = conn.execute("select s.*, l.name as location from shifts s left join locations l on l.id = s.location_id"
+                       " where s.user_id = ? and s.started_at >= ? and s.started_at < ? order by s.started_at desc",
+                       (user_id, start, end)).fetchall()
+    brk, rules = breaks_by_shift(conn, [s["id"] for s in raw]), pay_rules(conn)
+    shifts = [shift_stats(conn, s, rules=rules, breaks=brk.get(s["id"], [])) for s in raw]
     adj = conn.execute("select * from adjustments where user_id = ? and day between ? and ? order by day desc",
                        (user_id, d_from.isoformat(), d_to.isoformat())).fetchall()
     totals = {"shifts": len(shifts), "seconds": sum(s["worked_seconds"] for s in shifts),
@@ -3075,8 +3123,9 @@ def dashboard_stats(conn):
     start, end = day_bounds(today, today)
     heavy = _stats_cache["data"]
     if not heavy or time.time() - _stats_cache["at"] >= STATS_TTL:
-        today_secs = sum(shift_stats(conn, s)["worked_seconds"]
-                         for s in conn.execute("select * from shifts where started_at >= ? and started_at < ?", (start, end)))
+        raw = conn.execute("select * from shifts where started_at >= ? and started_at < ?", (start, end)).fetchall()
+        brk, rules = breaks_by_shift(conn, [s["id"] for s in raw]), pay_rules(conn)
+        today_secs = sum(shift_stats(conn, s, rules=rules, breaks=brk.get(s["id"], []))["worked_seconds"] for s in raw)
         month = payroll(conn, today.replace(day=1), today)
         heavy = {"today_hours": round(today_secs / 3600, 1),
                  "month_total": round(sum(r["total"] for r in month), 2),

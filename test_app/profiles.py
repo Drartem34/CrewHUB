@@ -157,11 +157,13 @@ def export_user(conn, uid, rules=None):
         shifts, csv_rows = [], []
         month_secs = month_money = 0.0
         month_start = core.day_bounds(date.today().replace(day=1), date.today())[0]
-        for s in conn.execute("select * from shifts where user_id = ? order by started_at", (uid,)).fetchall():
-            st = core.shift_stats(conn, s, rules=rules)
+        all_shifts = conn.execute("select * from shifts where user_id = ? order by started_at", (uid,)).fetchall()
+        brk = core.breaks_by_shift(conn, [s["id"] for s in all_shifts])  # усі перерви людини одним запитом
+        for s in all_shifts:
+            st = core.shift_stats(conn, s, rules=rules, breaks=brk.get(s["id"], []))
             breaks = [{"kind": b["kind"], "is_paid": b["is_paid"], "rate_pct": b["rate_pct"],
                        "started_at": b["started_at"], "ended_at": b["ended_at"], "reason": b["reason"]}
-                      for b in conn.execute("select * from breaks where shift_id = ? order by started_at", (s["id"],))]
+                      for b in brk.get(s["id"], [])]
             shifts.append({"started_at": s["started_at"], "ended_at": s["ended_at"], "start": _iso(s["started_at"]),
                            "end": _iso(s["ended_at"]), "status": s["status"], "close_reason": s["close_reason"],
                            "hourly_rate": s["hourly_rate"], "location": loc_names.get(s["location_id"]),
