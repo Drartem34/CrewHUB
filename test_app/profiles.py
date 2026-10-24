@@ -20,7 +20,6 @@
     (щоб випадково покладена чи повернута папка не створювала й не видаляла акаунти сама).
 Так збій з файловою системою ніколи не зносить працівників із бази.
 """
-import csv
 import hashlib
 import io
 import json
@@ -203,7 +202,7 @@ def export_user(conn, uid, rules=None):
         _write(os.path.join(path, "adjustments.json"), dump(adjustments))
         _write(os.path.join(path, "schedule.json"), dump(schedule))
         buf = io.StringIO()
-        w = csv.writer(buf, delimiter=";")
+        w = core.SafeCsv(buf)
         w.writerow(["Дата", "Початок", "Кінець", "Годин", "Перерви без оплати, хв", "Заробіток", "У т.ч. надбавки",
                     "Точка", "IP", "Як закрито"])
         w.writerows(reversed(csv_rows))

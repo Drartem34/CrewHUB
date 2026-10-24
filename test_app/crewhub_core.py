@@ -2103,6 +2103,25 @@ def parse_amount(v, lo=0.0, hi=1_000_000.0):
     return x if x is not None and lo <= x <= hi else None
 
 
+class SafeCsv:
+    """CSV для Excel без «формул з імені»: текст, що починається з = + - @ (ім'я з відкритої реєстрації
+    на кшталт =HYPERLINK(...)), отримує апостроф і показується як текст. Числа не чіпаються."""
+
+    def __init__(self, buf):
+        self.w = csv.writer(buf, delimiter=";")
+
+    @staticmethod
+    def cell(v):
+        return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+
+    def writerow(self, row):
+        self.w.writerow([self.cell(v) for v in row])
+
+    def writerows(self, rows):
+        for r in rows:
+            self.writerow(r)
+
+
 def parse_dtinput(v):
     try:
         d = datetime.strptime(str(v or "").strip(), "%Y-%m-%dT%H:%M")
@@ -3243,7 +3262,7 @@ def admin_employee_csv(uid):
     u = conn.execute("select * from users where id = ?", (uid,)).fetchone() or abort(404)
     ts = timesheet(conn, uid, request.args.get("month"))
     buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
+    w = SafeCsv(buf)
     w.writerow(["Дата", "Початок", "Кінець", "Точка", "Годин", "Перерви (хв)", "Ставка", "Сума", "Примітка"])
     for s in reversed(ts["shifts"]):
         w.writerow([fmt_dt(s["started_at"])[:10], fmt_tm(s["started_at"]), fmt_tm(s["ended_at"]), s["location"] or "",
@@ -3926,7 +3945,7 @@ def admin_payroll_csv():
     d_from, d_to = month_range(request.args.get("month"))
     month = d_from.strftime("%Y-%m")
     buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
+    w = SafeCsv(buf)
     w.writerow(["ПІБ", "Посада", "Ставка", "Змін", "Годин", "За години", "У т.ч. надбавки (вихідні, ніч)", "Дей-офф", "Бонуси", "Штрафи", "До виплати"])
     for r in payroll(db(), d_from, d_to):
         w.writerow([r["user"]["full_name"], r["user"]["job_title"] or "", r["user"]["hourly_rate"], r["shifts"],

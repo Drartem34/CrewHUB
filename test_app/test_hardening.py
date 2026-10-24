@@ -576,6 +576,25 @@ class HardeningTest(CrewHubBase):
         ivan = self.login("ivan", "temp123", client=core.app.test_client())
         self.assertIn("/password", ivan.get("/me").headers["Location"])
 
+    # --- 🟡 8. CSV-ін'єкція ------------------------------------------------------------------------
+    def test_csv_cells_cannot_become_formulas(self):
+        c = core.app.test_client()
+        c.post("/register", data={"full_name": '=HYPERLINK("http://evil.example","Тиць") Іванов', "phone": "0638887766",
+                                  "password": "secret1", "password2": "secret1"})
+        pid = self.sql("select id from users where phone = '+380638887766'")[0][0]
+        admin = self.login("admin", "admin123")
+        admin.post(f"/admin/registration/{pid}/approve", data={"hourly_rate": "100"})
+        admin.post("/admin/adjustment", data={"user_id": pid, "amount": "50", "reason": "-штраф", "kind": "penalty"})
+        import csv
+        import io
+        for url in ("/admin/payroll.csv", f"/admin/employee/{pid}/timesheet.csv"):
+            rows = list(csv.reader(io.StringIO(admin.get(url).get_data(as_text=True).lstrip("\ufeff")), delimiter=";"))
+            cells = [c for r in rows for c in r]
+            self.assertFalse([c for c in cells if c[:1] in ("=", "+", "@")], url)
+            self.assertFalse([c for c in cells if c[:1] == "-" and not c.lstrip("-").replace(".", "").isdigit()], url)
+        self.assertIn("'=HYPERLINK", admin.get("/admin/payroll.csv").get_data(as_text=True))
+        self.assertIn("-50", admin.get(f"/admin/employee/{pid}/timesheet.csv").get_data(as_text=True))  # число лишилось числом
+
 
 if __name__ == "__main__":
     unittest.main()
