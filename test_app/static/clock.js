@@ -91,9 +91,12 @@
     const lost = s && s.open_break && s.open_break.kind === "wifi_loss";
     const net = $("net");
     net.className = "banner " + (state.on_work_network ? "ok" : "bad");
-    net.querySelector("span").innerHTML = state.on_work_network
-      ? `<b>${state.location}</b> · робоча мережа`
-      : `<b>Не в робочій мережі</b>`;
+    // Назву точки вводять люди: лише як текст, ніколи як HTML (інакше назва з <script> виконалась би в адміна)
+    const span = net.querySelector("span"), b = document.createElement("b");
+    b.textContent = state.on_work_network ? (state.location || "Робоча мережа") : "Не в робочій мережі";
+    span.textContent = "";
+    span.appendChild(b);
+    if (state.on_work_network) span.appendChild(document.createTextNode(" · робоча мережа"));
     const ic = net.querySelector("[data-fb]");
     if (ic) {
       ic.dataset.fb = state.on_work_network ? "wifi" : "wifi-off";

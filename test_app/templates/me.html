@@ -443,7 +443,7 @@
 {% block scripts %}
 {% if tab == 'clock' %}
 <script>window.CREWHUB = {currency: {{ currency|tojson }}, todayClosed: {{ today_closed }}, monthClosed: {{ month_closed }}, target: {{ shift_target }}};</script>
-<script src="{{ url_for('static', filename='clock.js') }}?v=11"></script>
+<script src="{{ url_for('static', filename='clock.js') }}?v=12"></script>
 {% elif tab == 'team' %}
 <script>
   teamSearch.oninput = () => { const q = teamSearch.value.toLowerCase();

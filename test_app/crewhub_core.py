@@ -1998,6 +1998,25 @@ def _csrf_fail():
     return "Перевірка безпеки не пройдена. Оновіть сторінку і спробуйте ще раз.", 400
 
 
+# Друга лінія захисту: навіть якщо десь проскочить чужий HTML, сторінка не завантажить скрипт чи картинку
+# з іншого сайту, не відправить дані на чужий сервер і не відкриється в чужому iframe (clickjacking)
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                               "img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; "
+                               "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+}
+
+
+@app.after_request
+def _security_headers(resp):
+    for k, v in SECURITY_HEADERS.items():
+        resp.headers.setdefault(k, v)
+    return resp
+
+
 @app.before_request
 def _remember_login():
     # Немає активної сесії, але є cookie «запам'ятати мене» → входимо автоматично (не за IP).

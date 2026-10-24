@@ -194,6 +194,18 @@ class HardeningTest(CrewHubBase):
         admin = self.login("admin", "admin123")
         self.assertIn("&amp;i=" + data["server_id"], admin.get("/admin?tab=zones").get_data(as_text=True))
 
+    # --- 🔴 10. XSS і заголовки безпеки --------------------------------------------------------
+    def test_security_headers(self):
+        r = self.client.get("/login")
+        self.assertIn("frame-ancestors 'none'", r.headers["Content-Security-Policy"])
+        self.assertEqual(r.headers["X-Frame-Options"], "DENY")
+        self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
+
+    def test_clock_page_never_inserts_location_as_html(self):
+        with open(core.os.path.join(core.BASE_DIR, "static", "clock.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertNotIn("${state.location}", js)
+
 
 if __name__ == "__main__":
     unittest.main()
