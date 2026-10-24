@@ -296,6 +296,7 @@ def local_ips():
 # CREWHUB_DEMO: "1" — тестові акаунти й історія змін (демо-застосунок), "users" — лише тестові акаунти (автотести),
 # інакше — робоча версія: тільки адміністратор.
 DEMO_MODE = os.environ.get("CREWHUB_DEMO", "0")
+DEFAULT_ADMIN_PASSWORD = "admin123"  # лише для першого входу: далі система вимагає свій пароль
 DEMO_ACCOUNTS = DEMO_MODE in ("1", "users")
 DEMO_PEOPLE = [
     ("moder", "moder123", "Марія Модератор", "moderator", "Менеджер зміни", 180, "2024-09-01", "+380500000002"),
@@ -373,7 +374,7 @@ def init_db(seed=True):
         lan = ipaddress.ip_network(f"{get_local_ip()}/24", strict=False)
         conn.execute("insert into locations(id, name, address) values (1, 'Тестова точка', 'Ваша локальна мережа')")
         conn.execute("insert into networks(location_id, cidr, label) values (1, ?, 'Локальна мережа цього ПК')", (str(lan),))
-        people = [("admin", "admin123", "Адмін Адмінович", "admin", "Директор", 0, "2024-01-15", "+380500000001")]
+        people = [("admin", DEFAULT_ADMIN_PASSWORD, "Адмін Адмінович", "admin", "Директор", 0, "2024-01-15", "+380500000001")]
         if DEMO_ACCOUNTS:
             people += DEMO_PEOPLE
         for u, p, name, role, title, rate, hired, phone in people:
@@ -381,6 +382,9 @@ def init_db(seed=True):
                 "insert into users(username, password_hash, full_name, role, job_title, department, location_id, hourly_rate,"
                 " hire_date, phone) values (?, ?, ?, ?, ?, 'Основний відділ', 1, ?, ?, ?)",
                 (u, hash_password(p), name, role, title, rate, hired, phone))
+        if not DEMO_ACCOUNTS:
+            # Стандартний пароль надруковано в README і в консолі: при першому вході адмін задає свій
+            conn.execute("update users set must_change_password = 1 where username = 'admin'")
         if DEMO_ACCOUNTS:
             # Ольга за графіком мала вийти 20 хв тому: в моніторингу вона буде «спізнюється».
             olha = conn.execute("select id from users where username = 'olha'").fetchone()[0]
@@ -396,6 +400,11 @@ def init_db(seed=True):
             u = conn.execute("select * from users where username = ? and phone = ?", (username, phone)).fetchone()
             if u:
                 delete_user(conn, u, None)
+    if not DEMO_ACCOUNTS:
+        # База від старої версії: адмін досі з паролем admin123 — при наступному вході система попросить змінити
+        a = conn.execute("select id, password_hash from users where username = 'admin' and must_change_password = 0").fetchone()
+        if a and verify_password(a["password_hash"], DEFAULT_ADMIN_PASSWORD):
+            conn.execute("update users set must_change_password = 1 where id = ?", (a["id"],))
     conn.commit()
     conn.close()
 

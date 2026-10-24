@@ -136,6 +136,24 @@ class HardeningTest(CrewHubBase):
         other.post(f"/admin/employee/{mid}", data=dict(form, phone="+380500000002"))
         self.assertEqual(self.sql("select status from users where id = ?", mid)[0][0], "active")
 
+    # --- 🔴 5. Стандартний пароль admin123 ---------------------------------------------------
+    def test_default_admin_password_must_be_changed(self):
+        orig = core.DEMO_ACCOUNTS
+        core.DEMO_ACCOUNTS = False
+        self.addCleanup(setattr, core, "DEMO_ACCOUNTS", orig)
+        core.init_db()  # стара база: адмін досі з admin123 → при вході вимога змінити
+        self.assertEqual(self.sql("select must_change_password from users where username = 'admin'")[0][0], 1)
+        admin = self.login("admin", "admin123")
+        r = admin.get("/admin")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/password", r.headers["Location"])
+        admin.post("/password", data={"password": "admin123", "password2": "admin123"})
+        self.assertEqual(self.sql("select must_change_password from users where username = 'admin'")[0][0], 1)
+        admin.post("/password", data={"password": "Nokia-3310", "password2": "Nokia-3310"})
+        self.assertEqual(admin.get("/admin").status_code, 200)
+        core.init_db()  # свій пароль — більше не чіпаємо
+        self.assertEqual(self.sql("select must_change_password from users where username = 'admin'")[0][0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

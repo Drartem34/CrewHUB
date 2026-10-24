@@ -207,7 +207,7 @@ if __name__ == "__main__":
     url = f"http://{ip}:{PORT}"
     from crewhub_core import DEMO_ACCOUNTS
     demo = (" адмін 0500000001/admin123 · модератор 0500000002/moder123 · Іван 0671234567/1234" if DEMO_ACCOUNTS
-            else " адмін 050 000 00 01 / admin123 (змініть пароль у Профілі)")
+            else " адмін 050 000 00 01 / admin123 — лише для першого входу, далі система попросить свій пароль")
     if RICH:
         console.print(tui.Text.assemble(("\n Сайт ", "dim"), (url, f"bold {tui.ACCENT}"), ("   вхід:", "dim"), (demo, ""), "\n"))
         time.sleep(1.5)
