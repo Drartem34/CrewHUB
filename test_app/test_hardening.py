@@ -672,6 +672,19 @@ class HardeningTest(CrewHubBase):
                 self.assertAlmostEqual(core.weighted_seconds(a, b, rules), reference(a, b, rules), places=6,
                                        msg=f"{datetime.fromtimestamp(a)} – {datetime.fromtimestamp(b)} ніч {ns}–{ne}")
 
+    def test_unchanged_folder_files_are_not_rewritten(self):
+        self.sync()
+        path = core.os.path.join(self.folder("ivan"), "shifts.json")
+        before = core.os.stat(path).st_mtime_ns
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        self.sql("insert or ignore into dirty_users values (?)", uid)  # «змінилось», але дані ті самі
+        self.sync()
+        self.assertEqual(core.os.stat(path).st_mtime_ns, before)
+        self.login("ivan")
+        self.clock("start")
+        self.sync()
+        self.assertNotEqual(core.os.stat(path).st_mtime_ns, before)  # нова зміна — файл оновлено
+
 
 if __name__ == "__main__":
     unittest.main()

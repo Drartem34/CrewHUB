@@ -81,11 +81,23 @@ def ensure_folder(conn, uid):
 # ---------------------------------------------------------------------------
 # Запис папки
 # ---------------------------------------------------------------------------
+# Рядки з часом експорту не рахуються змінами: без них файл переписувався б щоразу, навіть коли дані ті самі
+_VOLATILE = re.compile(r'^ "exported_at": .*$|^Оновлено: .*$', re.M)
+
+
 def _write(path, text):
+    """Атомарний запис; якщо вміст (без часу експорту) не змінився — диск не чіпаємо (SD-картки, флешки)."""
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            if _VOLATILE.sub("", f.read()) == _VOLATILE.sub("", text):
+                return False
+    except OSError:
+        pass
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     os.replace(tmp, path)  # атомарно: ніхто не побачить напівзаписаний файл
+    return True
 
 
 def _iso(ts):
