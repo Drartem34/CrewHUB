@@ -549,6 +549,33 @@ class HardeningTest(CrewHubBase):
         self.assertEqual(c.post("/login", data={"username": "+380990000000", "password": "1234"}).status_code, 200)
         self.login("0671234567")
 
+    # --- 🟡 5–7. Звільнення, вимкнення точки, тимчасовий пароль ----------------------------------------
+    def test_dismissal_closes_open_shift(self):
+        self.login("ivan")
+        self.clock("start")
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        admin.post(f"/admin/employee/{uid}", data={"full_name": "Іван Петренко", "hourly_rate": "120", "status": "dismissed",
+                                                   "phone": "0671234567"})
+        self.assertEqual(tuple(self.sql("select status, close_reason from shifts")[0]), ("closed", "dismissed"))
+
+    def test_only_admin_toggles_location(self):
+        mod = self.login("moder", "moder123")
+        self.assertEqual(mod.post("/admin/zones", data={"action": "toggle", "location_id": "1"}).status_code, 403)
+        self.assertEqual(self.sql("select is_active from locations where id = 1")[0][0], 1)
+        self.assertNotIn('value="toggle"', mod.get("/admin?tab=zones").get_data(as_text=True))
+
+    def test_password_set_by_staff_is_temporary_and_long_enough(self):
+        mod = self.login("moder", "moder123")
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        form = {"full_name": "Іван Петренко", "hourly_rate": "120", "status": "active", "phone": "0671234567"}
+        mod.post(f"/admin/employee/{uid}", data=dict(form, password="1"))
+        self.assertEqual(core.app.test_client().post("/login", data={"username": "ivan", "password": "1"}).status_code, 200)
+        mod.post(f"/admin/employee/{uid}", data=dict(form, password="temp123"))
+        self.assertEqual(self.sql("select must_change_password from users where id = ?", uid)[0][0], 1)
+        ivan = self.login("ivan", "temp123", client=core.app.test_client())
+        self.assertIn("/password", ivan.get("/me").headers["Location"])
+
 
 if __name__ == "__main__":
     unittest.main()

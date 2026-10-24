@@ -260,8 +260,8 @@
 <div class="card">
   <div class="card-head">
     <div class="row"><span class="kpi"><span class="ic {{ '' if l.is_active else 'bad' }}">{{ icon('store') }}</span></span><div><h3>{{ l.name }}</h3><div class="muted small">{{ l.address or '' }}</div></div></div>
-    <form method="post" action="{{ url_for('admin_zones') }}"><input type="hidden" name="action" value="toggle"><input type="hidden" name="location_id" value="{{ l.id }}">
-      <button class="sm">{{ 'Вимкнути' if l.is_active else 'Увімкнути' }}</button></form>
+    {% if me.role == 'admin' %}<form method="post" action="{{ url_for('admin_zones') }}"><input type="hidden" name="action" value="toggle"><input type="hidden" name="location_id" value="{{ l.id }}">
+      <button class="sm">{{ 'Вимкнути' if l.is_active else 'Увімкнути' }}</button></form>{% endif %}
   </div>
   {% for n in nets %}
     <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">{{ icon('wifi', 'sm') }}<b class="mono">{{ n.cidr }}</b><span class="muted small grow">{{ n.label or '' }}</span>

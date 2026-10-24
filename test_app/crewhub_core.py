@@ -3307,8 +3307,13 @@ def admin_employee_save(uid):
         if (new.get("role") or u["role"]) == "admin" and new["status"] in ("dismissed", "pending") and not admins_left(conn, uid):
             flash("Це єдиний адміністратор: звільнити його не можна. Спершу призначте іншого адміністратора")
             return redirect(url_for("admin_employee", uid=uid))
+        if f.get("password") and len(f["password"]) < 6:
+            flash("Пароль має бути не коротший за 6 символів")
+            return redirect(url_for("admin_employee", uid=uid))
         if f.get("password"):
-            conn.execute("update users set password_hash = ? where id = ?", (hash_password(f["password"]), uid))
+            # Пароль, який задав хтось інший, — тимчасовий: при вході людина задасть свій
+            conn.execute("update users set password_hash = ?, must_change_password = 1 where id = ?",
+                         (hash_password(f["password"]), uid))
         changes = diff(dict(u), new)
         if f.get("password"):
             changes["password"] = ["***", "***"]
@@ -3317,6 +3322,10 @@ def admin_employee_save(uid):
         conn.execute(f"update users set {sets} where id = ?", (*new.values(), uid))
         if new["status"] == "dismissed" or f.get("password"):
             revoke_remember(conn, uid)  # звільнення чи новий пароль → постійний вхід відкликається
+        if new["status"] == "dismissed" and (s_open := open_shift(conn, uid)):
+            # Звільнений не працює: відкрита зміна закривається часом останнього підтвердженого пінгу
+            close_shift(conn, s_open["id"], s_open["last_seen_at"], "dismissed")
+            changes["shift"] = [s_open["id"], "закрито при звільненні"]
         if changes:
             audit(conn, actor["id"], "UPDATE", "users", uid, uid, changes)
         conn.commit()
@@ -3345,7 +3354,7 @@ def admin_employee_new():
         try:
             role = f.get("role") if f.get("role") in ROLES and current_user()["role"] == "admin" else "employee"
             cur = conn.execute("insert into users(username, password_hash, full_name, job_title, hourly_rate, hire_date, location_id,"
-                               " phone, role) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               " phone, role, must_change_password) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                                (free_username(conn, phone), hash_password(f["password"]), f["full_name"].strip(), f.get("job_title") or None,
                                 rate, hire.isoformat() if hire else None, parse_int(f.get("location_id")), phone, role))
         except sqlite3.IntegrityError:
@@ -3778,6 +3787,8 @@ def admin_zones():
                 except sqlite3.IntegrityError:
                     flash("Така точка вже є")
         elif f.get("action") == "toggle":
+            if actor["role"] != "admin":
+                abort(403)  # вимкнена точка вимикає всі її Wi-Fi зони, а їх змінює лише адмін
             conn.execute("update locations set is_active = 1 - is_active where id = ?", (parse_int(f.get("location_id")),))
             audit(conn, actor["id"], "UPDATE", "locations", parse_int(f.get("location_id")), None, {"is_active": ["перемкнено", ""]})
         else:
