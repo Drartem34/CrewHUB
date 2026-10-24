@@ -183,6 +183,17 @@ if __name__ == "__main__":
 {Colors.RESET}""")
         print(f"{Colors.YELLOW} Ініціалізація...{Colors.RESET}\n")
 
+    # Другий запуск на тому ж порту: два «контролери Wi-Fi» і два бекапи на одній базі заважали б один одному
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("0.0.0.0", PORT))
+    except OSError:
+        print(f"{Colors.RED} Порт {PORT} уже зайнято: CrewHub (чи інша програма) вже працює. Другий запуск не потрібен.{Colors.RESET}")
+        sys.exit(0)  # 0 — щоб start.sh/start.bat не перезапускали його по колу
+    finally:
+        probe.close()
+
     problem = check_db()
     if problem:
         print_status("Перевірка бази", False, problem) if RICH else print(f"{Colors.YELLOW} {problem}{Colors.RESET}")

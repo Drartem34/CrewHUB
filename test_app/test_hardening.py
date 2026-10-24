@@ -470,6 +470,22 @@ class HardeningTest(CrewHubBase):
         if core.os.environ.get("CREWHUB_TZ") is None and core.os.path.exists("/usr/share/zoneinfo/Europe/Kyiv"):
             self.assertIn(core.SERVER_TZ, ("Europe/Kyiv", "EET", "EEST"))
 
+    # --- 🟠 8. Одна відкрита зміна на людину — правило бази -----------------------------------------
+    def test_database_allows_one_open_shift_per_person(self):
+        import sqlite3
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        t = core.now()
+        ins = "insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at) values (?, 1, ?, 100, ?)"
+        self.sql(ins, uid, t - 7200, t - 3600)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.sql(ins, uid, t - 600, t)
+        # стара база з дублями: при запуску старший закривається, сервер стартує
+        self.sql("drop index shifts_one_open")
+        self.sql(ins, uid, t - 600, t)
+        core.init_db()
+        rows = self.sql("select status, close_reason from shifts where user_id = ? order by id", uid)
+        self.assertEqual([tuple(r) for r in rows], [("closed", "duplicate"), ("active", None)])
+
 
 if __name__ == "__main__":
     unittest.main()

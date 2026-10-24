@@ -518,6 +518,12 @@ def init_db(seed=True):
                 pass
     except sqlite3.Error:
         pass
+    # Одна відкрита зміна на людину — правило самої бази (а не лише коду): навіть другий процес сервера
+    # чи ручна правка не створять дубль. Дублі зі старих версій закриваються часом останнього пінгу.
+    for d in conn.execute("select id, last_seen_at from shifts s where status != 'closed' and exists (select 1 from shifts x"
+                          " where x.user_id = s.user_id and x.status != 'closed' and x.id > s.id)").fetchall():
+        close_shift(conn, d["id"], d["last_seen_at"], "duplicate")
+    conn.execute("create unique index if not exists shifts_one_open on shifts(user_id) where status != 'closed'")
     try:
         # Номер телефону — це логін, тому двох однакових бути не може
         conn.execute("create unique index if not exists users_phone_uq on users(phone) where phone is not null and phone != ''")
@@ -1254,9 +1260,12 @@ def try_auto_start(conn, user, loc, ip, device, t):
     seen = _early_seen.pop(user["id"], 0)
     grace = max(setting_int("wifi_grace_minutes", conn) * 60, 180)
     began = start if seen >= start - early and t - start <= grace else t
-    cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device, note)"
-                       " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                       (user["id"], loc["id"], began, user["hourly_rate"], t, ip, ip, device, "Автостарт по Wi-Fi"))
+    try:
+        cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device, note)"
+                           " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           (user["id"], loc["id"], began, user["hourly_rate"], t, ip, ip, device, "Автостарт по Wi-Fi"))
+    except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
+        return None
     log_clock(conn, user["id"], cur.lastrowid, "auto_start", ip, loc["id"], True, device)
     notify(conn, user["id"], "Зміну розпочато автоматично", f"{loc['name']}, з {datetime.fromtimestamp(began):%H:%M}")
     return {"auto_started": True}
@@ -1315,9 +1324,12 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
             return {"ok": False, "error": f"Ви не в робочій мережі Wi-Fi (ваш IP {ip})", "ip": ip}
         if shift:
             return state({"already": True})  # повторне натискання при лагах не ламає нічого
-        cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device)"
-                           " values (?, ?, ?, ?, ?, ?, ?, ?)",
-                           (user["id"], loc["id"], t, user["hourly_rate"], t, ip, ip, device))
+        try:
+            cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device)"
+                               " values (?, ?, ?, ?, ?, ?, ?, ?)",
+                               (user["id"], loc["id"], t, user["hourly_rate"], t, ip, ip, device))
+        except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
+            return state({"already": True})
         log_clock(conn, user["id"], cur.lastrowid, "start", ip, loc["id"], True, device)
         return state()
 
