@@ -101,8 +101,11 @@
     if (state.on_work_network) span.appendChild(document.createTextNode(" · робоча мережа"));
     const ic = net.querySelector("[data-fb]");
     if (ic) {
-      ic.dataset.fb = state.on_work_network ? "wifi" : "wifi-off";
-      const use = ic.querySelector("use"); if (use) use.setAttribute("href", "#i-" + ic.dataset.fb);
+      const want = state.on_work_network ? "wifi" : "wifi-off";
+      if (ic.dataset.fb !== want) {
+        if (window.crewSetIcon) window.crewSetIcon(ic, want);
+        else { ic.dataset.fb = want; const use = ic.querySelector("use"); if (use) use.setAttribute("href", "#i-" + want); }
+      }
     }
 
     let status = state.waiting_until ? "Зміна почнеться сама о " + hhmm(state.waiting_until)

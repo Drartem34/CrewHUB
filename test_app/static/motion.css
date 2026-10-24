@@ -91,6 +91,158 @@ button.jelly { animation: jelly .7s var(--ease-out); }
   100% { transform: perspective(200px) rotateY(180deg); } }
 @keyframes aWave { 0%, 100% { transform: none; opacity: 1; } 30% { transform: scale(.8); opacity: .5; } 60% { transform: scale(1.18); opacity: 1; } }
 
+/* ── Супер-анімації: motion.js розгортає іконку в живі частини (класи p-* у спрайті _ui.html) і рухає кожну окремо.
+   Вмикаються в «Налаштуваннях додатку». Лише transform, opacity і штрих — дешево навіть для слабкого телефона. ── */
+.icon.sup * { transform-box: fill-box; transform-origin: 50% 50%; }
+.icon.sup .p-centre, .icon.sup .p-min, .icon.sup .p-hour, .icon.sup .p-gear, .icon.sup .p-rays, .icon.sup .p-arrows {
+  transform-box: view-box; transform-origin: 12px 12px; }
+.icon.sup.anim * { animation-duration: .9s; animation-timing-function: var(--ease-out); animation-fill-mode: backwards; }
+.icon.sup.anim .p-draw, .icon.sup.anim [pathLength] { stroke-dasharray: 1 1.5; }
+@keyframes sDraw { from { stroke-dashoffset: 1.02; } to { stroke-dashoffset: 0; } }
+@keyframes sPop { 0% { transform: scale(0); opacity: 0; } 55% { transform: scale(1.3); opacity: 1; } 80% { transform: scale(.92); } 100% { transform: none; } }
+@keyframes sBump { 0%, 100% { transform: none; } 30% { transform: scale(.86); } 60% { transform: scale(1.08); } }
+@keyframes sJump { 0%, 100% { transform: none; } 35% { transform: translateY(-3.5px); } 60% { transform: translateY(.5px) scale(1.04, .94); } 80% { transform: translateY(-.8px); } }
+@keyframes sLight { 0% { opacity: .12; } 45%, 100% { opacity: 1; } }
+@keyframes sTwinkle { 0%, 100% { opacity: 0; transform: scale(.2) rotate(0); } 40% { opacity: 1; transform: scale(1.25) rotate(45deg); } 70% { opacity: 1; transform: scale(.9) rotate(70deg); } }
+
+/* Годинник: хвилинна стрілка робить два оберти, годинна — один, циферблат «дихає» */
+.icon.sup.anim[data-anim="s-clock"] .p-min { animation-name: sTurn2; animation-duration: 1s; animation-timing-function: cubic-bezier(.45, .05, .2, 1); }
+.icon.sup.anim[data-anim="s-clock"] .p-hour { animation-name: sTurn1; animation-duration: 1s; animation-timing-function: cubic-bezier(.45, .05, .2, 1); }
+.icon.sup.anim[data-anim="s-clock"] .p-face { animation-name: sBump; }
+@keyframes sTurn2 { to { transform: rotate(720deg); } }
+@keyframes sTurn1 { to { transform: rotate(360deg); } }
+/* Графік (зигзаг) і тренд малюються лінією; стрілка тренду вистрибує в кінці */
+.icon.sup.anim[data-anim="s-activity"] .p-draw, .icon.sup.anim[data-anim="s-check"] .p-draw { animation-name: sDraw; animation-duration: 1s; animation-timing-function: cubic-bezier(.6, 0, .3, 1); }
+.icon.sup.anim[data-anim="s-trend"] .p-draw { animation-name: sDraw; animation-duration: .8s; animation-timing-function: cubic-bezier(.6, 0, .3, 1); }
+.icon.sup.anim[data-anim="s-trend"] .p-head { animation-name: sPop; animation-duration: .5s; animation-delay: .65s; }
+/* Список: рядки пишуться один за одним */
+.icon.sup.anim[data-anim="s-list"] .p-l1, .icon.sup.anim[data-anim="s-list"] .p-l2, .icon.sup.anim[data-anim="s-list"] .p-l3 { animation-name: sDraw; animation-duration: .45s; }
+.icon.sup.anim[data-anim="s-list"] .p-l2 { animation-delay: .15s; } .icon.sup.anim[data-anim="s-list"] .p-l3 { animation-delay: .3s; }
+.icon.sup.anim[data-anim="s-list"] .p-d1, .icon.sup.anim[data-anim="s-list"] .p-d2, .icon.sup.anim[data-anim="s-list"] .p-d3 { animation-name: sPop; animation-duration: .4s; }
+.icon.sup.anim[data-anim="s-list"] .p-d2 { animation-delay: .15s; } .icon.sup.anim[data-anim="s-list"] .p-d3 { animation-delay: .3s; }
+/* Календар: сторінки перегортаються вгору, кільця підстрибують */
+.icon.sup.anim[data-anim="s-calendar"] .p-page { fill: currentColor; fill-opacity: .22; transform-box: view-box; transform-origin: 12px 10px;
+  animation-name: sFlip; animation-duration: .5s; animation-iteration-count: 2; animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
+.icon.sup.anim[data-anim="s-calendar"] .p-rings { animation-name: sJump; animation-duration: .5s; animation-iteration-count: 2; }
+@keyframes sFlip { 0% { opacity: 1; transform: none; } 85% { opacity: 1; transform: scaleY(0); } 100% { opacity: 0; transform: scaleY(0); } }
+/* Вхідні: лист падає в лоток, лоток пружинить */
+.icon.sup.anim[data-anim="s-inbox"] .p-letter { animation-name: sLetter; animation-fill-mode: none; }
+.icon.sup.anim[data-anim="s-inbox"] .p-tray { animation-name: sDip; }
+@keyframes sLetter { 0% { opacity: 1; transform: translateY(-7px); } 55% { opacity: 1; transform: translateY(6px); } 70%, 100% { opacity: 0; transform: translateY(8px); } }
+@keyframes sDip { 0%, 45%, 100% { transform: none; } 60% { transform: translateY(1.5px) scaleY(.9); } 80% { transform: translateY(-.5px); } }
+/* Люди: голова кивує; команда підстрибує по черзі */
+.icon.sup.anim[data-anim="s-user"] .p-head { animation-name: sJump; } .icon.sup.anim[data-anim="s-user"] .p-body { animation-name: sBump; }
+.icon.sup.anim[data-anim="s-users"] .p-u1 { animation-name: sJump; } .icon.sup.anim[data-anim="s-users"] .p-u2 { animation-name: sJump; animation-delay: .18s; }
+/* Wi-Fi: сигнал «ловиться» хвиля за хвилею; без Wi-Fi — перекреслення малюється */
+.icon.sup.anim[data-anim="s-wifi"] .p-dot { animation-name: sPop; animation-duration: .4s; }
+.icon.sup.anim[data-anim="s-wifi"] .p-w1 { animation-name: sLight; animation-duration: .5s; animation-delay: .15s; }
+.icon.sup.anim[data-anim="s-wifi"] .p-w2 { animation-name: sLight; animation-duration: .5s; animation-delay: .3s; }
+.icon.sup.anim[data-anim="s-wifi"] .p-w3 { animation-name: sLight; animation-duration: .5s; animation-delay: .45s; }
+.icon.sup.anim[data-anim="s-wifi-off"] .p-slash { animation-name: sDraw; animation-duration: .6s; }
+.icon.sup.anim[data-anim="s-wifi-off"] .p-rest { animation-name: sShake; }
+@keyframes sShake { 0%, 100% { transform: none; } 20% { transform: translateX(-1.5px); } 40% { transform: translateX(1.5px); } 60% { transform: translateX(-1px); } 80% { transform: translateX(.5px); } }
+/* Щит: галочка ставиться; документ: рядки пишуться */
+.icon.sup.anim[data-anim="s-shield"] .p-shield { animation-name: sBump; }
+.icon.sup.anim[data-anim="s-shield"] .p-check { animation-name: sDraw; animation-duration: .55s; animation-delay: .25s; }
+.icon.sup.anim[data-anim="s-file"] .p-doc, .icon.sup.anim[data-anim="s-file"] .p-fold { animation-name: sTilt; }
+.icon.sup.anim[data-anim="s-file"] .p-t1 { animation-name: sDraw; animation-duration: .4s; animation-delay: .15s; }
+.icon.sup.anim[data-anim="s-file"] .p-t2 { animation-name: sDraw; animation-duration: .35s; animation-delay: .45s; }
+@keyframes sTilt { 0%, 100% { transform: none; } 30% { transform: rotate(-7deg); } 60% { transform: rotate(4deg); } }
+/* Гаманець: клапан відкривається, вилітає монетка */
+.icon.sup.anim[data-anim="s-wallet"] .p-coin { fill: currentColor; fill-opacity: .25; animation-name: sCoin; animation-duration: 1s; animation-fill-mode: none; }
+.icon.sup.anim[data-anim="s-wallet"] .p-flap { transform-origin: 0% 100%; animation-name: sFlap; }
+.icon.sup.anim[data-anim="s-wallet"] .p-body, .icon.sup.anim[data-anim="s-wallet"] .p-stripe { animation-name: sBump; animation-delay: .1s; }
+@keyframes sCoin { 0% { opacity: 0; transform: translateY(9px) scale(.4); } 35% { opacity: 1; transform: translateY(-3px) scale(1); }
+  65% { opacity: 1; transform: translateY(-1px); } 100% { opacity: 0; transform: translateY(8px) scale(.6); } }
+@keyframes sFlap { 0%, 100% { transform: none; } 30%, 60% { transform: rotate(-14deg) translateY(-1px); } }
+/* Шестерня крутиться з відскоком, вісь пульсує */
+.icon.sup.anim[data-anim="s-settings"] .p-gear { animation-name: aGear; }
+.icon.sup.anim[data-anim="s-settings"] .p-hub { animation-name: sBump; }
+/* Вихід: стрілка виходить за двері й повертається */
+.icon.sup.anim[data-anim="s-logout"] .p-arrow { animation-name: sOut; }
+@keyframes sOut { 0%, 100% { transform: none; opacity: 1; } 40% { transform: translateX(6px); opacity: 0; } 41% { transform: translateX(-6px); opacity: 0; } 70% { opacity: 1; } }
+/* Дзвінок гойдається, язичок — навздогін */
+.icon.sup.anim[data-anim="s-bell"] .p-bell { transform-origin: 50% 0%; animation-name: aRing; }
+.icon.sup.anim[data-anim="s-bell"] .p-clap { animation-name: sClap; }
+@keyframes sClap { 0%, 100% { transform: none; } 15% { transform: translateX(-3px); } 35% { transform: translateX(3px); } 55% { transform: translateX(-2px); } 75% { transform: translateX(1px); } }
+/* Сонце: промені обертаються; місяць хитається і поруч спалахує зірка */
+.icon.sup.anim[data-anim="s-sun"] .p-rays { animation-name: sRays; }
+.icon.sup.anim[data-anim="s-sun"] .p-core { animation-name: sBump; }
+@keyframes sRays { 0% { transform: none; } 60% { transform: rotate(100deg) scale(1.15); } 100% { transform: rotate(90deg); } }
+.icon.sup.anim[data-anim="s-moon"] .p-moon { animation-name: sRock; }
+.icon.sup.anim[data-anim="s-moon"] .p-star { fill: currentColor; animation-name: sTwinkle; animation-fill-mode: none; animation-duration: 1s; }
+@keyframes sRock { 0%, 100% { transform: none; } 30% { transform: rotate(-22deg); } 65% { transform: rotate(9deg); } }
+/* Старт, пауза, стоп */
+.icon.sup.anim[data-anim="s-play"] .p-tri { animation-name: sPush; }
+@keyframes sPush { 0%, 100% { transform: none; } 30% { transform: translateX(-2px) scale(.85); } 60% { transform: translateX(3px) scale(1.12); } }
+.icon.sup.anim[data-anim="s-pause"] .p-b1 { animation-name: sPress; } .icon.sup.anim[data-anim="s-pause"] .p-b2 { animation-name: sPress; animation-delay: .15s; }
+@keyframes sPress { 0%, 100% { transform: none; } 35% { transform: scaleY(.55); } 65% { transform: scaleY(1.12); } }
+.icon.sup.anim[data-anim="s-stop"] .p-sq { animation-name: aSquish; }
+/* Кава: пара піднімається, чашка гойдається */
+.icon.sup.anim[data-anim="s-coffee"] .p-s1, .icon.sup.anim[data-anim="s-coffee"] .p-s2, .icon.sup.anim[data-anim="s-coffee"] .p-s3 { animation-name: sSteam; animation-duration: 1s; }
+.icon.sup.anim[data-anim="s-coffee"] .p-s2 { animation-delay: .15s; } .icon.sup.anim[data-anim="s-coffee"] .p-s3 { animation-delay: .3s; }
+.icon.sup.anim[data-anim="s-coffee"] .p-cup { transform-origin: 50% 100%; animation-name: sTilt; }
+@keyframes sSteam { 0%, 100% { opacity: 1; transform: none; } 50% { opacity: 0; transform: translateY(-5px); } 51% { opacity: 0; transform: translateY(2px); } }
+/* Завантаження: стрілка падає в лоток */
+.icon.sup.anim[data-anim="s-download"] .p-arrow { animation-name: sFall; }
+.icon.sup.anim[data-anim="s-download"] .p-tray { animation-name: sDip; }
+@keyframes sFall { 0% { transform: none; } 25% { transform: translateY(-5px); opacity: 1; } 55% { transform: translateY(4px); } 75% { transform: translateY(-1px); } 100% { transform: none; } }
+/* Плюс, хрестик, галочка */
+.icon.sup.anim[data-anim="s-plus"] .p-plus { transform-box: view-box; transform-origin: 12px 12px; animation-name: sTwist; }
+.icon.sup.anim[data-anim="s-x"] .p-x { transform-box: view-box; transform-origin: 12px 12px; animation-name: sTwist; }
+@keyframes sTwist { 0% { transform: none; } 45% { transform: rotate(180deg) scale(.7); } 75% { transform: rotate(180deg) scale(1.15); } 100% { transform: rotate(180deg); } }
+/* Стрілки ‹ › */
+.icon.sup.anim[data-anim="s-right"] .p-chev { animation-name: aRight; } .icon.sup.anim[data-anim="s-left"] .p-chev { animation-name: aLeft; }
+/* Камера: об'єктив наводиться, спалах */
+.icon.sup.anim[data-anim="s-camera"] .p-lens { animation-name: sZoom; }
+.icon.sup.anim[data-anim="s-camera"] .p-flash { animation-name: sFlash; animation-fill-mode: none; animation-delay: .35s; animation-duration: .5s; }
+@keyframes sZoom { 0%, 100% { transform: none; } 35% { transform: scale(.55); } 65% { transform: scale(1.2); } }
+@keyframes sFlash { 0% { opacity: .9; transform: scale(.4); } 100% { opacity: 0; transform: scale(1.3); } }
+/* Оновити: стрілки обертаються */
+.icon.sup.anim[data-anim="s-refresh"] .p-arrows { animation-name: aSpin; }
+/* Меню: лінії хвилею */
+.icon.sup.anim[data-anim="s-menu"] .p-m1 { animation-name: sSlideL; } .icon.sup.anim[data-anim="s-menu"] .p-m3 { animation-name: sSlideL; animation-delay: .2s; }
+.icon.sup.anim[data-anim="s-menu"] .p-m2 { animation-name: sSlideR; animation-delay: .1s; }
+@keyframes sSlideL { 0%, 100% { transform: none; } 40% { transform: translateX(-4px) scaleX(.7); } }
+@keyframes sSlideR { 0%, 100% { transform: none; } 40% { transform: translateX(4px) scaleX(.7); } }
+/* Олівець пише лінію */
+.icon.sup.anim[data-anim="s-edit"] .p-pen { transform-origin: 0% 100%; animation-name: sWrite; }
+.icon.sup.anim[data-anim="s-edit"] .p-line { animation-name: sDraw; animation-duration: .7s; animation-delay: .1s; }
+@keyframes sWrite { 0%, 100% { transform: none; } 25% { transform: rotate(-8deg); } 50% { transform: rotate(6deg) translateX(2px); } 75% { transform: rotate(-4deg) translateX(3px); } }
+/* Увага: трикутник тремтить, знак блимає */
+.icon.sup.anim[data-anim="s-alert"] .p-tri { animation-name: sShake; }
+.icon.sup.anim[data-anim="s-alert"] .p-mark { animation-name: sBlink; }
+@keyframes sBlink { 0%, 50%, 100% { opacity: 1; } 25%, 75% { opacity: 0; } }
+/* Мітка на карті падає згори, крапка вистрибує */
+.icon.sup.anim[data-anim="s-map"] .p-pin { animation-name: sDropPin; }
+.icon.sup.anim[data-anim="s-map"] .p-dot { animation-name: sPop; animation-duration: .45s; animation-delay: .45s; }
+@keyframes sDropPin { 0% { transform: translateY(-9px); opacity: 0; } 40% { transform: translateY(1px) scale(1.05, .92); opacity: 1; } 60% { transform: translateY(-2px); } 80% { transform: none; } }
+/* Телефон дзвонить хвилями */
+.icon.sup.anim[data-anim="s-phone"] .p-handset { animation-name: aRing; }
+.icon.sup.anim[data-anim="s-phone"] .p-wave { animation-name: sWaves; animation-fill-mode: none; }
+@keyframes sWaves { 0%, 100% { opacity: 0; } 20%, 60% { opacity: 1; } 40% { opacity: .3; } }
+/* Літачок відлітає й повертається */
+.icon.sup.anim[data-anim="s-send"] .p-plane { animation-name: aFly; }
+/* Копія: верхній аркуш з'їжджає на нижній */
+.icon.sup.anim[data-anim="s-copy"] .p-front { animation-name: sCopy; }
+.icon.sup.anim[data-anim="s-copy"] .p-back { animation-name: sBlink; animation-duration: .6s; }
+@keyframes sCopy { 0%, 100% { transform: none; } 40%, 60% { transform: translate(-6px, -6px); } }
+/* Виделка й ніж цокаються */
+.icon.sup.anim[data-anim="s-utensils"] .p-fork { transform-origin: 50% 100%; animation-name: sClinkL; }
+.icon.sup.anim[data-anim="s-utensils"] .p-knife { transform-origin: 50% 100%; animation-name: sClinkR; }
+@keyframes sClinkL { 0%, 100% { transform: none; } 35%, 55% { transform: rotate(14deg); } }
+@keyframes sClinkR { 0%, 100% { transform: none; } 35%, 55% { transform: rotate(-14deg); } }
+/* Точка: дах підстрибує, двері відчиняються */
+.icon.sup.anim[data-anim="s-store"] .p-roof { animation-name: sJump; }
+.icon.sup.anim[data-anim="s-store"] .p-door { transform-origin: 50% 100%; animation-name: sDoor; }
+@keyframes sDoor { 0%, 100% { transform: none; } 40%, 60% { transform: scaleX(.2); } }
+/* Логотип: дуги розходяться, центр пульсує */
+.icon.sup.anim[data-anim="s-logo"] .p-arcs { animation-name: sBump; } .icon.sup.anim[data-anim="s-logo"] .p-core { animation-name: sPop; animation-delay: .1s; }
+
+/* Перемикач і приклади в «Налаштуваннях додатку» */
+.super-demo { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.super-demo .icon-btn .icon { width: 24px; height: 24px; }
+
 /* ── Поява сторінки: картки м'яко виринають одна за одною ── */
 .rise { animation: rise .62s var(--spring-soft) backwards; animation-delay: calc(var(--i, 0) * 45ms); }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } }

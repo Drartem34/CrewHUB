@@ -1749,8 +1749,13 @@ def maintenance():
             conn.execute("delete from conn_log where created_at < ?", (now() - LOG_KEEP_DAYS * 86400,))
             conn.execute("delete from notifications where is_read = 1 and created_at < ?", (now() - 60 * 86400,))
             conn.commit()
-            conn.execute("pragma optimize")
-            conn.execute("pragma wal_checkpoint(truncate)")
+            try:
+                conn.execute("pragma optimize")
+                conn.execute("pragma wal_checkpoint(truncate)")
+            except sqlite3.OperationalError as e:
+                # Саме в цю мить особові папки записали свою зміну (SQLITE_BUSY без очікування): оптимізація
+                # не обов'язкова, зробимо наступного разу. Це не аварія — не червоний банер для адміна.
+                log.info("Обслуговування бази відкладено: %s", e)
         finally:
             conn.close()
 

@@ -7,15 +7,18 @@
     const paintThemeIcon = () => {
       const i = themeBtn && themeBtn.querySelector("[data-fb]");
       if (!i) return;
-      i.dataset.fb = root.dataset.theme === "dark" ? "sun" : "moon";
-      const use = i.querySelector("use");
-      if (use) use.setAttribute("href", "#i-" + i.dataset.fb);
+      const want = root.dataset.theme === "dark" ? "sun" : "moon";
+      if (i.dataset.fb === want) return;
+      if (window.crewSetIcon) window.crewSetIcon(i, want);
+      else { i.dataset.fb = want; const use = i.querySelector("use"); if (use) use.setAttribute("href", "#i-" + want); }
     };
     paintThemeIcon();
     if (themeBtn) themeBtn.onclick = () => {
       root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
       try { localStorage.setItem("crewhub_theme", root.dataset.theme); } catch (e) {}
       paintThemeIcon();
+      const i = themeBtn.querySelector("[data-fb]");
+      if (i && window.crewMotion) window.crewMotion.play(i);  // нова іконка (сонце/місяць) теж оживає
     };
     const bell = document.getElementById("bellBtn"), panel = document.getElementById("notifPanel");
     if (bell && panel) bell.onclick = (e) => { e.stopPropagation(); panel.classList.toggle("open"); };
@@ -47,7 +50,7 @@
     if (reset) reset.onclick = () => {
       if (!confirm("Повернути тему й анімації до стандартних?")) return;
       try {
-        ["crewhub_theme", "crewhub_motion", "crewhub_lite"].forEach((k) => localStorage.removeItem(k));
+        ["crewhub_theme", "crewhub_motion", "crewhub_lite", "crewhub_super", "crewhub_swiped"].forEach((k) => localStorage.removeItem(k));
       } catch (e) {}
       location.reload();
     };

@@ -1,5 +1,6 @@
 // CrewHub Motion: рух іконок при дотику, каскад появи, лічильники, діалоги і сторож плавності.
-// Режим зберігається в localStorage "crewhub_motion": auto | full | lite | off (вибір у Профілі).
+// Режим зберігається в localStorage "crewhub_motion": auto | full | lite | off; "crewhub_super" — супер-анімації іконок
+// (обидва — у «Налаштуваннях додатку»).
 (function () {
   const root = document.documentElement;
   const off = () => root.classList.contains("motion-off") || matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -20,6 +21,31 @@
   function iconName(el) {
     return el.dataset.fb || el.getAttribute("data-icon") || "";
   }
+
+  // Супер-анімації: іконка розгортається з <use> у власні частини (p-* у спрайті), і кожна рухається по-своєму.
+  // localStorage "crewhub_super": "1" / "0"; без вибору — увімкнено, крім слабких телефонів (режим «Легкі»).
+  let superPref = null;
+  try { superPref = localStorage.getItem("crewhub_super"); } catch (e) {}
+  const superOn = () => !off() && (superPref === "1" || (superPref === null && !lite()));
+  function inflate(el, name) {
+    if (el.dataset.inflated === name) return true;
+    const sym = document.getElementById("i-" + name);
+    if (!sym) return false;
+    el.setAttribute("viewBox", sym.getAttribute("viewBox") || "0 0 24 24");
+    el.innerHTML = sym.innerHTML;
+    el.dataset.inflated = name;
+    return true;
+  }
+  function playSuper(el) {
+    const name = iconName(el);
+    if (!inflate(el, name)) return false;
+    el.classList.add("sup");
+    el.dataset.anim = "s-" + name;
+    restart(el, "anim");
+    clearTimeout(el._supT);
+    el._supT = setTimeout(() => el.classList.remove("anim"), 1600);  // найдовша супер-анімація ~1,2 с
+    return true;
+  }
   // Перезапуск анімації без примусового перерахунку сторінки (offsetWidth/getBoundingClientRect гальмують слабкі телефони):
   // якщо клас уже стоїть — знімаємо зараз і ставимо через два кадри.
   function restart(el, cls) {
@@ -29,9 +55,19 @@
   }
   function play(el) {
     if (off()) return;
+    if (superOn() && playSuper(el)) return;
+    el.classList.remove("sup");
     el.dataset.anim = ANIM[iconName(el)] || "jump";
     restart(el, "anim");
   }
+  // Іконку змінили (тема, Wi-Fi): повертаємо звичайний <use> з новою назвою
+  window.crewSetIcon = function (el, name) {
+    el.dataset.fb = name;
+    delete el.dataset.inflated;
+    el.classList.remove("sup", "anim");
+    el.removeAttribute("viewBox");
+    el.innerHTML = '<use href="#i-' + name + '"/>';
+  };
   document.addEventListener("animationend", (e) => {
     const t = e.target;
     if (t.classList && t.classList.contains("anim")) t.classList.remove("anim");
@@ -56,6 +92,38 @@
     const big = e.target.closest("button.xl");
     if (big && !off()) restart(big, "jelly");
   });
+  // ПК: іконка оживає, коли на кнопку чи пункт меню наводять мишку (один раз на кожне наведення)
+  document.addEventListener("pointerover", (e) => {
+    if (e.pointerType !== "mouse" || !superOn()) return;
+    const host = e.target.closest(".nav a, button, .btn, .kpi, a.card");
+    if (!host || (e.relatedTarget && host.contains(e.relatedTarget))) return;
+    const ic = host.querySelector(".icon");
+    if (ic && !ic.classList.contains("anim")) play(ic);
+  }, { passive: true });
+
+  // Нова сторінка в режимі «Супер»: оживають активна вкладка, іконки показників і заголовків — по черзі
+  function greet() {
+    if (!superOn()) return;
+    const list = document.querySelectorAll(".bottombar a.on .icon, .nav a.on .icon, .content .kpi .ic .icon, .content .card-head h3 > .icon");
+    let i = 0;
+    list.forEach((ic) => {
+      if (i >= 8) return;  // лише перший екран; далі — без зайвої роботи
+      setTimeout(() => play(ic), 120 + i++ * 90);
+    });
+  }
+
+  // Перемикач у «Налаштуваннях додатку»: <input id="superAnim">, приклади в .super-demo
+  function bindSuper() {
+    const sw = document.getElementById("superAnim");
+    if (!sw) return;
+    sw.checked = superOn();
+    sw.disabled = off();
+    sw.onchange = () => {
+      superPref = sw.checked ? "1" : "0";
+      try { localStorage.setItem("crewhub_super", superPref); } catch (e) {}
+      if (sw.checked) document.querySelectorAll(".super-demo .icon").forEach((ic, i) => setTimeout(() => play(ic), i * 110));
+    };
+  }
 
   // Каскад: перші картки сторінки виринають по черзі (далі за екраном — без анімації, щоб не витрачати кадри)
   function cascade() {
@@ -150,12 +218,13 @@
         root.classList.toggle("motion-off", mode === "off");
         box.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
         if (mode === "full" || mode === "auto") { cascade(); }
+        bindSuper();
       };
     });
   });
 
   // Нова сторінка (і після переходу без перезавантаження з nav.js)
-  window.crewMotion = { enter() { cascade(); countUp(); bindPick(); } };
+  window.crewMotion = { enter() { cascade(); countUp(); bindPick(); bindSuper(); greet(); }, play };
   window.crewMotion.enter();
   watchdog();
 })();

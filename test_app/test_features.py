@@ -290,5 +290,71 @@ class LanTest(CrewHubBase):
         self.assertIn("не в локальній мережі", self.lan._state["error"])
 
 
+class OfflineUiTest(CrewHubBase):
+    """Інтерфейс не тягне нічого з інтернету: іконки, стилі, скрипти — свої. Сервер без інтернету виглядає так само."""
+    PAGES = {"admin": ["/admin?tab=" + t for t in ("live", "employees", "requests", "schedule", "zones", "logs", "audit", "payroll", "settings")]
+                      + ["/admin?tab=schedule&view=month", "/admin/employee/2"],
+             "ivan": ["/me?tab=" + t for t in ("clock", "timesheet", "schedule", "requests", "team", "profile", "app")]}
+
+    def pages(self):
+        yield "/login", core.app.test_client().get("/login").get_data(as_text=True)
+        for user, urls in self.PAGES.items():
+            c = self.login(user, "admin123" if user == "admin" else "1234", client=core.app.test_client())
+            for url in urls:
+                r = c.get(url)
+                self.assertEqual(r.status_code, 200, url)
+                yield url, r.get_data(as_text=True)
+
+    def test_no_external_resources_and_every_icon_exists(self):
+        for url, html in self.pages():
+            for tag in re.findall(r"<(?:script|link|img|iframe|source)\b[^>]*>", html):
+                self.assertNotRegex(tag, r"(?:src|href)=[\"']?(?:https?:)?//", f"{url}: зовнішній ресурс {tag}")
+            symbols = set(re.findall(r'<symbol id="i-([\w-]+)"', html))
+            used = set(re.findall(r'<use href="#i-([\w-]+)"', html))
+            self.assertTrue(symbols, url)
+            self.assertFalse(used - symbols, f"{url}: немає іконок {used - symbols}")
+
+    def test_icons_set_from_javascript_exist(self):
+        sprite = read(os.path.join(core.BASE_DIR, "templates", "_ui.html"))
+        for name in ("wifi", "wifi-off", "sun", "moon", "left", "right"):
+            self.assertIn(f'<symbol id="i-{name}"', sprite)
+        for path in ("static/style.css", "static/motion.css"):
+            self.assertNotRegex(read(os.path.join(core.BASE_DIR, path)), r"url\(\s*['\"]?(?:https?:)?//|@import", path)
+
+    def test_browser_blocks_anything_external(self):
+        csp = self.client.get("/login").headers["Content-Security-Policy"]
+        self.assertIn("default-src 'self'", csp)
+
+    def test_super_animation_parts_in_sprite(self):
+        sprite = read(os.path.join(core.BASE_DIR, "templates", "_ui.html"))
+        css = read(os.path.join(core.BASE_DIR, "static", "motion.css"))
+        for name in re.findall(r'<symbol id="i-([\w-]+)"', sprite):
+            self.assertIn(f'data-anim="s-{name}"', css, f"іконка {name} без супер-анімації")
+
+
+class MaintenanceTest(CrewHubBase):
+    def test_busy_database_postpones_optimize_instead_of_failing(self):
+        # Інший потік щойно записав — pragma optimize отримує SQLITE_BUSY без очікування. Автобекап не має «падати».
+        real = core.connect
+
+        class Busy:
+            def __init__(self):
+                self.c = real()
+
+            def execute(self, q, *a):
+                if q.startswith("pragma optimize"):
+                    raise sqlite3.OperationalError("database is locked")
+                return self.c.execute(q, *a)
+
+            def __getattr__(self, k):
+                return getattr(self.c, k)
+
+        core.connect = Busy
+        try:
+            core.maintenance()  # без винятку
+        finally:
+            core.connect = real
+
+
 if __name__ == "__main__":
     unittest.main()

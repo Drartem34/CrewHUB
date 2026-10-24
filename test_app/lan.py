@@ -420,9 +420,12 @@ def summary(conn):
 
 
 def step():
-    with core.connect() as conn:
+    conn = core.connect()
+    try:
         if core.setting("lan_scan", conn) == "1":
             scan(conn)
+    finally:
+        conn.close()
 
 
 def start(interval=SCAN_EVERY):
