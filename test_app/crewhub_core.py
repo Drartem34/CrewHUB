@@ -30,6 +30,26 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _setup_timezone():
+    """Години роботи, ніч, вихідні й табелі рахуються в місцевому часі сервера. На VPS він зазвичай UTC —
+    тоді нічна надбавка й робочий час з'їхали б на 2–3 години. CREWHUB_TZ задає пояс явно; без нього
+    сервер з UTC переходить на Europe/Kyiv, а звичайний ПК лишає свій (він і так налаштований правильно)."""
+    want = os.environ.get("CREWHUB_TZ")
+    if not want and time.timezone == 0 and time.daylight == 0:
+        want = "Europe/Kyiv"
+    if not want or not hasattr(time, "tzset"):  # Windows: пояс задається в системі
+        return None
+    for name in ((want, "Europe/Kiev") if want == "Europe/Kyiv" else (want,)):  # стара tzdata знає лише Kiev
+        if os.path.exists(os.path.join("/usr/share/zoneinfo", name)):
+            os.environ["TZ"] = name
+            time.tzset()
+            return name
+    return None
+
+
+SERVER_TZ = _setup_timezone() or (time.tzname[0] if time.tzname else "")
 DB_PATH = os.environ.get("CREWHUB_DB", os.path.join(BASE_DIR, "crewhub_test.db"))
 # Через тунель (Pinggy, ngrok) справжній IP клієнта лежить у X-Forwarded-For. Заголовку віримо лише тоді,
 # коли його дописує наш тунель (start.py вмикає це сам для pinggy з xff, або CREWHUB_TRUST_PROXY=1),
@@ -1179,9 +1199,9 @@ def work_window(conn, user_id, t):
         if a - early <= t < b:
             if absence_on(conn, user_id, d):
                 return None
-            day_start = int(day0.timestamp())
+            day_start, day_end = day_bounds(d, d)
             if conn.execute("select 1 from schedule where user_id = ? and starts_at >= ? and starts_at < ?",
-                            (user_id, day_start, day_start + 86400)).fetchone():
+                            (user_id, day_start, day_end)).fetchone():
                 return None  # на цей день є власний графік в інший час
             return a, b
     return None
@@ -1869,12 +1889,19 @@ def parse_month(value):
     return parse_day(str(value or "")[:7] + "-01") or date.today().replace(day=1)
 
 
+def shift_days(ts, days):
+    """Та сама година за місцевим часом через days днів (а не +N×86400 с, що зсуває на годину при переході на літній час)."""
+    return int((datetime.fromtimestamp(ts) + timedelta(days=days)).timestamp())
+
+
 def default_slot(conn, user_id, day):
     """Зміна за замовчуванням на день: робочі години з налаштувань, нічна переходить через північ."""
     ws, we = hhmm_minutes(setting("work_start", conn), 540), hhmm_minutes(setting("work_end", conn), 1080)
-    base = int(datetime.combine(day, datetime.min.time()).timestamp())
-    start = base + ws * 60
-    end = base + we * 60 + (86400 if we <= ws else 0)
+    # Хвилини від півночі додаємо до дати, а не до секунд: у день переходу на літній/зимовий час доба
+    # триває 23 чи 25 год, і «північ + 540 хв у секундах» дало б 08:00 чи 10:00 замість 09:00
+    base = datetime.combine(day, datetime.min.time())
+    start = int((base + timedelta(minutes=ws)).timestamp())
+    end = int((base + timedelta(minutes=we + (1440 if we <= ws else 0))).timestamp())
     u = conn.execute("select location_id from users where id = ?", (user_id,)).fetchone()
     loc = (u and u["location_id"]) or (conn.execute("select id from locations where is_active = 1 order by id limit 1").fetchone() or [None])[0]
     return start, end, loc
@@ -3654,7 +3681,7 @@ def admin_schedule():
             start, end = day_bounds(monday - timedelta(days=7), monday - timedelta(days=1))
             copied = 0
             for sc in conn.execute("select * from schedule where starts_at >= ? and starts_at < ?", (start, end)).fetchall():
-                ns, ne = sc["starts_at"] + 7 * 86400, sc["ends_at"] + 7 * 86400
+                ns, ne = shift_days(sc["starts_at"], 7), shift_days(sc["ends_at"], 7)
                 if not conn.execute("select 1 from schedule where user_id = ? and starts_at = ?", (sc["user_id"], ns)).fetchone():
                     conn.execute("insert into schedule(user_id, location_id, starts_at, ends_at, note) values (?, ?, ?, ?, ?)",
                                  (sc["user_id"], sc["location_id"], ns, ne, sc["note"]))

@@ -448,6 +448,28 @@ class HardeningTest(CrewHubBase):
             c.commit()
         self.assertEqual(self.sql("select count(*) from shifts where user_id = ?", uid)[0][0], 1)
 
+    # --- 🟠 6. Часовий пояс і перехід на літній/зимовий час -----------------------------------------
+    def test_default_slot_keeps_wall_clock_on_dst_days(self):
+        from datetime import date, datetime
+        with core.connect() as c:
+            for d in (date(2026, 10, 25), date(2027, 3, 28)):  # перехід на зимовий і на літній час у Києві
+                start, end, _ = core.default_slot(c, 1, d)
+                self.assertEqual((datetime.fromtimestamp(start).hour, datetime.fromtimestamp(end).hour), (9, 18), d)
+
+    def test_copy_week_across_dst_keeps_hours(self):
+        from datetime import datetime
+        admin = self.login("admin", "admin123")
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        start = int(datetime(2026, 10, 19, 9, 0).timestamp())
+        self.sql("insert into schedule(user_id, location_id, starts_at, ends_at) values (?, 1, ?, ?)", uid, start, start + 9 * 3600)
+        admin.post("/admin/schedule", data={"action": "copy_week", "week": "2026-10-26"})
+        copied = self.sql("select starts_at from schedule where user_id = ? and starts_at > ?", uid, start)[0][0]
+        self.assertEqual(datetime.fromtimestamp(copied), datetime(2026, 10, 26, 9, 0))
+
+    def test_utc_server_uses_kyiv_time(self):
+        if core.os.environ.get("CREWHUB_TZ") is None and core.os.path.exists("/usr/share/zoneinfo/Europe/Kyiv"):
+            self.assertIn(core.SERVER_TZ, ("Europe/Kyiv", "EET", "EEST"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -195,6 +195,8 @@ if __name__ == "__main__":
         master_log.exception("База не запустилась: %s", e)
         print_status("База SQLite", False)
         raise
+    import crewhub_core
+    print_status("Часовий пояс", True, crewhub_core.SERVER_TZ)
     start_sweeper()
     print_status("Контроль Wi-Fi (фон)", True)
     import profiles
