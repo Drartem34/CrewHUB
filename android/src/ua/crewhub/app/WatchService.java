@@ -265,7 +265,7 @@ public class WatchService extends Service {
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json");
         c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL
-                + ") CrewHubApp/1.9 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
+                + ") CrewHubApp/2.0 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
         String cookie = prefs(this).getString("cookie", null);
         if (cookie != null) c.setRequestProperty("Cookie", cookie);
         return c;

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CrewHub Демо: окремий пакет, ставиться поруч з робочим застосунком. Сервер і мережа не потрібні. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ua.crewhub.demo"
+    android:versionCode="17"
+    android:versionName="17-demo">
+
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
+    <!-- Сторінки віддаються з самого APK; дозвіл потрібен лише щоб WebView відкрив адресу https://demo.crewhub/ -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="CrewHub Демо"
+        android:icon="@drawable/icon"
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:theme="@style/AppTheme">
+        <activity
+            android:name=".DemoActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
