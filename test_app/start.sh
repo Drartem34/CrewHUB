@@ -4,10 +4,16 @@ cd "$(dirname "$0")"
 # Бібліотеки ставимо в окреме середовище .venv: на Arch, Fedora, Ubuntu 23+ системний pip заборонений
 [ -x .venv/bin/python ] || python3 -m venv .venv 2>/dev/null || true
 PY=python3; [ -x .venv/bin/python ] && PY=.venv/bin/python
-$PY -m pip install -q -r requirements.txt 2>/dev/null \
-  || $PY -m pip install -q --user -r requirements.txt 2>/dev/null \
-  || $PY -m pip install -q --break-system-packages -r requirements.txt \
-  || echo "Не вдалося встановити бібліотеки. Перевірте інтернет."
+# Ставимо лише коли бібліотек немає або змінився requirements.txt: звичайний запуск не потребує інтернету
+REQ_HASH=$(cksum requirements.txt | cut -d' ' -f1)
+MARK=.deps-installed
+if [ "$(cat "$MARK" 2>/dev/null)" != "$REQ_HASH" ] || ! $PY -c "import flask, waitress" 2>/dev/null; then
+  { $PY -m pip install -q -r requirements.txt 2>/dev/null \
+    || $PY -m pip install -q --user -r requirements.txt 2>/dev/null \
+    || $PY -m pip install -q --break-system-packages -r requirements.txt; } \
+    && echo "$REQ_HASH" > "$MARK" \
+    || echo "Не вдалося встановити бібліотеки. Перевірте інтернет."
+fi
 # Брандмауер: відкриваємо порт 5000 для телефонів у мережі (firewalld або ufw)
 if systemctl is-active --quiet firewalld 2>/dev/null; then
   if ! firewall-cmd --query-port=5000/tcp >/dev/null 2>&1; then

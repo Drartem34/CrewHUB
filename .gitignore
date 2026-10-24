@@ -9,6 +9,7 @@ test_app/static/uploads/
 test_app/static/*.apk
 .venv/
 test_app/.venv/
+test_app/.deps-installed
 __pycache__/
 *.pyc
 # Android: збірка і ключ підпису (секрет, зберігайте окремо)
