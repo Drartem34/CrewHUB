@@ -26,7 +26,6 @@ import io
 import json
 import os
 import re
-import threading
 import time
 from datetime import date, datetime
 
@@ -530,31 +529,32 @@ def recover_if_empty(conn):
 
 
 def start_folder_sync(interval=3):
-    def loop():
+    pending_recovery = [True]
+
+    def step():
         conn = core.connect()
         try:
-            if core.RECOVERED.get("from_backup"):
-                with core._lock:
-                    rebuild_from_folders(conn)
-                    conn.commit()
-                core.RECOVERED["from_backup"] = False
-            else:
-                recover_if_empty(conn)  # порожня база + наявні папки = втрата бази, відновлюємо
-        except Exception as e:  # noqa: BLE001 — відновлення не має завалити запуск
-            _state["warning"] = f"Не вдалося відновити з папок: {e}"
+            if pending_recovery[0]:
+                pending_recovery[0] = False  # відновлення пробуємо один раз при запуску
+                try:
+                    if core.RECOVERED.get("from_backup"):
+                        with core._lock:
+                            rebuild_from_folders(conn)
+                            conn.commit()
+                        core.RECOVERED["from_backup"] = False
+                    else:
+                        recover_if_empty(conn)  # порожня база + наявні папки = втрата бази, відновлюємо
+                except Exception as e:  # noqa: BLE001 — відновлення не має завалити запуск
+                    _state["warning"] = f"Не вдалося відновити з папок: {e}"
+                    core.log.exception("Відновлення з особових папок")
+            try:
+                sync_once(conn)
+            except Exception as e:
+                _state["warning"] = f"Помилка синхронізації папок: {e}"
+                raise
         finally:
             conn.close()
-        while True:
-            try:
-                conn = core.connect()
-                try:
-                    sync_once(conn)
-                finally:
-                    conn.close()
-            except Exception as e:  # noqa: BLE001 — фоновий потік не має падати
-                _state["warning"] = f"Помилка синхронізації папок: {e}"
-            time.sleep(interval)
-    threading.Thread(target=loop, daemon=True, name="crewhub-people").start()
+    core.run_worker("people", interval, step)
 
 
 def status():

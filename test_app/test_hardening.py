@@ -345,6 +345,37 @@ class HardeningTest(CrewHubBase):
                     bad.append((url, "GET"))
         self.assertEqual(sorted(set(bad))[:40], [], f"{len(bad)} запитів дали 500")
 
+    # --- 🟠 3. Фонові потоки під наглядом ------------------------------------------------------
+    def test_dead_worker_is_visible_in_health_and_admin(self):
+        import threading
+        import time
+        self.addCleanup(core.WORKERS.clear)
+        self.assertEqual(self.client.get("/health").status_code, 200)
+        fail = threading.Event()
+        fail.set()
+
+        def step():
+            if fail.is_set():
+                raise RuntimeError("диск переповнено")
+        core.log.disabled = True  # навмисні помилки не засмічують вивід тестів
+        self.addCleanup(setattr, core.log, "disabled", False)
+        self.addCleanup(core.run_worker("sweep", 0.05, step).set)
+        time.sleep(0.2)
+        r = self.client.get("/health")
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("Контроль Wi-Fi: RuntimeError: диск переповнено", r.get_json()["error"])
+        admin = self.login("admin", "admin123")
+        self.assertIn("Сервер потребує уваги", admin.get("/admin").get_data(as_text=True))
+        ivan = self.login("ivan", client=core.app.test_client())
+        self.assertNotIn("Сервер потребує уваги", ivan.get("/me").get_data(as_text=True))  # працівникам не показуємо
+        fail.clear()
+        time.sleep(0.2)
+        self.assertEqual(self.client.get("/health").status_code, 200)
+        # потік, що замовк (завис), теж помітно
+        core.WORKERS["sweep"].update(ok_at=time.time() - 3600, started=time.time() - 3600, every=15)
+        fail.set()
+        self.assertIn("не працює", core.workers_problem() or "")
+
 
 if __name__ == "__main__":
     unittest.main()

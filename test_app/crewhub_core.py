@@ -9,6 +9,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import logging
 import math
 import os
 import random
@@ -287,6 +288,7 @@ RECOVERED = {"from_backup": False}  # check_db відновив базу з ко
 BACKUP_KEEP = int(os.environ.get("CREWHUB_BACKUP_KEEP", "30"))
 LOG_KEEP_DAYS = int(os.environ.get("CREWHUB_LOG_KEEP_DAYS", "180"))  # журнал підключень; зміни і зарплата не видаляються
 
+log = logging.getLogger("crewhub")  # куди писати — налаштовує start.py (logs/crewhub.log з ротацією)
 _lock = threading.RLock()  # SQLite + фоновий потік: серіалізуємо записи
 # Перевірка пароля (scrypt) бере ~32 МБ пам'яті і ~0,1 с процесора. 200 входів одночасно з'їли б кілька ГБ,
 # тому одночасно перевіряємо не більше 4 паролів, решта чекає в черзі.
@@ -1600,34 +1602,67 @@ def list_backups():
     return out
 
 
+# Фонові потоки звітують про себе: коли востаннє все пройшло добре і яка була помилка.
+# /health і банер в адмінці показують, якщо котрийсь замовк чи падає (раніше помилка лише друкувалась у консоль).
+WORKERS = {}
+WORKER_NAMES = {"sweep": "Контроль Wi-Fi", "backup": "Автобекап", "people": "Особові папки"}
+
+
+def run_worker(name, every, step):
+    """Запускає step() кожні every секунд у фоновому потоці, який ніколи не падає. Повертає подію зупинки."""
+    state = WORKERS[name] = {"every": every, "started": time.time(), "ok_at": 0.0, "error": None}
+    stop = threading.Event()
+
+    def loop():
+        while not stop.is_set():
+            try:
+                step()
+                state.update(ok_at=time.time(), error=None)
+            except Exception as e:  # noqa: BLE001 — фоновий потік не має падати
+                state["error"] = f"{type(e).__name__}: {e}"
+                log.exception("Фоновий потік «%s» впав", WORKER_NAMES.get(name, name))
+            stop.wait(every)
+    threading.Thread(target=loop, daemon=True, name=f"crewhub-{name}").start()
+    return stop
+
+
+def workers_problem():
+    """Що не так з фоновими потоками (текст для адміна) або None."""
+    t = time.time()
+    out = []
+    for name, w in WORKERS.items():
+        title = WORKER_NAMES.get(name, name)
+        if w["error"]:
+            out.append(f"{title}: {w['error']}")
+        elif t - max(w["ok_at"], w["started"]) > max(w["every"] * 4, 180):
+            out.append(f"{title}: не працює вже {int(t - max(w['ok_at'], w['started'])) // 60} хв")
+    return "; ".join(out) or None
+
+
+def backup_step():
+    today = f"crewhub_{date.today():%Y-%m-%d}"
+    if not any(b["name"].startswith(today) for b in list_backups()):
+        with _people_lock:
+            backup_db()
+        maintenance()
+
+
+def sweep_step():
+    with _lock:
+        conn = connect()
+        try:
+            sweep(conn)
+        finally:
+            conn.close()
+
+
 def start_backups(every_hours=24):
     """Копія при запуску і далі раз на добу (перевіряємо щогодини, чи сьогоднішня вже є)."""
-    def loop():
-        while True:
-            try:
-                today = f"crewhub_{date.today():%Y-%m-%d}"
-                if not any(b["name"].startswith(today) for b in list_backups()):
-                    with _people_lock:
-                        backup_db()
-                    maintenance()
-            except Exception as e:  # noqa: BLE001
-                print("backup error:", e)
-            time.sleep(3600)
-    threading.Thread(target=loop, daemon=True, name="crewhub-backup").start()
+    run_worker("backup", 3600, backup_step)
 
 
 def start_sweeper(interval=15):
-    def loop():
-        while True:
-            try:
-                with _lock:
-                    conn = connect()
-                    sweep(conn)
-                    conn.close()
-            except Exception as e:  # noqa: BLE001 — фоновий потік не має падати
-                print("sweep error:", e)
-            time.sleep(interval)
-    threading.Thread(target=loop, daemon=True, name="crewhub-sweeper").start()
+    run_worker("sweep", interval, sweep_step)
 
 
 def live_monitor(conn):
@@ -2011,6 +2046,7 @@ def _globals():
             "default_rate": float(setting("default_hourly_rate")),
             "in_app": "CrewHubApp" in (request.headers.get("User-Agent") or ""),
             "apk_ready": os.path.exists(APK_PATH), "demo_accounts": DEMO_ACCOUNTS,
+            "system_alert": workers_problem() if u and u["role"] in STAFF_ROLES else None,
             "csrf_token": session.get("csrf", "")}
 
 
@@ -2883,12 +2919,16 @@ def hello():
 
 @app.route("/health")
 def health():
-    """Для моніторингу і скрипта автозапуску: сервер живий і база відповідає."""
+    """Для моніторингу і скрипта автозапуску: сервер живий, база відповідає, фонові потоки працюють."""
     try:
         db().execute("select 1").fetchone()
-        return jsonify({"ok": True, "time": now()})
     except sqlite3.Error as e:
         return jsonify({"ok": False, "error": str(e)}), 503
+    workers = {k: {"ok_at": int(w["ok_at"]), "error": w["error"]} for k, w in WORKERS.items()}
+    problem = workers_problem()
+    if problem:
+        return jsonify({"ok": False, "error": problem, "workers": workers, "time": now()}), 503
+    return jsonify({"ok": True, "time": now(), "workers": workers})
 
 
 @app.errorhandler(OverflowError)

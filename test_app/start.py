@@ -3,15 +3,15 @@
 Піднімає сервер, фонову перевірку Wi-Fi і живий монітор у консолі.
 Телефони в тій самій Wi-Fi мережі відкривають адресу «Локальна мережа».
 """
-import datetime
+import logging
 import os
 import re
 import sys
 import threading
 import time
-import traceback
+from logging.handlers import RotatingFileHandler
 
-from crewhub_core import DB_PATH, app, check_db, get_local_ip, init_db, local_ips, start_backups, start_sweeper
+from crewhub_core import BASE_DIR, DB_PATH, app, check_db, get_local_ip, init_db, local_ips, start_backups, start_sweeper
 
 PORT = int(os.environ.get("CREWHUB_PORT", "5000"))
 
@@ -47,19 +47,29 @@ def visible_len(s):
 
 
 # === ЛОГ ===
-os.makedirs("logs", exist_ok=True)
-log_path = f"logs/crewhub_{datetime.datetime.now():%Y%m%d_%H%M}.txt"
-master_log = open(log_path, "a", encoding="utf-8")
-master_log.write(f"=== ЗАПУСК CREWHUB TEST: {datetime.datetime.now()} ===\n")
-master_log.flush()
+# Один файл logs/crewhub.log з ротацією (5 × 1 МБ): не росте безкінечно і не множиться з кожним перезапуском.
+# Сюди пишуть помилки запитів, фонових потоків (контроль Wi-Fi, бекап, папки) і запуску.
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+log_path = os.path.join(LOG_DIR, "crewhub.log")
+_handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+master_log = logging.getLogger("crewhub")
+for _lg in (master_log, app.logger):
+    _lg.addHandler(_handler)
+    _lg.setLevel(logging.INFO)
+master_log.info("=== Запуск CrewHub ===")
+for _old in os.listdir(LOG_DIR):  # журнали старих версій (новий файл на кожен запуск): прибираємо старші за 30 днів
+    _p = os.path.join(LOG_DIR, _old)
+    if _old.startswith("crewhub_") and _old.endswith(".txt") and time.time() - os.path.getmtime(_p) > 30 * 86400:
+        os.remove(_p)
 
 
 def excepthook(exc_type, exc, tb):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc, tb)
         return
-    traceback.print_exception(exc_type, exc, tb, file=master_log)
-    master_log.flush()
+    master_log.critical("Необроблена помилка", exc_info=(exc_type, exc, tb))
     print(f"\n{Colors.RED}[!] Помилка. Лог: {log_path}{Colors.RESET}\n")
 
 
@@ -153,8 +163,7 @@ def live_monitor(url):
             sys.stdout.flush()
             drawn = box.count("\n") + 1
         except Exception as e:  # noqa: BLE001
-            master_log.write(f"[monitor] {e}\n")
-            master_log.flush()
+            master_log.warning("Монітор у консолі: %s", e)
         time.sleep(3)
 
 
@@ -177,13 +186,13 @@ if __name__ == "__main__":
     problem = check_db()
     if problem:
         print_status("Перевірка бази", False, problem) if RICH else print(f"{Colors.YELLOW} {problem}{Colors.RESET}")
-        master_log.write(f"[DB] {problem}\n")
+        master_log.warning("База: %s", problem)
     fresh = not os.path.exists(DB_PATH)
     try:
         init_db()
         print_status("База SQLite" + (" (нова, тестові дані)" if fresh else ""), True)
     except Exception as e:  # noqa: BLE001
-        master_log.write(f"[DB] {e}\n")
+        master_log.exception("База не запустилась: %s", e)
         print_status("База SQLite", False)
         raise
     start_sweeper()
@@ -213,7 +222,7 @@ if __name__ == "__main__":
         time.sleep(1.5)
         requests_meter = tui.Requests()
         tui.attach_request_counter(requests_meter)
-        dashboard = tui.Dashboard(url, INFO, requests_meter, log_path)
+        dashboard = tui.Dashboard(url, INFO, requests_meter, os.path.relpath(log_path))
         dashboard.start()
         import atexit
         atexit.register(dashboard.stop)  # повертаємо звичайний екран терміналу після Ctrl+C

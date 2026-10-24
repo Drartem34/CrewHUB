@@ -67,6 +67,7 @@
       {% else %}<div class="muted">Нових сповіщень немає</div>{% endfor %}
     </div>
     <main class="content">
+      {% if system_alert %}<div class="banner bad">{{ icon('alert') }}<div><b>Сервер потребує уваги.</b> {{ system_alert }}. Подробиці в logs/crewhub.log</div></div>{% endif %}
       {% block body %}{% endblock %}
     </main>
   </div>
