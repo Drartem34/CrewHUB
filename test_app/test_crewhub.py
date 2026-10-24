@@ -30,6 +30,8 @@ class CrewHubBase(unittest.TestCase):
         shutil.rmtree(core.BACKUP_DIR, ignore_errors=True)
         profiles._state.update(last_scan=0.0, warning=None)
         core._throttle.reset()  # ліміти спроб входу не переходять з тесту в тест
+        core._stats_cache.update(at=0.0, data=None)  # кеші «Огляду» теж
+        core._live_cache.update(at=0.0, data=None)
         core.init_db()
         with core.connect() as c:
             c.execute("insert into networks(location_id, cidr, label) values (1, '203.0.113.0/28', 'тест')")

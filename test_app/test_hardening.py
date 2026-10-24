@@ -618,6 +618,19 @@ class HardeningTest(CrewHubBase):
         self.assertIn("'=HYPERLINK", admin.get("/admin/payroll.csv").get_data(as_text=True))
         self.assertIn("-50", admin.get(f"/admin/employee/{pid}/timesheet.csv").get_data(as_text=True))  # число лишилось числом
 
+    # --- 🔋 Важка статистика «Огляду» рахується не частіше ніж раз на 30 с --------------------------------
+    def test_dashboard_heavy_stats_are_cached(self):
+        calls = []
+        orig = core.payroll
+        core.payroll = lambda *a, **k: calls.append(1) or orig(*a, **k)
+        self.addCleanup(setattr, core, "payroll", orig)
+        with core.connect() as c:
+            for _ in range(5):
+                stats = core.dashboard_stats(c)
+            self.assertEqual(len(calls), 1)
+            c.execute("insert into requests(user_id, type, created_at) values (1, 'day_off', 1)")
+            self.assertEqual(core.dashboard_stats(c)["pending"], stats["pending"] + 1)  # лічильники свіжі
+
 
 if __name__ == "__main__":
     unittest.main()

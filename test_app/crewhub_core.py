@@ -3056,16 +3056,27 @@ def me_password():
 # ---------------------------------------------------------------------------
 # Адмінка
 # ---------------------------------------------------------------------------
+# Години за сьогодні й фонд за місяць — найважча частина «Огляду» (зарплата всіх людей). Панель у терміналі
+# питає їх кожні 2 с, live-сторінка — кожні 3 с: рахуємо не частіше ніж раз на 30 с, для огляду цього досить.
+STATS_TTL = 30
+_stats_cache = {"at": 0.0, "data": None}
+
+
 def dashboard_stats(conn):
     today = date.today()
     start, end = day_bounds(today, today)
-    today_secs = sum(shift_stats(conn, s)["worked_seconds"]
-                     for s in conn.execute("select * from shifts where started_at >= ? and started_at < ?", (start, end)))
-    month = payroll(conn, today.replace(day=1), today)
+    heavy = _stats_cache["data"]
+    if not heavy or time.time() - _stats_cache["at"] >= STATS_TTL:
+        today_secs = sum(shift_stats(conn, s)["worked_seconds"]
+                         for s in conn.execute("select * from shifts where started_at >= ? and started_at < ?", (start, end)))
+        month = payroll(conn, today.replace(day=1), today)
+        heavy = {"today_hours": round(today_secs / 3600, 1),
+                 "month_total": round(sum(r["total"] for r in month), 2),
+                 "month_hours": round(sum(r["hours"] for r in month), 1)}
+        _stats_cache.update(at=time.time(), data=heavy)
     return {
-        "today_hours": round(today_secs / 3600, 1),
-        "month_total": round(sum(r["total"] for r in month), 2),
-        "month_hours": round(sum(r["hours"] for r in month), 1),
+        **heavy,
+        # лічильники для значків — завжди свіжі (вони дешеві)
         "pending": conn.execute("select count(*) from requests where status = 'pending'").fetchone()[0],
         "denied_today": conn.execute("select count(*) from conn_log where allowed = 0 and created_at >= ?", (start,)).fetchone()[0],
     }
