@@ -2,6 +2,7 @@
 test_app/crewhub_test.db*
 test_app/*.db
 test_app/*.db-*
+test_app/server_id.txt
 test_app/backups/
 test_app/people/
 test_app/logs/

@@ -422,7 +422,13 @@ def flush_dirty(conn, limit=500):
     conn.commit()
     rules = core.pay_rules(conn)
     for i, uid in enumerate(ids):
-        export_user(conn, uid, rules)
+        try:
+            export_user(conn, uid, rules)
+        except Exception:
+            # Диск з папками відпав (флешка, синхронізована тека): ця й решта людей лишаються в черзі
+            conn.executemany("insert or ignore into dirty_users values (?)", [(x,) for x in ids[i:]])
+            conn.commit()
+            raise
         conn.commit()  # не тримати базу заблокованою, поки пишуться папки інших людей
         if i + 1 < len(ids):
             time.sleep(0.03)  # ранковий наплив: папки пишуться фоном, відповіді телефонам мають пріоритет
@@ -499,11 +505,11 @@ def scan(conn):
     return changed
 
 
-def _exported_at(p):
-    try:
-        return datetime.fromisoformat(p.get("exported_at") or "").timestamp()
-    except (TypeError, ValueError):
-        return 0
+def _folder_updated_at(path):
+    """Коли дані папки востаннє змінювались: найсвіжіший із її файлів. (Не exported_at з profile.json:
+    файли переписуються лише при зміні, і профіль може роками стояти, поки shifts.json оновлюється щодня.)"""
+    times = [os.path.getmtime(os.path.join(path, f)) for f in SYSTEM_FILES if os.path.exists(os.path.join(path, f))]
+    return max(times, default=0)
 
 
 def rebuild_from_folders(conn, since=None):
@@ -514,7 +520,7 @@ def rebuild_from_folders(conn, since=None):
         p = _read_json(os.path.join(path, "profile.json"), None)
         if not isinstance(p, dict):
             continue
-        if since and _exported_at(p) < since:
+        if since and _folder_updated_at(path) < since:
             continue
         phone = core.normalize_phone(p.get("phone") or "")
         u = conn.execute("select * from users where phone = ? or folder = ?", (phone, d)).fetchone()

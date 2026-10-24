@@ -211,9 +211,9 @@ public class WatchService extends Service {
             c.setConnectTimeout(5_000);
             c.setReadTimeout(5_000);
             c.setUseCaches(false);
-            int code = c.getResponseCode();
-            if (code >= 500) return SERVER_DOWN;  // наш сервер перезапускається
-            if (code != 200) return SERVER_OTHER;
+            // Не 200 (сервер перезапускається, стара версія без /api/hello, тунель перепідключається) —
+            // «недоступний»: пробуємо пізніше і cookie, звісно, не віддаємо. «Чужий» — лише якщо id інший
+            if (c.getResponseCode() != 200) return SERVER_DOWN;
             String id = new JSONObject(read(c.getInputStream())).optString("server_id", "");
             if (id.isEmpty()) return SERVER_OTHER;
             SharedPreferences p = prefs(ctx);

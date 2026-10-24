@@ -389,9 +389,10 @@ public class MainActivity extends Activity {
                     input.setError("Перевірте код");
                     return;
                 }
-                SharedPreferences.Editor e = prefs().edit().putBoolean("watch", watch.isChecked());
+                // «Підключитися» — свідома дія людини: id сервера запам'ятовується заново (сервер могли перевстановити)
+                SharedPreferences.Editor e = prefs().edit().putBoolean("watch", watch.isChecked()).remove("server_id");
                 if (!url.equals(current)) {
-                    e.putString(KEY_SERVER, url).putBoolean("hidden", byCode).remove("company").remove("cookie").remove("server_id");
+                    e.putString(KEY_SERVER, url).putBoolean("hidden", byCode).remove("company").remove("cookie");
                 }
                 e.apply();
                 if (!watch.isChecked()) WatchService.stop(MainActivity.this);
@@ -590,7 +591,8 @@ public class MainActivity extends Activity {
                         if (web != target || isFinishing()) return;  // за цей час відкрили інший екран
                         if (check == WatchService.SERVER_OTHER) {
                             showSetup(server, label(server) + ": за цією адресою відповідає інший пристрій, а не сервер компанії."
-                                    + "\nПеревірте, що телефон у робочому Wi-Fi.");
+                                    + "\nПеревірте, що телефон у робочому Wi-Fi. Якщо сервер перевстановлювали, "
+                                    + "натисніть «Підключитися» або відскануйте QR-код ще раз.");
                             return;
                         }
                         target.loadUrl(server);  // сервер не відповів: WebView сам покаже помилку й екран підключення

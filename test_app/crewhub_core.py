@@ -185,7 +185,12 @@ def clean_setting(key, raw):
     lo, hi = rule[1], rule[2]
     if x is None or not lo <= x <= hi:
         return None
-    return str(int(x)) if kind == "int" else f"{x:g}"
+    return str(int(x)) if kind == "int" else num_text(x)
+
+
+def num_text(x):
+    """12345.67 → «12345.67», 1000000 → «1000000», 2.0 → «2» (без 6-значного округлення й e+06, як у :g)."""
+    return f"{round(x, 6):.6f}".rstrip("0").rstrip(".")
 
 
 def setting_label(key):
@@ -357,15 +362,26 @@ class Throttle:
 
 
 _throttle = Throttle()
-# (ключ, кількість, вікно в секундах): перевищив хоч одне — чекає, пароль навіть не перевіряється
-LOGIN_LIMITS = (("acct-ip", 5, 900), ("ip", 20, 900), ("acct", 50, 3600))
+# (ключ, кількість, вікно в секундах): перевищив хоч одне — чекає, пароль навіть не перевіряється.
+# Загального ліміту «на акаунт з будь-яких IP» навмисно немає: інакше будь-хто, набравши чужий номер
+# 50 разів, заблокував би людині (чи єдиному адміну) вхід. Перебір з одного IP обмежують два ліміти нижче.
+LOGIN_LIMITS = (("acct-ip", 5, 900), ("ip", 20, 900))
+
+
+def _shared_ip(ip):
+    """IP, за яким стоїть невідомо скільки людей (тунель без X-Forwarded-For — усі з 127.0.0.1): ліміт «на IP»
+    тут покарав би всіх за чужі помилки, тож його не рахуємо (ліміт «акаунт + IP» лишається)."""
+    addr = work_ip(ip)
+    return addr is None
 
 
 def login_blocked(acct, ip):
     """Секунд до наступної дозволеної спроби входу, або 0."""
-    keys = {"acct-ip": f"login:{acct}:{ip}", "ip": f"login-ip:{ip}", "acct": f"login:{acct}"}
+    keys = {"acct-ip": f"login:{acct}:{ip}", "ip": f"login-ip:{ip}"}
     wait = 0
     for kind, limit, window in LOGIN_LIMITS:
+        if kind == "ip" and _shared_ip(ip):
+            continue
         n, left = _throttle.recent(keys[kind], window)
         if n >= limit:
             wait = max(wait, left)
@@ -373,8 +389,9 @@ def login_blocked(acct, ip):
 
 
 def login_failed(acct, ip):
-    for key in (f"login:{acct}:{ip}", f"login-ip:{ip}", f"login:{acct}"):
-        _throttle.add(key)
+    _throttle.add(f"login:{acct}:{ip}")
+    if not _shared_ip(ip):
+        _throttle.add(f"login-ip:{ip}")
 
 
 def wait_text(seconds):
@@ -546,10 +563,26 @@ def init_db(seed=True):
         # Старі особові папки містили хеш пароля: переписуємо всі папки один раз уже без нього
         conn.execute("insert or ignore into dirty_users select id from users")
         meta_set(conn, "profiles_v2", 1)
-    if not meta_get(conn, "server_id"):
-        # Постійний ідентифікатор цього сервера: застосунок звіряє його, перш ніж віддати cookie входу
-        # (у чужій Wi-Fi за тим самим 192.168.x.x може відповідати зовсім інший пристрій)
-        meta_set(conn, "server_id", secrets.token_hex(8))
+    # Постійний ідентифікатор цього сервера: застосунок звіряє його, перш ніж віддати cookie входу
+    # (у чужій Wi-Fi за тим самим 192.168.x.x може відповідати зовсім інший пристрій). Лежить і в базі,
+    # і у файлі поруч: база загубилась чи її створено наново — телефони все одно впізнають сервер
+    sid_file = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "server_id.txt")
+    sid = meta_get(conn, "server_id")
+    if not sid:
+        try:
+            with open(sid_file, encoding="utf-8") as f:
+                saved = f.read(64).strip()
+            sid = saved if re.fullmatch(r"[0-9a-f]{16}", saved) else None
+        except OSError:
+            sid = None
+        sid = sid or secrets.token_hex(8)
+        meta_set(conn, "server_id", sid)
+    try:
+        if not os.path.exists(sid_file):
+            with open(sid_file, "w", encoding="utf-8") as f:
+                f.write(sid)
+    except OSError:
+        pass
     if not os.environ.get("CREWHUB_SECRET"):
         # Свій випадковий ключ сесій для кожної інсталяції; зберігається в базі, тож після перезапуску
         # сервера ніхто не вилітає з акаунта
@@ -1486,8 +1519,8 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
         if b and b["kind"] == "wifi_loss":
             forgive = setting_int("silence_forgive_minutes", conn) * 60
             # Простити «мовчання» можна лише застосунку: його телефон справді засинає і пінгує рідше.
-            # Браузер не спить — закрита вкладка означає, що людина пішла. Застосунок без обмежень батареї
-            # пінгує і в сні, тож його тиша — теж справжня втрата.
+            # Браузер не спить — закрита вкладка означає, що людина пішла. Тож і цей пінг має бути від
+            # застосунку (а не з браузера під тим самим акаунтом), і зміна — розпочата застосунком.
             sleepy = sleepy_shift(shift) and (device or "").startswith("app-")
             if sleepy and b["reason"] == "silence" and not away and t - b["started_at"] <= forgive:
                 # Телефон лише спав (Wi-Fi не втрачав) і знову озвався з точки: людина весь час була тут
@@ -2478,7 +2511,7 @@ def register():
     form = request.form
     if request.method == "POST":
         key = f"register:{client_ip()}"
-        if _throttle.recent(key, 3600)[0] >= 5:
+        if _throttle.recent(key, 3600)[0] >= (30 if _shared_ip(client_ip()) else 5):  # через тунель — спільна черга
             flash("Забагато реєстрацій з цієї мережі. Спробуйте пізніше або попросіть адміністратора")
             return render_template("register.html", done=False, form=form), 429
         _throttle.add(key)
@@ -3626,19 +3659,18 @@ def delete_user(conn, u, actor_id, via_folder=False):
 def admin_rates():
     """Загальна ставка: зберігається для нових працівників і за бажанням застосовується до всіх."""
     actor = current_user()
-    try:
-        rate = round(float(request.form.get("rate", "").replace(",", ".")), 2)
-        assert 0 <= rate <= 1000000
-    except (ValueError, AssertionError, OverflowError):
-        flash("Вкажіть ставку числом")
+    rate = parse_amount(request.form.get("rate"))
+    if rate is None:
+        flash("Вкажіть ставку числом від 0")
         return redirect(request.referrer or url_for("admin", tab="employees"))
+    rate = round(rate, 2)
     scope = request.form.get("scope", "default")  # default | all | employees
     with _lock:
         conn = db()
         old = setting("default_hourly_rate", conn)
-        conn.execute("update settings set value = ? where key = 'default_hourly_rate'", (f"{rate:g}",))
+        conn.execute("update settings set value = ? where key = 'default_hourly_rate'", (num_text(rate),))
         g.pop("settings_cache", None)
-        audit(conn, actor["id"], "UPDATE", "settings", None, None, {"default_hourly_rate": [old, f"{rate:g}"]})
+        audit(conn, actor["id"], "UPDATE", "settings", None, None, {"default_hourly_rate": [old, num_text(rate)]})
         changed = 0
         if scope in ("all", "employees"):
             roles = ("employee", "teamlead") if scope == "employees" else ("employee", "teamlead", "moderator")

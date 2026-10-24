@@ -183,16 +183,17 @@ if __name__ == "__main__":
 {Colors.RESET}""")
         print(f"{Colors.YELLOW} Ініціалізація...{Colors.RESET}\n")
 
-    # Другий запуск на тому ж порту: два «контролери Wi-Fi» і два бекапи на одній базі заважали б один одному
+    # Другий запуск на тому ж порту: два «контролери Wi-Fi» і два бекапи на одній базі заважали б один одному.
+    # Питаємо, чи хтось уже слухає порт (а не пробуємо його зайняти: після падіння старі з'єднання ще хвилину
+    # висять у TIME_WAIT, і тоді автоперезапуск помилково вирішив би, що сервер уже працює)
     import socket
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        probe.bind(("0.0.0.0", PORT))
+        socket.create_connection(("127.0.0.1", PORT), timeout=2).close()
     except OSError:
+        pass  # порт вільний — запускаємось
+    else:
         print(f"{Colors.RED} Порт {PORT} уже зайнято: CrewHub (чи інша програма) вже працює. Другий запуск не потрібен.{Colors.RESET}")
         sys.exit(0)  # 0 — щоб start.sh/start.bat не перезапускали його по колу
-    finally:
-        probe.close()
 
     problem = check_db()
     if problem:

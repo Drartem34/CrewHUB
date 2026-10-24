@@ -201,7 +201,7 @@ class HardeningTest(CrewHubBase):
     def test_registration_spam_is_throttled(self):
         c = core.app.test_client()
         codes = [c.post("/register", data={"full_name": "Тест Тестенко", "phone": f"06711100{i:02d}", "password": "123456",
-                                           "password2": "123456"}).status_code for i in range(7)]
+                                           "password2": "123456"}, headers={"X-Forwarded-For": "10.3.3.3"}).status_code for i in range(7)]
         self.assertEqual(codes[:5], [200] * 5)
         self.assertEqual(codes[5:], [429, 429])
 
@@ -684,6 +684,71 @@ class HardeningTest(CrewHubBase):
         self.clock("start")
         self.sync()
         self.assertNotEqual(core.os.stat(path).st_mtime_ns, before)  # нова зміна — файл оновлено
+
+    def test_rebuild_uses_newest_folder_file_not_profile_time(self):
+        # Профіль давно не змінювався, а зміни (shifts.json) — свіжі: папку треба взяти
+        self.login("ivan")
+        self.sync()
+        path = self.folder("ivan")
+        old = core.now() - 30 * 86400
+        core.os.utime(core.os.path.join(path, "profile.json"), (old, old))
+        self.clock("start")
+        self.clock("stop")
+        self.sync()
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        self.sql("delete from shifts where user_id = ?", uid)  # «копія» без сьогоднішньої зміни
+        with core.connect() as c:
+            profiles.rebuild_from_folders(c, since=core.now() - 3600)
+            c.commit()
+        self.assertEqual(self.sql("select count(*) from shifts where user_id = ?", uid)[0][0], 1)
+
+    def test_failed_folder_export_keeps_queue(self):
+        self.sync()
+        ids = [r[0] for r in self.sql("select id from users")]
+        self.sql("delete from dirty_users")
+        for i in ids:
+            self.sql("insert into dirty_users values (?)", i)
+        orig = profiles.export_user
+        profiles.export_user = lambda *a, **k: (_ for _ in ()).throw(OSError("диск відпав"))
+        self.addCleanup(setattr, profiles, "export_user", orig)
+        with core.connect() as c:
+            with self.assertRaises(OSError):
+                profiles.flush_dirty(c)
+        self.assertEqual(sorted(r[0] for r in self.sql("select user_id from dirty_users")), sorted(ids))
+
+    def test_nobody_can_lock_someone_elses_account(self):
+        # 10 «атакуючих» IP по 5 спроб на номер адміна: самому адміну зі свого IP вхід не блокується
+        for n in range(10):
+            c = core.app.test_client()
+            for i in range(5):
+                c.post("/login", data={"username": "0500000001", "password": f"x{i}"}, headers={"X-Forwarded-For": f"10.1.0.{n}"})
+        r = core.app.test_client().post("/login", data={"username": "0500000001", "password": "admin123"},
+                                        headers={"X-Forwarded-For": "10.2.0.1"})
+        self.assertEqual(r.status_code, 302)
+
+    def test_tunnel_users_without_ip_do_not_share_ip_limit(self):
+        # Через тунель без X-Forwarded-For усі мають 127.0.0.1: чужі помилки не блокують інших
+        for i in range(25):
+            core.app.test_client().post("/login", data={"username": f"06700000{i:02d}", "password": "123456"})
+        self.assertEqual(core.app.test_client().post("/login", data={"username": "0671234567", "password": "1234"}).status_code, 302)
+
+    def test_server_id_survives_new_database(self):
+        sid = self.client.get("/api/hello").get_json()["server_id"]
+        for suffix in ("", "-wal", "-shm"):
+            if core.os.path.exists(core.DB_PATH + suffix):
+                core.os.remove(core.DB_PATH + suffix)
+        core.init_db()  # база загубилась і створена наново
+        self.assertEqual(core.app.test_client().get("/api/hello").get_json()["server_id"], sid)
+
+    def test_decimal_settings_keep_their_value(self):
+        self.assertEqual(core.clean_setting("default_hourly_rate", "12345.67"), "12345.67")
+        self.assertEqual(core.clean_setting("default_hourly_rate", "1000000"), "1000000")
+        self.assertEqual(core.clean_setting("weekend_multiplier", "1,5"), "1.5")
+        admin = self.login("admin", "admin123")
+        admin.post("/admin/rates", data={"rate": "12345,67", "scope": "default"})
+        self.assertEqual(core.setting("default_hourly_rate", core.connect()), "12345.67")
+        admin.post("/admin/rates", data={"rate": "nan", "scope": "all"})
+        self.assertEqual(core.setting("default_hourly_rate", core.connect()), "12345.67")
 
 
 if __name__ == "__main__":
