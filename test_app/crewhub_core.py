@@ -2880,6 +2880,9 @@ def admin_employee_save(uid):
             if u["role"] == "admin" and new["role"] != "admin" and not admins_left(conn, uid):
                 flash("Це єдиний адміністратор. Спершу призначте іншого адміністратора")
                 return redirect(url_for("admin_employee", uid=uid))
+        if (new.get("role") or u["role"]) == "admin" and new["status"] in ("dismissed", "pending") and not admins_left(conn, uid):
+            flash("Це єдиний адміністратор: звільнити його не можна. Спершу призначте іншого адміністратора")
+            return redirect(url_for("admin_employee", uid=uid))
         if f.get("password"):
             conn.execute("update users set password_hash = ? where id = ?", (hash_password(f["password"]), uid))
         changes = diff(dict(u), new)
@@ -2929,7 +2932,8 @@ def admin_employee_new():
 
 
 def admins_left(conn, except_id):
-    return conn.execute("select count(*) from users where role = 'admin' and status != 'dismissed' and id != ?",
+    """Скільки ще діючих адміністраторів, крім except_id (звільнені й непідтверджені не рахуються)."""
+    return conn.execute("select count(*) from users where role = 'admin' and status not in ('dismissed', 'pending') and id != ?",
                         (except_id,)).fetchone()[0]
 
 
@@ -3016,7 +3020,7 @@ def admin_employee_delete(uid):
     with _lock:
         conn = db()
         u = conn.execute("select * from users where id = ?", (uid,)).fetchone() or abort(404)
-        if u["role"] == "admin" and conn.execute("select count(*) from users where role = 'admin'").fetchone()[0] <= 1:
+        if u["role"] == "admin" and not admins_left(conn, uid):
             flash("Це останній адміністратор, його не можна видалити")
             return redirect(url_for("admin_employee", uid=uid))
         shifts = delete_user(conn, u, actor["id"])

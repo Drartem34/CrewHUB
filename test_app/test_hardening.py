@@ -119,6 +119,23 @@ class HardeningTest(CrewHubBase):
         admin.post(f"/admin/request/{rid}/approve")
         self.assertEqual(self.sql("select status from requests where id = ?", rid)[0][0], "approved")
 
+    # --- 🔴 4. Останній адміністратор ---------------------------------------------------------
+    def test_last_admin_cannot_be_dismissed(self):
+        admin = self.login("admin", "admin123")
+        aid = self.sql("select id from users where username = 'admin'")[0][0]
+        form = {"full_name": "Адмін", "hourly_rate": "0", "status": "dismissed", "phone": "+380500000001"}
+        admin.post(f"/admin/employee/{aid}", data=form)
+        self.assertEqual(self.sql("select status from users where id = ?", aid)[0][0], "active")
+        # з другим адміністратором — можна
+        mid = self.sql("select id from users where username = 'moder'")[0][0]
+        self.sql("update users set role = 'admin' where id = ?", mid)
+        admin.post(f"/admin/employee/{aid}", data=form)
+        self.assertEqual(self.sql("select status from users where id = ?", aid)[0][0], "dismissed")
+        # тепер єдиний діючий — колишній модератор: звільненого адміна не рахуємо
+        other = self.login("moder", "moder123", client=core.app.test_client())
+        other.post(f"/admin/employee/{mid}", data=dict(form, phone="+380500000002"))
+        self.assertEqual(self.sql("select status from users where id = ?", mid)[0][0], "active")
+
 
 if __name__ == "__main__":
     unittest.main()
