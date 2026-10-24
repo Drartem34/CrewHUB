@@ -41,6 +41,57 @@ class HardeningTest(CrewHubBase):
         core.init_db()
         self.assertFalse(self.sql("select 1 from networks where cidr = '127.0.0.0/8'"))
 
+    # --- 🔴 2. «Прощення тиші» ----------------------------------------------------------------
+    APP = {"User-Agent": "Mozilla/5.0 (Linux; Android 14) CrewHubApp/1.9 background CrewHubDevice/phone0001"}
+
+    def _silent(self, seconds, ua=None, body=None):
+        """Година роботи, потім `seconds` тиші, sweep, телефон знову озивається з точки. Повертає оплачені секунди."""
+        headers = dict(ua or {}, **{"X-Forwarded-For": WORK_IP})
+        self.client.post("/api/clock/start", json=body or {}, headers=headers)
+        self.client.post("/api/clock/heartbeat", json=body or {}, headers=headers)
+        self.sql("update shifts set started_at = started_at - ? - 3600, last_seen_at = last_seen_at - ?", seconds, seconds)
+        with core.connect() as c:
+            core.sweep(c)
+            self.client.post("/api/clock/heartbeat", json=body or {}, headers=headers)
+            return core.shift_stats(c, c.execute("select * from shifts").fetchone())["worked_seconds"]
+
+    def test_browser_absence_is_not_forgiven(self):
+        self.login("ivan")
+        self.assertLess(self._silent(20 * 60), 3600 + 60)       # пауза ще відкрита: 20 хв не оплачено
+        self.sql("delete from shifts")
+        self.assertLess(self._silent(3 * 3600), 3600 + 60)      # зміну закрито часом останнього пінгу
+
+    def test_app_long_silence_is_not_forgiven(self):
+        self.login("ivan")
+        self.assertLess(self._silent(3 * 3600, self.APP), 3600 + 60)
+
+    def test_app_short_sleep_is_forgiven(self):
+        self.login("ivan")
+        self.assertGreaterEqual(self._silent(30 * 60, self.APP), 3600 + 30 * 60 - 5)
+
+    def test_unrestricted_app_silence_is_not_forgiven(self):
+        self.login("ivan")
+        self.assertLess(self._silent(30 * 60, self.APP, {"unrestricted": True}), 3600 + 60)
+
+    def test_fake_away_since_cannot_shrink_long_absence(self):
+        self.login("ivan")
+        headers = dict(self.APP, **{"X-Forwarded-For": WORK_IP})
+        self.client.post("/api/clock/start", json={}, headers=headers)
+        sid = self.sql("select id from shifts")[0][0]
+        t = core.now()
+        # 3 год «мовчання», sweep ще не встиг закрити зміну; застосунок «каже», що вийшов лише хвилину тому
+        self.sql("update shifts set started_at = ?, last_seen_at = ?, status = 'paused' where id = ?", t - 4 * 3600, t - 3 * 3600, sid)
+        self.sql("insert into breaks(shift_id, kind, is_paid, rate_pct, started_at, reason) values (?, 'wifi_loss', 0, 0, ?, 'silence')",
+                 sid, t - 3 * 3600)
+        res = self.client.post("/api/clock/heartbeat", json={"away_since": t - 60}, headers=headers).get_json()
+        self.assertGreaterEqual(res["shift"]["unpaid_break_seconds"], 3 * 3600 - 5)
+
+    def test_old_forgive_default_lowered(self):
+        self.sql("update settings set value = '240' where key = 'silence_forgive_minutes'")
+        self.sql("delete from meta where key = 'forgive_v2'")
+        core.init_db()
+        self.assertEqual(self.sql("select value from settings where key = 'silence_forgive_minutes'")[0][0], "45")
+
 
 if __name__ == "__main__":
     unittest.main()

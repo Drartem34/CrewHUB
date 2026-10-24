@@ -54,7 +54,8 @@ DEFAULT_SETTINGS = {
     "currency": "грн",
     "wifi_grace_minutes": "2",       # скільки хвилин без пінгу з робочої мережі допускається (браузер)
     "sleep_grace_minutes": "20",     # те саме для застосунку: телефон, який ніхто не чіпає, засинає і пінгує рідше
-    "silence_forgive_minutes": "240",  # телефон «мовчав», але знову озвався з робочого Wi-Fi — цей час рахується
+    "silence_forgive_minutes": "45",  # застосунок «мовчав» (телефон спав), але знову озвався з робочого Wi-Fi —
+                                     # цей час рахується. Лише для застосунку: браузер не спить
     "wifi_loss_action": "pause",     # pause | close
     "offline_keeps_counting": "0",   # 1 = втрата зв'язку не ставить зміну на паузу: вона рахується далі до кінця робочого часу
     "wifi_pause_close_minutes": "30",
@@ -357,6 +358,11 @@ def init_db(seed=True):
     conn.execute("delete from networks where cidr in ('127.0.0.0/8', '127.0.0.1/32', '::1/128')")
     for k, v in DEFAULT_SETTINGS.items():
         conn.execute("insert or ignore into settings(key, value) values (?, ?)", (k, v))
+    if not meta_get(conn, "forgive_v2"):
+        # Стара поблажка (4 год) дозволяла піти з роботи на кілька годин і отримати за них оплату
+        conn.execute("update settings set value = ? where key = 'silence_forgive_minutes' and value = '240'",
+                     (DEFAULT_SETTINGS["silence_forgive_minutes"],))
+        meta_set(conn, "forgive_v2", 1)
     if not os.environ.get("CREWHUB_SECRET"):
         # Свій випадковий ключ сесій для кожної інсталяції; зберігається в базі, тож після перезапуску
         # сервера ніхто не вилітає з акаунта
@@ -1187,13 +1193,19 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
         b = conn.execute("select * from breaks where shift_id = ? and ended_at is null", (shift["id"],)).fetchone()
         if b and b["kind"] == "wifi_loss":
             forgive = setting_int("silence_forgive_minutes", conn) * 60
-            if b["reason"] == "silence" and not away and t - b["started_at"] <= forgive:
+            # Простити «мовчання» можна лише застосунку: його телефон справді засинає і пінгує рідше.
+            # Браузер не спить — закрита вкладка означає, що людина пішла. Застосунок без обмежень батареї
+            # пінгує і в сні, тож його тиша — теж справжня втрата.
+            sleepy = sleepy_shift(shift) and (device or "").startswith("app-")
+            if sleepy and b["reason"] == "silence" and not away and t - b["started_at"] <= forgive:
                 # Телефон лише спав (Wi-Fi не втрачав) і знову озвався з точки: людина весь час була тут
                 conn.execute("delete from breaks where id = ?", (b["id"],))
                 log_clock(conn, user["id"], shift["id"], "wifi_restored", ip, shift["location_id"], True, device, {"slept_seconds": t - b["started_at"]})
             else:
+                # Застосунок каже, коли телефон справді вийшов: до цієї миті він спав на точці (в межах тієї ж поблажки)
+                since = away if sleepy and away and away - b["started_at"] <= forgive else b["started_at"]
                 conn.execute("update breaks set ended_at = ?, started_at = max(started_at, ?), reason = 'left' where id = ?",
-                             (t, away or b["started_at"], b["id"]))
+                             (t, since, b["id"]))
                 log_clock(conn, user["id"], shift["id"], "wifi_restored", ip, shift["location_id"], True, device)
                 notify(conn, user["id"], "Зміну відновлено", "Ви знову в робочій мережі")
                 notify_staff(conn, "Wi-Fi відновлено", f"{user['full_name']} знову на точці")
@@ -1210,6 +1222,11 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
         return state()
 
     return {"ok": False, "error": "Невідома дія"}
+
+
+def sleepy_shift(shift):
+    """Зміна з застосунку, телефон якого може заснути (з обмеженнями батареї): його тишу можна простити."""
+    return (shift["device"] or "").startswith("app-") and not shift["bg_ok"]
 
 
 def start_wifi_pause(conn, shift, since, reason, ip=None, log=True):
@@ -1271,15 +1288,15 @@ def sweep(conn):
         log_clock(conn, s["user_id"], s["id"], "wifi_lost", s["last_seen_ip"], s["location_id"], False, None,
                   {"action": action})
     forgive = setting_int("silence_forgive_minutes", conn) * 60
-    for b in conn.execute("select b.id, b.shift_id, b.started_at, b.reason, s.user_id, s.started_at as shift_start, s.last_seen_ip, s.location_id"
-                          " from breaks b join shifts s on s.id = b.shift_id"
+    for b in conn.execute("select b.id, b.shift_id, b.started_at, b.reason, s.user_id, s.started_at as shift_start, s.last_seen_ip,"
+                          " s.location_id, s.device, s.bg_ok from breaks b join shifts s on s.id = b.shift_id"
                           " where b.kind = 'wifi_loss' and b.ended_at is null and s.status = 'paused' and b.started_at < ?",
                           (t - min(pause_limit, after_end),)).fetchall():
         # Пішов після кінця зміни: чекаємо auto_close_minutes (раптом повернеться), у робочий час — wifi_pause_close_minutes.
         w = work_window(conn, b["user_id"], b["shift_start"])
         ended = w is not None and b["started_at"] >= w[1] - 15 * 60
         # Телефон лише замовк (міг заснути) — чекаємо довше: озветься з точки, і час зарахується
-        limit = after_end if ended else (max(pause_limit, forgive) if b["reason"] == "silence" else pause_limit)
+        limit = after_end if ended else (max(pause_limit, forgive) if b["reason"] == "silence" and sleepy_shift(b) else pause_limit)
         if t - b["started_at"] < limit:
             continue
         changed += 1

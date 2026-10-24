@@ -392,7 +392,7 @@
     <div class="form-grid">
       <div><label>Допустима втрата Wi-Fi, хв (браузер)</label><input name="wifi_grace_minutes" type="number" min="1" value="{{ settings.wifi_grace_minutes }}"></div>
       <div><label>Те саме для застосунку, хв</label><input name="sleep_grace_minutes" type="number" min="1" value="{{ settings.sleep_grace_minutes }}" title="Телефон, який лежить без дотиків, засинає і пінгує рідше"></div>
-      <div class="full"><label>Телефон заснув, але потім озвався з робочого Wi-Fi: рахувати цей час як роботу, якщо пауза не довша, хв</label><input name="silence_forgive_minutes" type="number" min="0" value="{{ settings.silence_forgive_minutes }}"></div>
+      <div class="full"><label>Застосунок замовк (телефон заснув), але потім озвався з робочого Wi-Fi: рахувати цей час як роботу, якщо пауза не довша, хв (браузеру не прощається)</label><input name="silence_forgive_minutes" type="number" min="0" value="{{ settings.silence_forgive_minutes }}"></div>
       <div><label>Що робити при втраті</label><select name="wifi_loss_action">
         <option value="pause" {{ 'selected' if settings.wifi_loss_action == 'pause' }}>Ставити на паузу</option>
         <option value="close" {{ 'selected' if settings.wifi_loss_action == 'close' }}>Закривати зміну</option></select></div>
