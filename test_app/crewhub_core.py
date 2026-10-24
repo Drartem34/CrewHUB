@@ -426,6 +426,10 @@ def init_db(seed=True):
         conn.execute("update settings set value = ? where key = 'silence_forgive_minutes' and value = '240'",
                      (DEFAULT_SETTINGS["silence_forgive_minutes"],))
         meta_set(conn, "forgive_v2", 1)
+    if not meta_get(conn, "profiles_v2"):
+        # Старі особові папки містили хеш пароля: переписуємо всі папки один раз уже без нього
+        conn.execute("insert or ignore into dirty_users select id from users")
+        meta_set(conn, "profiles_v2", 1)
     if not meta_get(conn, "server_id"):
         # Постійний ідентифікатор цього сервера: застосунок звіряє його, перш ніж віддати cookie входу
         # (у чужій Wi-Fi за тим самим 192.168.x.x може відповідати зовсім інший пристрій)

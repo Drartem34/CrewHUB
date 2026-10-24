@@ -1,6 +1,7 @@
 """Особові папки працівників: people/<Ім'я>/ — уся інформація про людину в одному місці.
 
-  profile.json   ім'я, телефон, роль, посада, ставка, статус, пароль (хеш); поля можна правити руками
+  profile.json   ім'я, телефон, роль, посада, ставка, статус; ім'я, контакти й посаду можна правити руками
+                 (роль, статус і ставку — лише в адмінці; хешу пароля в папці немає)
   картка.txt     те саме людською мовою + години і заробіток за місяць
   shifts.csv     усі зміни таблицею (відкривається в Excel)
   shifts.json    усі зміни з перервами (для відновлення)
@@ -12,7 +13,9 @@
   * база — єдине джерело правди; папки people/ — це зручний експорт для перегляду й бекапу;
   * будь-яка зміна в базі → папка людини переписується (тригери dirty_users);
   * папку видалили чи вона зникла (від'єднали диск) → сервер відтворює її з бази, акаунт не чіпає;
-  * profile.json поправили руками → зміни потрапляють у базу;
+  * profile.json поправили руками → ім'я, телефон, посада, відділ, контакти, дата прийому потрапляють у базу;
+    роль, статус і ставку файлом змінити не можна (хто має доступ до папки чи диска, не стане адміном
+    і не підніме собі ставку — це робить адмін в адмінці, з записом у журнал);
   * нову або повернуту папку імпортуємо в базу ЛИШЕ вручну: python profiles.py import "Ім'я"
     (щоб випадково покладена чи повернута папка не створювала й не видаляла акаунти сама).
 Так збій з файловою системою ніколи не зносить працівників із бази.
@@ -30,6 +33,7 @@ from datetime import date, datetime
 import crewhub_core as core
 
 EDITABLE = ("full_name", "phone", "role", "job_title", "department", "telegram", "whatsapp", "hourly_rate", "hire_date", "status")
+PROTECTED = ("role", "status", "hourly_rate")  # у файлі лише для читання: права й гроші змінює адмін в адмінці
 SYSTEM_FILES = ("profile.json", "картка.txt", "shifts.csv", "shifts.json", "requests.json", "adjustments.json",
                 "schedule.json", "ПОМИЛКА.txt")
 _state = {"last_scan": 0.0, "warning": None, "exported": 0}
@@ -102,15 +106,13 @@ def _profile(conn, u):
     folder = os.path.join(core.PEOPLE_DIR, u["folder"])
     avatar = core.avatar_file(folder)
     return {
-        "_як_редагувати": "Поля full_name, phone, role (employee/moderator/admin), job_title, department, telegram, "
-                          "hourly_rate, hire_date, status (active/vacation/sick_leave/dismissed) можна змінити тут — "
-                          "сервер підхопить за кілька секунд. Видалите папку — сервер відтворить її з бази, дані не втрачаються. "
+        "_як_редагувати": "Поля full_name, phone, job_title, department, telegram, whatsapp, hire_date можна змінити тут — "
+                          "сервер підхопить за кілька секунд. role, status і hourly_rate лише для читання: їх змінює "
+                          "адміністратор в адмінці. Видалите папку — сервер відтворить її з бази, дані не втрачаються. "
                           "Видалити працівника можна лише в адмінці.",
         **editable,
         "location": loc[0] if loc else None,
         "username": u["username"],
-        "password_hash": u["password_hash"],
-        "must_change_password": u["must_change_password"],
         "avatar": os.path.basename(avatar) if avatar else None,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
         "_sync": _sync_hash({**editable, "phone": u["phone"]}),
@@ -291,7 +293,7 @@ def import_folder(conn, name):
     """Нова (або повернута з бекапу) папка → акаунт з усіма даними. Повертає id або None."""
     path = os.path.join(core.PEOPLE_DIR, name)
     p = _read_json(os.path.join(path, "profile.json"), None)
-    if not isinstance(p, dict) or not p.get("full_name") or not p.get("password_hash"):
+    if not isinstance(p, dict) or not p.get("full_name"):
         return None
     phone = core.normalize_phone(p.get("phone") or "")
     if phone and conn.execute("select 1 from users where phone = ?", (phone,)).fetchone():
@@ -304,9 +306,10 @@ def import_folder(conn, name):
     cur = conn.execute(
         "insert into users(username, password_hash, full_name, role, job_title, department, location_id, phone, telegram, whatsapp,"
         " hourly_rate, hire_date, status, must_change_password, folder) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (username, p["password_hash"], p["full_name"], role, p.get("job_title"), p.get("department"),
-         _location_id(conn, p.get("location")), phone, p.get("telegram"), p.get("whatsapp"), float(p.get("hourly_rate") or 0),
-         p.get("hire_date"), status, int(p.get("must_change_password") or 0), name))
+        # Хешу пароля в папці немає: увійти можна буде після «Скинути пароль» в адмінці (старі папки — з хешем)
+        (username, p.get("password_hash") or "!" + core.secrets.token_hex(16), p["full_name"], role, p.get("job_title"),
+         p.get("department"), _location_id(conn, p.get("location")), phone, p.get("telegram"), p.get("whatsapp"),
+         float(p.get("hourly_rate") or 0), p.get("hire_date"), status, 1, name))
     uid = cur.lastrowid
     af = core.avatar_file(path)
     if af:
@@ -326,8 +329,20 @@ def import_folder(conn, name):
     return uid
 
 
-def apply_manual_edit(conn, u, p):
-    """profile.json поправили руками → перевіряємо і переносимо в базу. Повертає текст помилки або None."""
+def _same(a, b):
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return str(a if a is not None else "") == str(b if b is not None else "")
+
+
+def apply_manual_edit(conn, u, p, trusted=False):
+    """profile.json поправили руками → перевіряємо і переносимо в базу. Повертає текст помилки або None.
+    trusted — дані написав сам сервер (відновлення після збою бази): тоді переносимо й роль, статус, ставку."""
+    if not trusted:
+        changed = [k for k in PROTECTED if not _same(p.get(k), u[k])]
+        if changed:
+            return f"{', '.join(changed)} змінює лише адміністратор в адмінці (файл їх не міняє)"
     new = {}
     name = (p.get("full_name") or "").strip()
     if not name:
@@ -472,7 +487,7 @@ def rebuild_from_folders(conn):
         for t in ("shifts", "schedule", "requests", "adjustments"):
             conn.execute(f"delete from {t} where user_id = ?", (u["id"],))
         conn.execute("update users set folder = ?, password_hash = ? where id = ?", (d, p.get("password_hash") or u["password_hash"], u["id"]))
-        apply_manual_edit(conn, conn.execute("select * from users where id = ?", (u["id"],)).fetchone(), p)
+        apply_manual_edit(conn, conn.execute("select * from users where id = ?", (u["id"],)).fetchone(), p, trusted=True)
         import_data(conn, u["id"], path)
     conn.commit()
 
@@ -485,7 +500,7 @@ def sync_once(conn):
 
 
 def valid_folders(conn=None):
-    """Папки з придатним profile.json (ім'я + хеш пароля) — кандидати на відновлення."""
+    """Папки з придатним profile.json (є ім'я) — кандидати на відновлення."""
     if not os.path.isdir(core.PEOPLE_DIR):
         return []
     out = []
@@ -493,7 +508,7 @@ def valid_folders(conn=None):
         if d.startswith((".", "_")) or not os.path.isdir(os.path.join(core.PEOPLE_DIR, d)):
             continue
         p = _read_json(os.path.join(core.PEOPLE_DIR, d, "profile.json"), None)
-        if isinstance(p, dict) and p.get("full_name") and p.get("password_hash"):
+        if isinstance(p, dict) and p.get("full_name"):
             out.append(d)
     return out
 

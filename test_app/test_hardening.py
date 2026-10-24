@@ -228,6 +228,36 @@ class HardeningTest(CrewHubBase):
         self.assertEqual(r.status_code, 302)
         self.assertEqual(ivan.get("/me").status_code, 302)
 
+    # --- 🔴 12. Хеші паролів і права через файли ------------------------------------------------
+    def test_no_password_hashes_in_folders_or_zip(self):
+        import io
+        import zipfile
+        self.sync()
+        admin = self.login("admin", "admin123")
+        mod = self.login("moder", "moder123", client=core.app.test_client())
+        aid = self.sql("select id from users where username = 'admin'")[0][0]
+        z = zipfile.ZipFile(io.BytesIO(mod.get(f"/admin/employee/{aid}/folder.zip").data))
+        everything = b"".join(z.read(n) for n in z.namelist())
+        self.assertNotIn(b"password_hash", everything)
+        self.assertNotIn(b"scrypt:", everything)
+        for root, _dirs, files in core.os.walk(core.PEOPLE_DIR):
+            for f in files:
+                with open(core.os.path.join(root, f), "rb") as fh:
+                    self.assertNotIn(b"scrypt:", fh.read(), f)
+        self.assertTrue(admin)
+
+    def test_old_folders_rewritten_without_hash(self):
+        import json
+        self.sync()
+        path = self.folder("ivan")
+        p = json.load(open(core.os.path.join(path, "profile.json"), encoding="utf-8"))
+        p["password_hash"] = "scrypt:old"
+        open(core.os.path.join(path, "profile.json"), "w", encoding="utf-8").write(json.dumps(p, ensure_ascii=False))
+        self.sql("delete from meta where key = 'profiles_v2'")
+        core.init_db()
+        self.sync()
+        self.assertNotIn("scrypt:", open(core.os.path.join(path, "profile.json"), encoding="utf-8").read())
+
 
 if __name__ == "__main__":
     unittest.main()

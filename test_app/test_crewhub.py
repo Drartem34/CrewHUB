@@ -817,11 +817,18 @@ class CrewHubTest(CrewHubBase):
         self.assertIn("Лікарняний", open(os.path.join(path, "картка.txt"), encoding="utf-8").read())
         self.assertEqual(len(os.listdir(core.PEOPLE_DIR)), 4)  # кожен у своїй папці
 
-        # Правка profile.json вручну → у базі
-        p["job_title"], p["hourly_rate"] = "Старший оператор", 150
+        # Правка profile.json вручну → у базі (посада); ставку файлом не змінити — лише адмін в адмінці
+        p["job_title"] = "Старший оператор"
         open(os.path.join(path, "profile.json"), "w", encoding="utf-8").write(json.dumps(p, ensure_ascii=False))
         self.sync()
-        self.assertEqual(tuple(self.sql("select job_title, hourly_rate from users where username = 'ivan'")[0]), ("Старший оператор", 150))
+        self.assertEqual(tuple(self.sql("select job_title, hourly_rate from users where username = 'ivan'")[0]), ("Старший оператор", 120))
+        p = json.load(open(os.path.join(path, "profile.json"), encoding="utf-8"))
+        p["hourly_rate"], p["role"] = 150, "admin"
+        open(os.path.join(path, "profile.json"), "w", encoding="utf-8").write(json.dumps(p, ensure_ascii=False))
+        self.sync()
+        self.assertEqual(tuple(self.sql("select role, hourly_rate from users where username = 'ivan'")[0]), ("employee", 120))
+        self.assertIn("лише адміністратор", open(os.path.join(path, "ПОМИЛКА.txt"), encoding="utf-8").read())
+        self.sync()  # папку переписано з бази: у файлі знову справжні роль і ставка
         # Невалідна правка не проходить, пояснення лежить у папці
         p = json.load(open(os.path.join(path, "profile.json"), encoding="utf-8"))
         p["phone"] = "+380500000001"  # номер адміна
