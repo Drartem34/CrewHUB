@@ -51,6 +51,8 @@ public class WatchService extends Service {
     private volatile Network wifi;
     private volatile boolean busy;
     private volatile boolean onShift;   // остання відповідь сервера: зміна відкрита
+    private volatile Network verified;  // мережа, в якій сервер уже підтвердив свій server_id
+    private int failures;               // скільки разів поспіль сервер не відповів (пауза росте)
 
     static SharedPreferences prefs(Context c) {
         return c.getSharedPreferences("crewhub", Context.MODE_PRIVATE);
@@ -108,6 +110,7 @@ public class WatchService extends Service {
             @Override
             public void onAvailable(Network n) {
                 wifi = n;
+                failures = 0;
                 handler.removeCallbacks(tick);
                 handler.postDelayed(tick, 1500); // даємо мережі видати IP
             }
@@ -165,6 +168,7 @@ public class WatchService extends Service {
                         }
                     }
                     if (other == null) return;
+                    if (checkServer(WatchService.this, other, prefs(WatchService.this).getString("server", null)) != SERVER_OK) return;
                     HttpURLConnection c = open(other, "api/clock/left");
                     if (c == null) return;
                     OutputStream out = c.getOutputStream();
@@ -177,6 +181,43 @@ public class WatchService extends Service {
                 }
             }
         }).start();
+    }
+
+    static final int SERVER_OK = 1, SERVER_DOWN = 0, SERVER_OTHER = -1;
+
+    /**
+     * Чи за адресою сервера відповідає саме наш CrewHub. Cookie входу віддаємо лише після цього:
+     * у чужій Wi-Fi (вдома, в кафе) за тим самим 192.168.x.x може стояти будь-який пристрій.
+     * Перший успішний id запам'ятовується (або приходить з QR), далі має збігатися. n == null — будь-яка мережа.
+     */
+    static int checkServer(Context ctx, Network n, String server) {
+        if (server == null) return SERVER_DOWN;
+        HttpURLConnection c = null;
+        try {
+            URL url = new URL(server + "api/hello");
+            c = (HttpURLConnection) (n != null ? n.openConnection(url) : url.openConnection());
+            c.setConnectTimeout(5_000);
+            c.setReadTimeout(5_000);
+            c.setUseCaches(false);
+            int code = c.getResponseCode();
+            if (code >= 500) return SERVER_DOWN;  // наш сервер перезапускається
+            if (code != 200) return SERVER_OTHER;
+            String id = new JSONObject(read(c.getInputStream())).optString("server_id", "");
+            if (id.isEmpty()) return SERVER_OTHER;
+            SharedPreferences p = prefs(ctx);
+            String known = p.getString("server_id", null);
+            if (known == null) {
+                p.edit().putString("server_id", id).apply();
+                return SERVER_OK;
+            }
+            return known.equals(id) ? SERVER_OK : SERVER_OTHER;
+        } catch (org.json.JSONException e) {
+            return SERVER_OTHER;  // відповідає щось, але не CrewHub
+        } catch (Exception e) {
+            return SERVER_DOWN;
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     private HttpURLConnection open(Network n, String path) throws java.io.IOException {
@@ -232,6 +273,16 @@ public class WatchService extends Service {
         SharedPreferences p = prefs(this);
         String server = p.getString("server", null);
         if (server == null) return PERIOD_MS * 5;
+        if (!n.equals(verified)) {
+            int check = checkServer(this, n, server);
+            if (check == SERVER_OTHER) {
+                if (wakeLock.isHeld()) wakeLock.release();
+                update("Цей Wi-Fi не робочий. Стежу далі");
+                return PERIOD_MS * 30;  // інша мережа з іншим пристроєм за цією адресою: до зміни мережі не турбуємо
+            }
+            if (check == SERVER_DOWN) return offline();
+            verified = n;
+        }
         HttpURLConnection c = null;
         try {
             c = open(n, "api/clock/auto");
@@ -243,6 +294,7 @@ public class WatchService extends Service {
                     + (away > 0 ? ",\"away_since\":" + away : "") + "}").getBytes("UTF-8"));
             out.close();
             int code = c.getResponseCode();
+            failures = 0;
             saveSessionCookie(p, c.getHeaderFields());
             if (code == 401) {
                 if (wakeLock.isHeld()) wakeLock.release();
@@ -277,11 +329,18 @@ public class WatchService extends Service {
                     : "Цей Wi-Fi не робочий. Стежу далі");
             return res.optBoolean("on_work_network") ? PERIOD_MS * 2 : PERIOD_MS * 5;
         } catch (Exception e) {
-            update("Немає зв'язку з сервером, пробую ще раз");
-            return PERIOD_MS;
+            return offline();
         } finally {
             if (c != null) c.disconnect();
         }
+    }
+
+    /** Сервер не відповідає: під час зміни пробуємо щохвилини, інакше пауза росте 1, 2, 4, 8… до 30 хв. */
+    private long offline() {
+        failures++;
+        update("Немає зв'язку з сервером, пробую ще раз");
+        if (onShift) return PERIOD_MS;
+        return PERIOD_MS * Math.min(1L << Math.min(failures - 1, 5), 30L);
     }
 
     /** Flask оновлює session і crewhub_remember у відповідях — зберігаємо свіжі (обидва), щоб вхід не «протухав». */

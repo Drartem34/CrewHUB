@@ -130,8 +130,11 @@ public class MainActivity extends Activity {
             return false;
         }
         String company = u.getQueryParameter("n");
-        prefs().edit().putString(KEY_SERVER, server).putBoolean("hidden", true)
-                .putString("company", company == null ? "" : company).remove("cookie").apply();
+        String serverId = u.getQueryParameter("i");  // id сервера з QR: застосунок звірятиме його перед входом
+        SharedPreferences.Editor e = prefs().edit().putString(KEY_SERVER, server).putBoolean("hidden", true)
+                .putString("company", company == null ? "" : company).remove("cookie").remove("server_id");
+        if (serverId != null && serverId.matches("[0-9a-f]{8,64}")) e.putString("server_id", serverId);
+        e.apply();
         String ssid = fromB64(u.getQueryParameter("w"));
         if (ssid != null && !ssid.isEmpty()) {
             pendingServer = server;
@@ -353,7 +356,7 @@ public class MainActivity extends Activity {
                 }
                 SharedPreferences.Editor e = prefs().edit().putBoolean("watch", watch.isChecked());
                 if (!url.equals(current)) {
-                    e.putString(KEY_SERVER, url).putBoolean("hidden", byCode).remove("company").remove("cookie");
+                    e.putString(KEY_SERVER, url).putBoolean("hidden", byCode).remove("company").remove("cookie").remove("server_id");
                 }
                 e.apply();
                 if (!watch.isChecked()) WatchService.stop(MainActivity.this);
@@ -536,7 +539,28 @@ public class MainActivity extends Activity {
             pageShown = true;  // відновили відкриту сторінку — екран підключення не потрібен
             web.removeCallbacks(loadTimeout);
             loading.setVisibility(View.GONE);
-        } else web.loadUrl(server);
+        } else verifyThenLoad(server);
+    }
+
+    /** Спершу переконуємось, що за адресою саме наш сервер (server_id), і лише тоді відкриваємо сторінку з cookie входу. */
+    private void verifyThenLoad(final String server) {
+        final WebView target = web;
+        new Thread(new Runnable() {
+            public void run() {
+                final int check = WatchService.checkServer(MainActivity.this, null, server);
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (web != target || isFinishing()) return;  // за цей час відкрили інший екран
+                        if (check == WatchService.SERVER_OTHER) {
+                            showSetup(server, label(server) + ": за цією адресою відповідає інший пристрій, а не сервер компанії."
+                                    + "\nПеревірте, що телефон у робочому Wi-Fi.");
+                            return;
+                        }
+                        target.loadUrl(server);  // сервер не відповів: WebView сам покаже помилку й екран підключення
+                    }
+                });
+            }
+        }).start();
     }
 
     /** Поки сторінка не відкрилась: лого, адреса сервера і кнопка змінити її (замість чорного екрана). */
@@ -624,7 +648,8 @@ public class MainActivity extends Activity {
             String code = decodeCode(text);
             if (text.startsWith("crewhub://") && applyLink(Uri.parse(text))) return;
             if (code != null) {
-                prefs().edit().putString(KEY_SERVER, code).putBoolean("hidden", true).remove("company").remove("cookie").apply();
+                prefs().edit().putString(KEY_SERVER, code).putBoolean("hidden", true).remove("company").remove("cookie")
+                        .remove("server_id").apply();
                 showWeb(code, null);
                 return;
             }

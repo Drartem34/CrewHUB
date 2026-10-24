@@ -182,6 +182,18 @@ class HardeningTest(CrewHubBase):
         self.assertEqual(codes[:5], [200] * 5)
         self.assertEqual(codes[5:], [429, 429])
 
+    # --- 🔴 7. Застосунок звіряє сервер перед тим, як віддати cookie ----------------------------
+    def test_hello_gives_stable_server_id_without_session(self):
+        r = self.client.get("/api/hello")
+        data = r.get_json()
+        self.assertEqual(data["app"], "crewhub")
+        self.assertRegex(data["server_id"], r"^[0-9a-f]{16}$")
+        self.assertNotIn("Set-Cookie", r.headers)  # без сесії: телефон не отримує зайвих cookie
+        core.init_db()
+        self.assertEqual(self.client.get("/api/hello").get_json()["server_id"], data["server_id"])
+        admin = self.login("admin", "admin123")
+        self.assertIn("&amp;i=" + data["server_id"], admin.get("/admin?tab=zones").get_data(as_text=True))
+
 
 if __name__ == "__main__":
     unittest.main()

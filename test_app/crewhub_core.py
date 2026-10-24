@@ -426,6 +426,10 @@ def init_db(seed=True):
         conn.execute("update settings set value = ? where key = 'silence_forgive_minutes' and value = '240'",
                      (DEFAULT_SETTINGS["silence_forgive_minutes"],))
         meta_set(conn, "forgive_v2", 1)
+    if not meta_get(conn, "server_id"):
+        # Постійний ідентифікатор цього сервера: застосунок звіряє його, перш ніж віддати cookie входу
+        # (у чужій Wi-Fi за тим самим 192.168.x.x може відповідати зовсім інший пристрій)
+        meta_set(conn, "server_id", secrets.token_hex(8))
     if not os.environ.get("CREWHUB_SECRET"):
         # Свій випадковий ключ сесій для кожної інсталяції; зберігається в базі, тож після перезапуску
         # сервера ніхто не вилітає з акаунта
@@ -793,10 +797,12 @@ def connect_code(url):
     return code[:5] + "-" + code[5:]
 
 
-def connect_link(url, company, loc=None):
-    """Вміст QR: адреса сервера (base64), назва компанії і, якщо прикріплено, Wi-Fi точки."""
+def connect_link(url, company, loc=None, server_id=None):
+    """Вміст QR: адреса сервера (base64), назва компанії, id сервера і, якщо прикріплено, Wi-Fi точки."""
     b64 = lambda v: base64.urlsafe_b64encode(v.encode()).decode().rstrip("=")  # noqa: E731
     q = {"s": b64(url), "n": company}
+    if server_id:
+        q["i"] = server_id
     if loc is not None and loc["wifi_ssid"]:
         q.update(w=b64(loc["wifi_ssid"]), p=b64(loc["wifi_password"] or ""))
     if loc is not None:
@@ -1963,7 +1969,7 @@ def _csrf_guard():
       3) для звичайних HTML-форм ще й перевіряємо токен session['csrf'].
     API застосунку (/api/*, JSON) токен не вимагає: фонова служба телефона не браузер і куку
     чужого сайту не підставить, а свій веб-клієнт шле запити лише зі свого ж Origin."""
-    if "csrf" not in session:
+    if "csrf" not in session and request.endpoint not in ("hello", "health", "static"):
         session["csrf"] = secrets.token_urlsafe(32)
     if not CSRF_ON or request.method in SAFE_METHODS:
         return
@@ -2705,6 +2711,13 @@ _live_cache = {"at": 0.0, "data": None}
 _live_lock = threading.Lock()
 
 
+@app.route("/api/hello")
+def hello():
+    """Хто тут: застосунок звіряє server_id, перш ніж надіслати cookie входу. Без входу і без сесії."""
+    conn = db()
+    return jsonify({"app": "crewhub", "server_id": meta_get(conn, "server_id"), "company": setting("company_name", conn)})
+
+
 @app.route("/health")
 def health():
     """Для моніторингу і скрипта автозапуску: сервер живий і база відповідає."""
@@ -2859,7 +2872,7 @@ def admin():
         ctx["bind_cidr"] = suggest_cidr(ctx["your_ip"])
         url, company = server_url(), setting("company_name", conn)
         ctx["connect"] = {"url": url, "code": connect_code(url), "company": company,
-                          "links": {l["id"]: connect_link(url, company, l) for l in locs}}
+                          "links": {l["id"]: connect_link(url, company, l, meta_get(conn, "server_id")) for l in locs}}
         # Телефони, які пробували почати зміну або пінгували з мереж, яких немає в жодній точці
         unknown = {}
         for c in conn.execute("select c.ip, c.created_at, u.full_name from conn_log c left join users u on u.id = c.user_id"
