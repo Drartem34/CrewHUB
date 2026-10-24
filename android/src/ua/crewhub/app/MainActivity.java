@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     private static final int BRAND = Color.parseColor("#E8173D");
 
     private WebView web;
+    private boolean contentShown;  // уже показано екран (налаштування, сторінку чи «Підключаюсь»)
     private ProgressBar progress;
     private ValueCallback<Uri[]> fileCallback;
     private boolean mainFrameFailed;
@@ -101,7 +102,39 @@ public class MainActivity extends Activity {
         Uri u = intent == null ? null : intent.getData();
         if (u == null || !"crewhub".equals(u.getScheme())) return false;
         intent.setData(null);
-        return applyLink(u);
+        return confirmLink(u, true);
+    }
+
+    /**
+     * Посилання з будь-якої програми (месенджер, сайт, камера) могло б тихо перенаправити застосунок на чужий сервер,
+     * який попросить номер і пароль. Тому адресу міняємо лише після згоди людини: показуємо назву й адресу.
+     * external = false — QR відскановано в самому застосунку: питаємо, лише якщо вже є інший сервер.
+     */
+    private boolean confirmLink(final Uri u, boolean external) {
+        if (!"connect".equals(u.getHost())) return false;
+        String raw = fromB64(u.getQueryParameter("s"));
+        String server = raw == null ? null : normalizeServer(raw);
+        if (server == null) return applyLink(u);  // покаже «QR-код пошкоджено»
+        final String current = prefs().getString(KEY_SERVER, null);
+        if (server.equals(current) || (!external && current == null)) return applyLink(u);
+        if (!contentShown) {
+            if (current == null) showSetup(null, null);
+            else showWeb(current, null);
+        }
+        String company = u.getQueryParameter("n");
+        new AlertDialog.Builder(this)
+                .setTitle("Підключитися до сервера?")
+                .setMessage((company != null && !company.isEmpty() ? "«" + company + "»\n" : "")
+                        + "Адреса: " + Uri.parse(server).getAuthority()
+                        + (current != null ? "\n\nЗараз застосунок підключено до іншого сервера. "
+                        + "Погоджуйтесь, лише якщо цей QR-код показав ваш адміністратор." : ""))
+                .setPositiveButton("Підключитися", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) { applyLink(u); }
+                })
+                .setNegativeButton("Скасувати", null)
+                .setCancelable(false)
+                .show();
+        return true;
     }
 
     /** Назва для людини: компанія замість адреси сервера (адресу бачить лише той, хто ввів її вручну). */
@@ -215,6 +248,7 @@ public class MainActivity extends Activity {
     }
 
     private void showConnecting(String server, String text) {
+        contentShown = true;
         View v = loadingView(server);
         ((TextView) v.findViewWithTag("status")).setText(text);
         setContentView(v);
@@ -254,6 +288,7 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ налаштування сервера
     private void showSetup(String current, String error) {
+        contentShown = true;
         if (web != null) {
             web.removeCallbacks(loadTimeout);
             web.destroy();
@@ -381,6 +416,7 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ веб-частина
     private void showWeb(final String server, Bundle state) {
+        contentShown = true;
         FrameLayout frame = new FrameLayout(this);
         frame.setBackgroundColor(bgColor());
         LinearLayout root = new LinearLayout(this);
@@ -646,7 +682,7 @@ public class MainActivity extends Activity {
             String text = resultCode == RESULT_OK && data != null ? data.getStringExtra("text") : null;
             if (text == null) return;
             String code = decodeCode(text);
-            if (text.startsWith("crewhub://") && applyLink(Uri.parse(text))) return;
+            if (text.startsWith("crewhub://") && confirmLink(Uri.parse(text), false)) return;
             if (code != null) {
                 prefs().edit().putString(KEY_SERVER, code).putBoolean("hidden", true).remove("company").remove("cookie")
                         .remove("server_id").apply();
