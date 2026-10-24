@@ -60,10 +60,13 @@ def main(argv):
     with core._lock:
         conn.execute("update users set password_hash = ?, must_change_password = 1, status = 'active' where id = ?",
                      (core.hash_password(new), admin["id"]))
+        # Якщо пароль скидають через злам, старий вхід «запам'ятати мене» на чужих пристроях теж має згаснути
+        core.revoke_remember(conn, admin["id"])
         core.audit(conn, None, "PASSWORD_RESET", "users", admin["id"], admin["id"],
-                   {"via": [None, "recover_admin.py (сервер)"]})
+                   {"via": [None, "recover_admin.py (сервер)"], "sessions": [None, "вихід на всіх пристроях"]})
         conn.commit()
-    print(f"\nГотово. Увійдіть як {admin['username']} з новим паролем — система попросить одразу його змінити.")
+    print(f"\nГотово. Увійдіть як {admin['username']} з новим паролем — система попросить одразу його змінити.\n"
+          "Усі попередні входи цього адміна на інших пристроях скасовано.")
     return 0
 
 

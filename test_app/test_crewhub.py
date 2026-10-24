@@ -1148,11 +1148,18 @@ class CrewHubTest(CrewHubBase):
 
     def test_admin_password_reset(self):
         # Скидання пароля адміна з сервера: питає новий пароль, хешує, ставить must_change_password
+        stolen = self.login("admin", "admin123", client=core.app.test_client())  # чужий пристрій з «запам'ятати мене»
+        self.assertTrue(self.sql("select 1 from remember_tokens"))
         rc = self._run_reset(["recover_admin.py", "admin"], answers=[], passwords=["newpass123", "newpass123"])
         self.assertEqual(rc, 0)
+        self.assertFalse(self.sql("select 1 from remember_tokens"))  # усі входи «запам'ятати мене» скасовано
         self.assertEqual(self.sql("select must_change_password from users where username = 'admin'")[0][0], 1)
         self.login("admin", "newpass123", client=core.app.test_client())  # новий пароль працює
         self.assertTrue(self.sql("select 1 from audit where action = 'PASSWORD_RESET'"))
+        # старий токен входу на чужому пристрої більше не діє
+        with stolen.session_transaction() as sess:
+            sess.clear()
+        self.assertEqual(stolen.get("/admin").status_code, 302)
 
     def test_reset_only_targets_admins(self):
         # Не адміну скинути не можна; паролі мають збігтися
