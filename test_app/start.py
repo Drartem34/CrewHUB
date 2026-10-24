@@ -68,11 +68,11 @@ sys.excepthook = excepthook
 # === НЕОБОВ'ЯЗКОВЕ: захист від спаму і тунель ===
 limiter_ok = False
 try:
-    from flask import request
     from flask_limiter import Limiter
 
-    Limiter(lambda: request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip(),
-            app=app, default_limits=["300 per minute", "20 per second"])
+    import crewhub_core
+    # Ключ — той самий IP, що бачить облік змін (заголовок клієнта сам по собі не враховується)
+    Limiter(crewhub_core.client_ip, app=app, default_limits=["300 per minute", "20 per second"])
     limiter_ok = True
 except ImportError:
     pass
@@ -89,9 +89,15 @@ def start_tunnel():
     except ImportError:
         return
     PUBLIC_URL = "Очікування підключення..."
+    import crewhub_core
     try:
         time.sleep(2)
-        tunnel = pinggy.start_tunnel(forwardto=f"localhost:{PORT}")
+        try:
+            # xff: тунель сам дописує справжній IP телефона в X-Forwarded-For — лише тоді йому можна вірити
+            tunnel = pinggy.start_tunnel(forwardto=f"localhost:{PORT}", xff=True)
+            crewhub_core.TRUST_PROXY = True
+        except TypeError:  # стара версія pinggy без xff: через тунель можна дивитися, але не відмічатись
+            tunnel = pinggy.start_tunnel(forwardto=f"localhost:{PORT}")
         urls = getattr(tunnel, "urls", [])
         PUBLIC_URL = urls[0] if urls else "тунель створено (лінк не розпізнано)"
     except Exception as e:  # noqa: BLE001

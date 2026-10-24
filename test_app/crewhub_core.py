@@ -29,10 +29,11 @@ from werkzeug.utils import secure_filename
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("CREWHUB_DB", os.path.join(BASE_DIR, "crewhub_test.db"))
-# Через тунель (Pinggy, ngrok) справжній IP клієнта лежить у X-Forwarded-For. Тунель підключається
-# до сервера з localhost, тому заголовку віримо лише від локальних з'єднань: телефон у Wi-Fi
-# не зможе підробити свій IP, дописавши заголовок.
-TRUST_PROXY = os.environ.get("CREWHUB_TRUST_PROXY", "1") == "1"
+# Через тунель (Pinggy, ngrok) справжній IP клієнта лежить у X-Forwarded-For. Заголовку віримо лише тоді,
+# коли його дописує наш тунель (start.py вмикає це сам для pinggy з xff, або CREWHUB_TRUST_PROXY=1),
+# і лише для з'єднань з цього ж комп'ютера. Беремо ОСТАННЮ адресу: її дописав тунель, усе лівіше
+# міг написати сам клієнт. Телефон у Wi-Fi не зможе підробити свій IP, дописавши заголовок.
+TRUST_PROXY = os.environ.get("CREWHUB_TRUST_PROXY", "0") == "1"
 
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"),
             static_folder=os.path.join(BASE_DIR, "static"))
@@ -351,6 +352,9 @@ def init_db(seed=True):
         conn.execute("create unique index if not exists users_phone_uq on users(phone) where phone is not null and phone != ''")
     except sqlite3.IntegrityError:
         print("Увага: у базі є однакові номери телефону, вхід за номером для них не працюватиме")
+    # Старі версії додавали 127.0.0.0/8 («Цей комп'ютер») як робочу мережу: через тунель це робило «робочим»
+    # будь-який запит з інтернету. Такі адреси більше ніколи не вважаються робочими — прибираємо і запис.
+    conn.execute("delete from networks where cidr in ('127.0.0.0/8', '127.0.0.1/32', '::1/128')")
     for k, v in DEFAULT_SETTINGS.items():
         conn.execute("insert or ignore into settings(key, value) values (?, ?)", (k, v))
     if not os.environ.get("CREWHUB_SECRET"):
@@ -363,7 +367,6 @@ def init_db(seed=True):
         lan = ipaddress.ip_network(f"{get_local_ip()}/24", strict=False)
         conn.execute("insert into locations(id, name, address) values (1, 'Тестова точка', 'Ваша локальна мережа')")
         conn.execute("insert into networks(location_id, cidr, label) values (1, ?, 'Локальна мережа цього ПК')", (str(lan),))
-        conn.execute("insert into networks(location_id, cidr, label) values (1, '127.0.0.0/8', 'Цей комп''ютер')")
         people = [("admin", "admin123", "Адмін Адмінович", "admin", "Директор", 0, "2024-01-15", "+380500000001")]
         if DEMO_ACCOUNTS:
             people += DEMO_PEOPLE
@@ -491,10 +494,35 @@ def log_clock(conn, user_id, shift_id, event, ip, location_id, allowed, device=N
 # IP і Wi-Fi зони
 # ---------------------------------------------------------------------------
 def client_ip():
-    ip = request.remote_addr or ""
-    if TRUST_PROXY and request.headers.get("X-Forwarded-For") and ip in ("127.0.0.1", "::1"):
-        ip = request.headers["X-Forwarded-For"].split(",")[0].strip()
+    ip = (request.remote_addr or "").removeprefix("::ffff:")
+    if TRUST_PROXY and ip in ("127.0.0.1", "::1"):
+        last = (request.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
+        if last:
+            ip = last
     return ip.removeprefix("::ffff:")
+
+
+def work_ip(ip):
+    """Адреса, яка взагалі може бути робочою мережею. Сам сервер (127.x, ::1) — ні: через тунель без
+    X-Forwarded-For усі запити приходять з localhost, і тоді будь-хто з інтернету був би «на точці»."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if addr.is_loopback or addr.is_unspecified:
+        return None
+    return addr
+
+
+def zone_error(net):
+    """Чому цю підмережу не можна зробити робочою зоною (None — можна)."""
+    if net.prefixlen == 0 or any(net.overlaps(ipaddress.ip_network(x)) for x in ("127.0.0.0/8", "::1/128")):
+        return "Адреси самого сервера (127.x) і «увесь інтернет» не можуть бути робочою мережею"
+    if net.version == 4 and (net.prefixlen < 8 or (not net.is_private and net.prefixlen < 16)):
+        return "Надто широка мережа: вкажіть IP роутера точки або її локальну підмережу"
+    if net.version == 6 and net.prefixlen < 32:
+        return "Надто широка мережа: вкажіть префікс точки"
+    return None
 
 
 def device_key(sent=None):
@@ -648,9 +676,8 @@ def temp_password():
 
 def suggest_cidr(ip):
     """Яку зону додати для IP: локальна адреса → вся підмережа /24 цього Wi-Fi, публічна → точний IP роутера."""
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
+    addr = work_ip(ip)
+    if addr is None:
         return None
     if addr.version == 4 and addr.is_private and not addr.is_loopback:
         return str(ipaddress.ip_network(f"{addr}/24", strict=False))
@@ -702,9 +729,8 @@ def connect_link(url, company, loc=None):
 
 def match_location(conn, ip):
     """Точка, до Wi-Fi якої належить IP (найточніша підмережа), або None."""
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
+    addr = work_ip(ip)
+    if addr is None:
         return None
     best = None
     for r in conn.execute("select n.cidr, l.id, l.name from networks n join locations l on l.id = n.location_id"
@@ -723,11 +749,8 @@ def ip_in_location(conn, ip, location_id):
     Зміну прив'язано до мережі, де її почали: під час пінгу й закриття перевіряємо IP проти
     цієї ж точки, а не будь-якої робочої мережі — щоб зміну не можна було «перенести» в іншу
     мережу чи підмінити IP на чужу робочу точку."""
-    if not location_id:
-        return False
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
+    addr = work_ip(ip)
+    if not location_id or addr is None:
         return False
     for r in conn.execute("select cidr from networks where location_id = ?", (location_id,)):
         try:
@@ -3267,10 +3290,14 @@ def admin_zones():
                 abort(403)
             if f.get("action") == "network":
                 try:
-                    cidr = str(ipaddress.ip_network(f.get("cidr", "").strip(), strict=False))
+                    net = ipaddress.ip_network(f.get("cidr", "").strip(), strict=False)
                 except ValueError:
                     flash("Невірний формат IP або підмережі")
                     return redirect(url_for("admin", tab="zones"))
+                if err := zone_error(net):
+                    flash(err)
+                    return redirect(url_for("admin", tab="zones"))
+                cidr = str(net)
                 try:
                     cur = conn.execute("insert into networks(location_id, cidr, label) values (?, ?, ?)",
                                        (int(f["location_id"]), cidr, f.get("label")))
@@ -3281,6 +3308,9 @@ def admin_zones():
                 # Прив'язка мережі, з якої адмін зараз відкрив сторінку: у локальній мережі вся підмережа /24,
                 # в інтернеті — точний публічний IP роутера
                 cidr = suggest_cidr(client_ip())
+                if not cidr:
+                    flash("Цю сторінку відкрито на самому сервері. Відкрийте її з телефона чи ПК у Wi-Fi точки")
+                    return redirect(url_for("admin", tab="zones"))
                 try:
                     cur = conn.execute("insert into networks(location_id, cidr, label) values (?, ?, ?)",
                                        (int(f["location_id"]), cidr, f.get("label") or "Прив'язано з пристрою адміна"))

@@ -6,6 +6,7 @@ from datetime import date, timedelta, datetime
 
 _tmp = tempfile.mkdtemp()
 os.environ["CREWHUB_DEMO"] = "users"  # тестові акаунти без демо-історії
+os.environ["CREWHUB_TRUST_PROXY"] = "1"  # тести імітують тунель: IP телефона в X-Forwarded-For
 os.environ["CREWHUB_CSRF"] = "0"  # CSRF вимкнено для основних тестів; окремий тест вмикає його явно
 os.environ["CREWHUB_DB"] = os.path.join(_tmp, "test.db")
 os.environ["CREWHUB_BACKUP_DIR"] = os.path.join(_tmp, "backups")
@@ -19,7 +20,7 @@ WORK_IP = "203.0.113.10"
 HOME_IP = "8.8.8.8"
 
 
-class CrewHubTest(unittest.TestCase):
+class CrewHubBase(unittest.TestCase):
     def setUp(self):
         import shutil
         for suffix in ("", "-wal", "-shm"):
@@ -59,6 +60,8 @@ class CrewHubTest(unittest.TestCase):
         with core.connect() as c:
             return c.execute(q, args).fetchall()
 
+
+class CrewHubTest(CrewHubBase):
     def test_start_only_on_work_wifi(self):
         self.login("ivan")
         res = self.clock("start", ip=HOME_IP)
