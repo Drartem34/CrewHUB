@@ -122,8 +122,8 @@ button.jelly { animation: jelly .7s var(--ease-out); }
 .icon.sup.anim[data-anim="s-list"] .p-d2 { animation-delay: .15s; } .icon.sup.anim[data-anim="s-list"] .p-d3 { animation-delay: .3s; }
 /* Календар: сторінки перегортаються вгору, кільця підстрибують */
 .icon.sup.anim[data-anim="s-calendar"] .p-page { fill: currentColor; fill-opacity: .22; transform-box: view-box; transform-origin: 12px 10px;
-  animation-name: sFlip; animation-duration: .5s; animation-iteration-count: 2; animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
-.icon.sup.anim[data-anim="s-calendar"] .p-rings { animation-name: sJump; animation-duration: .5s; animation-iteration-count: 2; }
+  animation-name: sFlip; animation-duration: .75s; animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
+.icon.sup.anim[data-anim="s-calendar"] .p-rings { animation-name: sJump; animation-duration: .75s; }
 @keyframes sFlip { 0% { opacity: 1; transform: none; } 85% { opacity: 1; transform: scaleY(0); } 100% { opacity: 0; transform: scaleY(0); } }
 /* Вхідні: лист падає в лоток, лоток пружинить */
 .icon.sup.anim[data-anim="s-inbox"] .p-letter { animation-name: sLetter; animation-fill-mode: none; }

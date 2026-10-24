@@ -53,8 +53,13 @@
     el.classList.remove(cls);
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add(cls)));
   }
-  function play(el) {
+  // Одна дія — один рух: іконка, що щойно зіграла (дотик, наведення мишкою), вдруге одразу не запускається.
+  // Інакше дотик до вкладки і привітання нової сторінки (greet) програвали ту саму іконку двічі поспіль.
+  function play(el, gap) {
     if (off()) return;
+    const t = performance.now();
+    if (t - (el._playedAt || 0) < (gap || 450)) return;
+    el._playedAt = t;
     if (superOn() && playSuper(el)) return;
     el.classList.remove("sup");
     el.dataset.anim = ANIM[iconName(el)] || "jump";
@@ -86,7 +91,7 @@
     release();
     if (!host.disabled) { pressed = host; host.classList.add("pressed"); }
     const ic = host.querySelector(".icon");
-    if (ic) play(ic);
+    if (ic && host.id !== "themeBtn") play(ic);  // кнопка теми анімує вже нову іконку (app.js)
   }, { passive: true });
   document.addEventListener("click", (e) => {
     const big = e.target.closest("button.xl");
@@ -108,7 +113,7 @@
     let i = 0;
     list.forEach((ic) => {
       if (i >= 8) return;  // лише перший екран; далі — без зайвої роботи
-      setTimeout(() => play(ic), 120 + i++ * 90);
+      setTimeout(() => play(ic, 1800), 120 + i++ * 90);  // вкладку, яку щойно натиснули, не повторюємо
     });
   }
 
@@ -177,15 +182,24 @@
     };
   }
 
-  // При переході поточна сторінка пригасає, щоб дотик відчувався одразу
+  // При переході поточна сторінка пригасає, щоб дотик відчувався одразу. Лише коли справді буде нова сторінка:
+  // повторний дотик до відкритої вкладки чи посилання на файл (CSV, zip) переходу не дають, і екран лишався б
+  // напівпрозорим. На всяк випадок яскравість повертається сама за 3 с.
+  let dimTimer = 0;
+  const undim = () => { clearTimeout(dimTimer); document.body.classList.remove("leaving"); };
   document.addEventListener("click", (e) => {
     const a = e.target.closest("a[href]");
     if (!a || off() || e.defaultPrevented || a.target || a.hasAttribute("download") || e.metaKey || e.ctrlKey) return;
     const href = a.getAttribute("href");
     if (!href || href.startsWith("#") || href.startsWith("javascript") || a.origin !== location.origin) return;
+    const u = new URL(a.href);
+    if (u.href === location.href || /\.(csv|zip|apk)$|^\/app(\/demo)?$/.test(u.pathname)) return;
     document.body.classList.add("leaving");
+    clearTimeout(dimTimer);
+    dimTimer = setTimeout(undim, 3000);
   });
-  addEventListener("pageshow", () => document.body.classList.remove("leaving"));
+  addEventListener("pageshow", undim);
+  window.crewUndim = undim;
 
   // Сторож плавності: міряє кадри, поки грає поява сторінки. Менше ~45 кадрів/с або багато ривків —
   // одразу легкий режим (запам'ятовується), щоб далі анімації встигали відігравати повністю.

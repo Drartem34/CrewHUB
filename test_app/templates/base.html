@@ -15,7 +15,7 @@
   <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=12">
-  <link rel="stylesheet" href="{{ url_for('static', filename='motion.css') }}?v=4">
+  <link rel="stylesheet" href="{{ url_for('static', filename='motion.css') }}?v=5">
   <script>try { var t = localStorage.getItem('crewhub_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); document.documentElement.dataset.theme = t; } catch (e) {}
   try { var m = localStorage.getItem('crewhub_motion') || 'auto', c = document.documentElement.classList, n = navigator;
     if (m === 'off') c.add('motion-off');
@@ -91,9 +91,9 @@
 {% endif %}
 
 <div class="toasts" id="toasts">{% for m in get_flashed_messages() %}<div class="toast">{{ m }}</div>{% endfor %}</div>
-<script src="{{ url_for('static', filename='app.js') }}?v=12"></script>
-<script src="{{ url_for('static', filename='motion.js') }}?v=4"></script>
-<script src="{{ url_for('static', filename='nav.js') }}?v=1"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=13"></script>
+<script src="{{ url_for('static', filename='motion.js') }}?v=5"></script>
+<script src="{{ url_for('static', filename='nav.js') }}?v=2"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

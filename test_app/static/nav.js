@@ -80,7 +80,7 @@
     if (push) history.pushState({ crewhub: 1 }, "", res.url);
     else if (res.url !== location.href) history.replaceState({ crewhub: 1 }, "", res.url);
     scrollTo(0, 0);
-    document.body.classList.remove("leaving");
+    if (window.crewUndim) window.crewUndim(); else document.body.classList.remove("leaving");
 
     // Скрипти: ті, що всередині вмісту, і скрипти сторінки після app.js / motion.js / nav.js
     const inMain = Array.from(fresh.querySelectorAll("script"));
@@ -103,7 +103,11 @@
     const u = target(e.target.closest("a[href]"));
     if (!u) return;
     e.preventDefault();
-    if (u.href === location.href && !u.hash) { scrollTo({ top: 0, behavior: "smooth" }); document.body.classList.remove("menu-open"); return; }
+    if (u.href === location.href && !u.hash) {  // та сама сторінка: лише вгору, без «пригасання»
+      scrollTo({ top: 0, behavior: "smooth" });
+      document.body.classList.remove("menu-open", "leaving");
+      return;
+    }
     go(u.href, true).catch(() => { location.href = u.href; });
   });
 

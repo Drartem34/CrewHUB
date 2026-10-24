@@ -17,8 +17,9 @@
       root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
       try { localStorage.setItem("crewhub_theme", root.dataset.theme); } catch (e) {}
       paintThemeIcon();
+      // Оживає нова іконка (сонце / місяць), а не та, що щойно зникла: одна анімація на дотик
       const i = themeBtn.querySelector("[data-fb]");
-      if (i && window.crewMotion) window.crewMotion.play(i);  // нова іконка (сонце/місяць) теж оживає
+      if (i && window.crewMotion) window.crewMotion.play(i);
     };
     const bell = document.getElementById("bellBtn"), panel = document.getElementById("notifPanel");
     if (bell && panel) bell.onclick = (e) => { e.stopPropagation(); panel.classList.toggle("open"); };

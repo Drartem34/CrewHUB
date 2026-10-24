@@ -457,12 +457,14 @@ class CrewHubTest(CrewHubBase):
         self.assertTrue(self.sql("select 1 from audit where entity = 'users' and action = 'DELETE'"))
 
     def test_apk_and_unknown_networks(self):
-        self.assertEqual(self.client.get("/app").status_code, 404)  # застосунок ще не поклали поруч
         orig = core.APK_PATH
-        core.APK_PATH = os.path.join(_tmp, "CrewHub.apk")
+        self.addCleanup(setattr, core, "APK_PATH", orig)
+        core.APK_PATH = os.path.join(_tmp, "CrewHub.apk")  # не залежимо від того, чи лежить зібраний APK у static/
+        if os.path.exists(core.APK_PATH):
+            os.remove(core.APK_PATH)
+        self.assertEqual(self.client.get("/app").status_code, 404)  # застосунок ще не поклали поруч
         with open(core.APK_PATH, "wb") as f:
             f.write(b"PK\x03\x04apk")
-        self.addCleanup(setattr, core, "APK_PATH", orig)
         r = self.client.get("/app")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.mimetype, "application/vnd.android.package-archive")
