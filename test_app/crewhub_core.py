@@ -286,6 +286,9 @@ BACKUP_DIR = os.environ.get("CREWHUB_BACKUP_DIR", os.path.join(BASE_DIR, "backup
 PEOPLE_DIR = os.environ.get("CREWHUB_PEOPLE_DIR", os.path.join(BASE_DIR, "people"))
 RECOVERED = {"from_backup": False}  # check_db відновив базу з копії: profiles.py підтягне свіжі дані з папок
 BACKUP_KEEP = int(os.environ.get("CREWHUB_BACKUP_KEEP", "30"))
+# «Завантажити копію» в «Правилах» кладе файл окремо: скільки б разів не натиснули, щоденні копії не витісняються
+MANUAL_BACKUP_DIR = os.path.join(BACKUP_DIR, "manual")
+MANUAL_KEEP = 3
 LOG_KEEP_DAYS = int(os.environ.get("CREWHUB_LOG_KEEP_DAYS", "180"))  # журнал підключень; зміни і зарплата не видаляються
 
 log = logging.getLogger("crewhub")  # куди писати — налаштовує start.py (logs/crewhub.log з ротацією)
@@ -1496,20 +1499,22 @@ def backup_mirror_dir():
         return None
 
 
-def _prune(folder):
+def _prune(folder, keep=None):
     files = sorted(f for f in os.listdir(folder) if f.startswith("crewhub_") and f.endswith((".zip", ".db")))
-    for old in files[:-BACKUP_KEEP]:
+    for old in files[:-(keep or BACKUP_KEEP)]:
         try:
             os.remove(os.path.join(folder, old))
         except OSError:
             pass
 
 
-def backup_db(dest=None):
+def backup_db(dest=None, manual=False):
     """Повна копія: база (цілісний знімок, працює і під час запису) + усі особові папки, одним zip
-    у backups/crewhub_РРРР-ММ-ДД_ГГХХ.zip. Копія дублюється в другу папку (Google Диск), якщо вона задана."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    dest = dest or os.path.join(BACKUP_DIR, f"crewhub_{datetime.now():%Y-%m-%d_%H%M%S}.zip")
+    у backups/crewhub_РРРР-ММ-ДД_ГГХХ.zip. Копія дублюється в другу папку (Google Диск), якщо вона задана.
+    manual — копія на вимогу адміна: окрема папка backups/manual, своя черга, без другої копії."""
+    folder = MANUAL_BACKUP_DIR if manual else BACKUP_DIR
+    os.makedirs(folder, exist_ok=True)
+    dest = dest or os.path.join(folder, f"crewhub_{datetime.now():%Y-%m-%d_%H%M%S}.zip")
     snap = dest + ".db.tmp"
     src = connect()
     out = sqlite3.connect(snap)
@@ -1531,7 +1536,9 @@ def backup_db(dest=None):
     finally:
         if os.path.exists(snap):
             os.remove(snap)
-    _prune(BACKUP_DIR)
+    _prune(os.path.dirname(dest), MANUAL_KEEP if manual else BACKUP_KEEP)
+    if manual:
+        return dest
     mirror = backup_mirror_dir()
     if mirror:
         try:
@@ -1576,18 +1583,41 @@ def check_db():
     for suffix in ("", "-wal", "-shm"):
         if os.path.exists(DB_PATH + suffix):
             os.replace(DB_PATH + suffix, broken + suffix)
-    copies = list_backups()
     RECOVERED["from_backup"] = True  # людей і їхні зміни profiles.py візьме з особових папок — вони свіжіші за копію
-    if not copies:
-        return f"База пошкоджена і відкладена в {broken}. Копій немає: створено нову базу, люди відновлюються з папок."
-    path = os.path.join(BACKUP_DIR, copies[0]["name"])
-    if path.endswith(".zip"):
-        with zipfile.ZipFile(path) as z, z.open("crewhub.db") as src, open(DB_PATH, "wb") as out:
-            out.write(src.read())
-    else:
-        import shutil
-        shutil.copyfile(path, DB_PATH)
-    return f"База була пошкоджена (збережена як {broken}). Налаштування відновлено з копії {copies[0]['name']}, люди — з їхніх папок."
+    import shutil
+    tmp = DB_PATH + ".restore"
+    skipped = []
+    for copy in list_backups():  # від найсвіжішої; пошкоджену копію пропускаємо і пробуємо старшу
+        path = os.path.join(BACKUP_DIR, copy["name"])
+        try:
+            if path.endswith(".zip"):
+                with zipfile.ZipFile(path) as z, z.open("crewhub.db") as src, open(tmp, "wb") as out:
+                    shutil.copyfileobj(src, out)
+            else:
+                shutil.copyfile(path, tmp)
+            if _db_ok(tmp):
+                os.replace(tmp, DB_PATH)
+                note = f" (пошкоджені копії пропущено: {', '.join(skipped)})" if skipped else ""
+                return (f"База була пошкоджена (збережена як {broken}). Налаштування відновлено з копії {copy['name']}{note}, "
+                        "люди — з їхніх папок.")
+        except (OSError, KeyError, zipfile.BadZipFile, sqlite3.DatabaseError):
+            pass
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        skipped.append(copy["name"])
+    return f"База пошкоджена і відкладена в {broken}. Справних копій немає: створено нову базу, люди відновлюються з папок."
+
+
+def _db_ok(path):
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            return conn.execute("pragma quick_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
 
 
 def list_backups():
@@ -3796,7 +3826,7 @@ def admin_settings():
 @login_required(admin=True)
 def admin_backup_download():
     with _people_lock:  # щоб у знімок не потрапила напівзаписана папка
-        path = backup_db()
+        path = backup_db(manual=True)
     audit(db(), current_user()["id"], "EXPORT", "backup", None, None, {"file": [None, os.path.basename(path)]})
     db().commit()
     return send_file(path, as_attachment=True, download_name=os.path.basename(path))

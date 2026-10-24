@@ -376,6 +376,37 @@ class HardeningTest(CrewHubBase):
         fail.set()
         self.assertIn("не працює", core.workers_problem() or "")
 
+    # --- 🟠 4. Бекапи -----------------------------------------------------------------------------
+    def test_manual_downloads_do_not_push_out_daily_backups(self):
+        core.backup_db()
+        daily = core.list_backups()
+        admin = self.login("admin", "admin123")
+        orig = core.BACKUP_KEEP
+        core.BACKUP_KEEP = 1  # навіть з найменшою чергою щоденна копія лишається
+        self.addCleanup(setattr, core, "BACKUP_KEEP", orig)
+        for _ in range(5):
+            r = admin.get("/admin/backup.zip")
+            self.assertEqual(r.status_code, 200)
+            r.close()
+        self.assertEqual([b["name"] for b in core.list_backups()], [b["name"] for b in daily])
+        self.assertLessEqual(len(core.os.listdir(core.MANUAL_BACKUP_DIR)), core.MANUAL_KEEP)
+
+    def test_restore_skips_broken_newest_backup(self):
+        import time
+        core.backup_db()
+        good = core.list_backups()[0]["name"]
+        time.sleep(1.1)
+        bad = core.backup_db()
+        with open(bad, "wb") as f:
+            f.write(b"not a zip at all")
+        with open(core.DB_PATH, "r+b") as f:
+            f.write(b"broken" * 200)
+        msg = core.check_db()
+        self.assertIn(good, msg)
+        self.assertIn("пропущено", msg)
+        self.assertTrue(core._db_ok(core.DB_PATH))
+        core.RECOVERED["from_backup"] = False
+
 
 if __name__ == "__main__":
     unittest.main()

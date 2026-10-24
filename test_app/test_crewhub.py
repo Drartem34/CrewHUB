@@ -751,7 +751,7 @@ class CrewHubTest(CrewHubBase):
         names = zipfile.ZipFile(io.BytesIO(r.data)).namelist()
         self.assertIn("crewhub.db", names)
         self.assertIn("people/Іван Петренко/profile.json", names)  # копія містить і особові папки
-        self.assertTrue(core.list_backups())
+        self.assertTrue(os.listdir(core.MANUAL_BACKUP_DIR))  # копія на вимогу — окремо від щоденних
         self.assertIn("Резервні копії", admin.get("/admin?tab=settings").get_data(as_text=True))
 
     def test_server_downtime_does_not_pause_shifts(self):
