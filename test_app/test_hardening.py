@@ -1,7 +1,7 @@
 """Тести на виправлені дірки й баги (по одному на кожен пункт аудиту): python -m unittest test_hardening -v"""
 import unittest
 
-from test_crewhub import HOME_IP, WORK_IP, CrewHubBase, core
+from test_crewhub import HOME_IP, WORK_IP, CrewHubBase, core, profiles
 
 
 class HardeningTest(CrewHubBase):
@@ -406,6 +406,47 @@ class HardeningTest(CrewHubBase):
         self.assertIn("пропущено", msg)
         self.assertTrue(core._db_ok(core.DB_PATH))
         core.RECOVERED["from_backup"] = False
+
+    # --- 🟠 5. Особові папки без втрат ------------------------------------------------------------
+    def test_folder_export_import_is_lossless(self):
+        ivan = self.login("ivan")
+        ua = {"User-Agent": "CrewHubApp/1.9 CrewHubDevice/loss0001", "X-Forwarded-For": WORK_IP}
+        ivan.post("/api/clock/start", json={}, headers=ua)
+        ivan.post("/api/clock/heartbeat", json={"unrestricted": True}, headers=ua)
+        ivan.post("/api/clock/left", json={"away_since": core.now() - 120}, headers=dict(ua, **{"X-Forwarded-For": HOME_IP}))
+        self.clock("stop", client=ivan)
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        ivan.post("/me/request", data={"type": "day_off"})
+        mod = self.login("moder", "moder123", client=core.app.test_client())
+        rid = self.sql("select id from requests where type = 'day_off'")[0][0]
+        mod.post("/team/dayoff", data={"rid": rid, "action": "approve"})
+        mod.post("/admin/adjustment", data={"user_id": uid, "amount": "300", "reason": "премія", "kind": "bonus"})
+        q = {"shifts": "select bg_ok, status, close_reason from shifts where user_id = ?",
+             "breaks": "select b.kind, b.reason, b.started_at, b.ended_at from breaks b join shifts s on s.id = b.shift_id where s.user_id = ?",
+             "requests": "select type, status, grant_until, reviewer_id from requests where user_id = ?",
+             "adjustments": "select amount, reason, created_by from adjustments where user_id = ?"}
+        before = {k: [tuple(r) for r in self.sql(v, uid)] for k, v in q.items()}
+        self.assertEqual(before["breaks"][0][1], "left")
+        self.assertEqual(before["shifts"][0][0], 1)
+        self.sync()
+        with core.connect() as c:
+            for t in ("shifts", "requests", "adjustments"):
+                c.execute(f"delete from {t} where user_id = ?", (uid,))
+            profiles.import_data(c, uid, self.folder("ivan"))
+            c.commit()
+        after = {k: [tuple(r) for r in self.sql(v, uid)] for k, v in q.items()}
+        self.assertEqual(after, before)
+
+    def test_rebuild_keeps_backup_data_newer_than_folder(self):
+        self.login("ivan")
+        self.sync()  # у папці ще немає змін
+        self.clock("start")
+        self.clock("stop")
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.connect() as c:
+            profiles.rebuild_from_folders(c, since=core.now() + 60)  # копія новіша за папку
+            c.commit()
+        self.assertEqual(self.sql("select count(*) from shifts where user_id = ?", uid)[0][0], 1)
 
 
 if __name__ == "__main__":

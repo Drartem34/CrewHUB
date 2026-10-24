@@ -1597,6 +1597,7 @@ def check_db():
                 shutil.copyfile(path, tmp)
             if _db_ok(tmp):
                 os.replace(tmp, DB_PATH)
+                RECOVERED["backup_at"] = copy["mtime"]  # папки, записані раніше за копію, застарілі
                 note = f" (пошкоджені копії пропущено: {', '.join(skipped)})" if skipped else ""
                 return (f"База була пошкоджена (збережена як {broken}). Налаштування відновлено з копії {copy['name']}{note}, "
                         "люди — з їхніх папок.")

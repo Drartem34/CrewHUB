@@ -161,14 +161,14 @@ def export_user(conn, uid, rules=None):
         for s in conn.execute("select * from shifts where user_id = ? order by started_at", (uid,)).fetchall():
             st = core.shift_stats(conn, s, rules=rules)
             breaks = [{"kind": b["kind"], "is_paid": b["is_paid"], "rate_pct": b["rate_pct"],
-                       "started_at": b["started_at"], "ended_at": b["ended_at"]}
+                       "started_at": b["started_at"], "ended_at": b["ended_at"], "reason": b["reason"]}
                       for b in conn.execute("select * from breaks where shift_id = ? order by started_at", (s["id"],))]
             shifts.append({"started_at": s["started_at"], "ended_at": s["ended_at"], "start": _iso(s["started_at"]),
                            "end": _iso(s["ended_at"]), "status": s["status"], "close_reason": s["close_reason"],
                            "hourly_rate": s["hourly_rate"], "location": loc_names.get(s["location_id"]),
                            "start_ip": s["start_ip"], "end_ip": s["end_ip"], "last_seen_ip": s["last_seen_ip"],
                            "last_seen_at": s["last_seen_at"], "device": s["device"], "is_edited": s["is_edited"],
-                           "note": s["note"], "breaks": breaks,
+                           "note": s["note"], "bg_ok": s["bg_ok"], "breaks": breaks,
                            "worked_seconds": st["worked_seconds"], "earnings": st["earnings"]})
             csv_rows.append([_iso(s["started_at"])[:10], core.fmt_tm(s["started_at"]), core.fmt_tm(s["ended_at"]) if s["ended_at"] else "триває",
                              round(st["worked_seconds"] / 3600, 2), round(st["unpaid_break_seconds"] / 60), st["earnings"],
@@ -177,17 +177,21 @@ def export_user(conn, uid, rules=None):
                 month_secs += st["worked_seconds"]
                 month_money += st["earnings"]
         requests = []
-        for r in conn.execute("select r.*, s.started_at as shift_start, sc.starts_at as sched_start, w.phone as swap_phone"
-                              " from requests r left join shifts s on s.id = r.shift_id left join schedule sc on sc.id = r.schedule_id"
-                              " left join users w on w.id = r.swap_with_id where r.user_id = ? order by r.id", (uid,)):
+        for r in conn.execute("select r.*, s.started_at as shift_start, sc.starts_at as sched_start, w.phone as swap_phone,"
+                              " rv.phone as reviewer_phone from requests r left join shifts s on s.id = r.shift_id"
+                              " left join schedule sc on sc.id = r.schedule_id left join users w on w.id = r.swap_with_id"
+                              " left join users rv on rv.id = r.reviewer_id where r.user_id = ? order by r.id", (uid,)):
             requests.append({"type": r["type"], "type_name": core.REQUEST_TYPES.get(r["type"]), "status": r["status"],
                              "starts_on": r["starts_on"], "ends_on": r["ends_on"], "comment": r["comment"],
                              "review_comment": r["review_comment"], "created_at": r["created_at"],
                              "proposed_start": r["proposed_start"], "proposed_end": r["proposed_end"],
                              "shift_started_at": r["shift_start"], "schedule_starts_at": r["sched_start"],
-                             "swap_with_phone": r["swap_phone"], "swap_accepted": r["swap_accepted"]})
-        adjustments = [{"amount": a["amount"], "reason": a["reason"], "day": a["day"], "created_at": a["created_at"]}
-                       for a in conn.execute("select * from adjustments where user_id = ? order by day", (uid,))]
+                             "swap_with_phone": r["swap_phone"], "swap_accepted": r["swap_accepted"],
+                             "grant_until": r["grant_until"], "reviewer_phone": r["reviewer_phone"]})
+        adjustments = [{"amount": a["amount"], "reason": a["reason"], "day": a["day"], "created_at": a["created_at"],
+                        "created_by_phone": a["by_phone"]}
+                       for a in conn.execute("select a.*, b.phone as by_phone from adjustments a left join users b on b.id = a.created_by"
+                                             " where a.user_id = ? order by a.day", (uid,))]
         schedule = [{"starts_at": x["starts_at"], "ends_at": x["ends_at"], "start": _iso(x["starts_at"]),
                      "end": _iso(x["ends_at"]), "location": loc_names.get(x["location_id"]), "note": x["note"]}
                     for x in conn.execute("select * from schedule where user_id = ? order by starts_at", (uid,))]
@@ -254,37 +258,48 @@ def _location_id(conn, name):
     return row[0] if row else None
 
 
+def _user_by_phone(conn, phone):
+    row = conn.execute("select id from users where phone = ?", (phone,)).fetchone() if phone else None
+    return row[0] if row else None
+
+
 def import_data(conn, uid, path):
-    """Зміни, перерви, запити, бонуси і графік з папки → у базу (для людини uid)."""
+    """Зміни, перерви, запити, бонуси і графік з папки → у базу (для людини uid). Без втрат: усе, що пише export_user."""
     shift_ids = {}
     for s in _read_json(os.path.join(path, "shifts.json"), []):
+        status = s.get("status") or "closed"
+        if status != "closed" and core.open_shift(conn, uid):
+            status = "closed"  # відкритою може бути лише одна зміна
         cur = conn.execute(
             "insert into shifts(user_id, location_id, started_at, ended_at, status, close_reason, hourly_rate, last_seen_at,"
-            " last_seen_ip, start_ip, end_ip, device, is_edited, note) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (uid, _location_id(conn, s.get("location")), s["started_at"], s.get("ended_at"), s.get("status") or "closed",
+            " last_seen_ip, start_ip, end_ip, device, is_edited, note, bg_ok) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (uid, _location_id(conn, s.get("location")), s["started_at"], s.get("ended_at"), status,
              s.get("close_reason"), s.get("hourly_rate") or 0, s.get("last_seen_at") or s.get("ended_at") or s["started_at"],
-             s.get("last_seen_ip"), s.get("start_ip"), s.get("end_ip"), s.get("device"), s.get("is_edited") or 0, s.get("note")))
+             s.get("last_seen_ip"), s.get("start_ip"), s.get("end_ip"), s.get("device"), s.get("is_edited") or 0, s.get("note"),
+             s.get("bg_ok") or 0))
         shift_ids[s["started_at"]] = cur.lastrowid
         for b in s.get("breaks") or []:
-            conn.execute("insert into breaks(shift_id, kind, is_paid, rate_pct, started_at, ended_at) values (?, ?, ?, ?, ?, ?)",
-                         (cur.lastrowid, b["kind"], b.get("is_paid") or 0, b.get("rate_pct") or 0, b["started_at"], b.get("ended_at")))
+            conn.execute("insert into breaks(shift_id, kind, is_paid, rate_pct, started_at, ended_at, reason) values (?, ?, ?, ?, ?, ?, ?)",
+                         (cur.lastrowid, b["kind"], b.get("is_paid") or 0, b.get("rate_pct") or 0, b["started_at"], b.get("ended_at"),
+                          b.get("reason")))
     sched_ids = {}
     for x in _read_json(os.path.join(path, "schedule.json"), []):
         cur = conn.execute("insert into schedule(user_id, location_id, starts_at, ends_at, note) values (?, ?, ?, ?, ?)",
                            (uid, _location_id(conn, x.get("location")), x["starts_at"], x["ends_at"], x.get("note")))
         sched_ids[x["starts_at"]] = cur.lastrowid
     for r in _read_json(os.path.join(path, "requests.json"), []):
-        swap = conn.execute("select id from users where phone = ?", (r.get("swap_with_phone"),)).fetchone() if r.get("swap_with_phone") else None
         conn.execute("insert into requests(user_id, type, status, starts_on, ends_on, shift_id, proposed_start, proposed_end,"
-                     " schedule_id, swap_with_id, swap_accepted, comment, review_comment, created_at)"
-                     " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     " schedule_id, swap_with_id, swap_accepted, comment, review_comment, created_at, grant_until, reviewer_id)"
+                     " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (uid, r["type"], r.get("status") or "pending", r.get("starts_on"), r.get("ends_on"),
                       shift_ids.get(r.get("shift_started_at")), r.get("proposed_start"), r.get("proposed_end"),
-                      sched_ids.get(r.get("schedule_starts_at")), swap[0] if swap else None, r.get("swap_accepted"),
-                      r.get("comment"), r.get("review_comment"), r.get("created_at") or core.now()))
+                      sched_ids.get(r.get("schedule_starts_at")), _user_by_phone(conn, r.get("swap_with_phone")), r.get("swap_accepted"),
+                      r.get("comment"), r.get("review_comment"), r.get("created_at") or core.now(), r.get("grant_until"),
+                      _user_by_phone(conn, r.get("reviewer_phone"))))
     for a in _read_json(os.path.join(path, "adjustments.json"), []):
-        conn.execute("insert into adjustments(user_id, amount, reason, day, created_at) values (?, ?, ?, ?, ?)",
-                     (uid, a["amount"], a.get("reason") or "", a["day"], a.get("created_at") or core.now()))
+        conn.execute("insert into adjustments(user_id, amount, reason, day, created_at, created_by) values (?, ?, ?, ?, ?, ?)",
+                     (uid, a["amount"], a.get("reason") or "", a["day"], a.get("created_at") or core.now(),
+                      _user_by_phone(conn, a.get("created_by_phone"))))
     return len(shift_ids)
 
 
@@ -397,9 +412,8 @@ def flush_dirty(conn, limit=500):
         conn.commit()  # не тримати базу заблокованою, поки пишуться папки інших людей
         if i + 1 < len(ids):
             time.sleep(0.03)  # ранковий наплив: папки пишуться фоном, відповіді телефонам мають пріоритет
-    # export_user міг перейменувати папку — це теж запис у users, тригер знову позначить людину
-    conn.execute(f"delete from dirty_users where user_id in ({','.join('?' * len(ids))})", ids)
-    conn.commit()
+    # Позначки, що з'явились під час запису, лишаються: ця зміна потрапить у папку наступним проходом
+    # (перейменування папки дасть один зайвий прохід, без нескінченного циклу)
     return len(ids)
 
 
@@ -471,12 +485,22 @@ def scan(conn):
     return changed
 
 
-def rebuild_from_folders(conn):
-    """Після відновлення пошкодженої бази з копії: дані людей беремо з папок — вони свіжіші за копію."""
+def _exported_at(p):
+    try:
+        return datetime.fromisoformat(p.get("exported_at") or "").timestamp()
+    except (TypeError, ValueError):
+        return 0
+
+
+def rebuild_from_folders(conn, since=None):
+    """Після відновлення пошкодженої бази з копії: дані людей беремо з папок — вони свіжіші за копію.
+    since — час копії: папку, записану раніше за неї (застаріла), не чіпаємо — у копії дані новіші."""
     for d in sorted(os.listdir(core.PEOPLE_DIR)) if os.path.isdir(core.PEOPLE_DIR) else []:
         path = os.path.join(core.PEOPLE_DIR, d)
         p = _read_json(os.path.join(path, "profile.json"), None)
         if not isinstance(p, dict):
+            continue
+        if since and _exported_at(p) < since:
             continue
         phone = core.normalize_phone(p.get("phone") or "")
         u = conn.execute("select * from users where phone = ? or folder = ?", (phone, d)).fetchone()
@@ -539,7 +563,7 @@ def start_folder_sync(interval=3):
                 try:
                     if core.RECOVERED.get("from_backup"):
                         with core._lock:
-                            rebuild_from_folders(conn)
+                            rebuild_from_folders(conn, core.RECOVERED.get("backup_at"))
                             conn.commit()
                         core.RECOVERED["from_backup"] = False
                     else:
