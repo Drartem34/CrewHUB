@@ -2209,7 +2209,27 @@ def find_login(conn, ident):
         u = conn.execute("select * from users where phone = ?", (phone,)).fetchone()
         if u:
             return u
-    return conn.execute("select * from users where username = ?", (ident,)).fetchone()
+    # Логін-слово (admin) або старий акаунт без номера. Логін у вигляді старого номера людини, якій номер
+    # змінили, вже не підходить: цей номер може належати іншому
+    u = conn.execute("select * from users where username = ?", (ident,)).fetchone()
+    if u and normalize_phone(u["username"]) and u["phone"] and u["phone"] != u["username"]:
+        return None
+    return u
+
+
+def free_username(conn, base, except_id=0):
+    """Логін base, а якщо він уже чийсь (номер, який раніше був в іншої людини) — base з приміткою."""
+    name, n = base, 1
+    while conn.execute("select 1 from users where username = ? and id != ?", (name, except_id)).fetchone():
+        n += 1
+        name = f"{base}#{n}"
+    return name
+
+
+def follow_phone(conn, u, new_phone):
+    """Номер — це логін: якщо логін людини був її старим номером, він переходить на новий."""
+    if new_phone and u["phone"] and u["username"] == u["phone"] and new_phone != u["phone"]:
+        conn.execute("update users set username = ? where id = ?", (free_username(conn, new_phone, u["id"]), u["id"]))
 
 
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS", "TRACE")
@@ -2367,7 +2387,7 @@ def register():
                 try:
                     cur = conn.execute("insert into users(username, password_hash, full_name, phone, hourly_rate, status, hire_date)"
                                        " values (?, ?, ?, ?, ?, 'pending', ?)",
-                                       (phone, hash_password(pw), name, phone, float(setting("default_hourly_rate", conn)),
+                                       (free_username(conn, phone), hash_password(pw), name, phone, float(setting("default_hourly_rate", conn)),
                                         date.today().isoformat()))
                 except sqlite3.IntegrityError:
                     error = "Цей номер уже зареєстровано"
@@ -3292,6 +3312,7 @@ def admin_employee_save(uid):
         changes = diff(dict(u), new)
         if f.get("password"):
             changes["password"] = ["***", "***"]
+        follow_phone(conn, u, new["phone"])
         sets = ", ".join(f"{k} = ?" for k in new)
         conn.execute(f"update users set {sets} where id = ?", (*new.values(), uid))
         if new["status"] == "dismissed" or f.get("password"):
@@ -3325,7 +3346,7 @@ def admin_employee_new():
             role = f.get("role") if f.get("role") in ROLES and current_user()["role"] == "admin" else "employee"
             cur = conn.execute("insert into users(username, password_hash, full_name, job_title, hourly_rate, hire_date, location_id,"
                                " phone, role) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                               (phone, hash_password(f["password"]), f["full_name"].strip(), f.get("job_title") or None,
+                               (free_username(conn, phone), hash_password(f["password"]), f["full_name"].strip(), f.get("job_title") or None,
                                 rate, hire.isoformat() if hire else None, parse_int(f.get("location_id")), phone, role))
         except sqlite3.IntegrityError:
             flash("Цей номер уже зареєстровано")

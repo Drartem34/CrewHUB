@@ -392,6 +392,7 @@ def apply_manual_edit(conn, u, p, trusted=False):
         new[k] = (p.get(k) or "").strip() or None
     changes = core.diff(dict(u), new)
     if changes:
+        core.follow_phone(conn, u, new["phone"])
         conn.execute(f"update users set {', '.join(k + ' = ?' for k in new)} where id = ?", (*new.values(), u["id"]))
         core.audit(conn, None, "UPDATE", "users", u["id"], u["id"], {**changes, "via": ["", "правка profile.json"]})
     return None

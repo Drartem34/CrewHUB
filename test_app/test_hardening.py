@@ -524,6 +524,31 @@ class HardeningTest(CrewHubBase):
         ivan.post("/api/clock/heartbeat", json={}, headers=ua)
         self.assertEqual(self.sql("select count(*) from notifications where title = 'Wi-Fi відновлено'")[0][0], 2)
 
+    # --- 🟡 4. Номер змінили — логін переїхав ---------------------------------------------------------
+    def test_phone_change_moves_login(self):
+        c = core.app.test_client()
+        c.post("/register", data={"full_name": "Петро Іваненко", "phone": "063 111 22 33", "password": "petro123", "password2": "petro123"})
+        pid = self.sql("select id from users where phone = '+380631112233'")[0][0]
+        admin = self.login("admin", "admin123")
+        admin.post(f"/admin/registration/{pid}/approve", data={"hourly_rate": "100"})
+        admin.post(f"/admin/employee/{pid}", data={"full_name": "Петро Іваненко", "hourly_rate": "100", "status": "active",
+                                                   "phone": "063 444 55 66"})
+        self.assertEqual(self.sql("select username from users where id = ?", pid)[0][0], "+380634445566")
+        old = core.app.test_client()
+        self.assertEqual(old.post("/login", data={"username": "+380631112233", "password": "petro123"}).status_code, 200)  # старим — ні
+        self.login("0634445566", "petro123", client=core.app.test_client())                                           # новим — так
+        # звільнений номер може зайняти інша людина
+        core.app.test_client().post("/register", data={"full_name": "Нова Людина", "phone": "0631112233",
+                                                       "password": "nova1234", "password2": "nova1234"})
+        self.assertTrue(self.sql("select 1 from users where phone = '+380631112233' and status = 'pending'"))
+
+    def test_stale_phone_username_is_not_a_login(self):
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        self.sql("update users set username = '+380990000000' where id = ?", uid)  # стара база: логін = колишній номер
+        c = core.app.test_client()
+        self.assertEqual(c.post("/login", data={"username": "+380990000000", "password": "1234"}).status_code, 200)
+        self.login("0671234567")
+
 
 if __name__ == "__main__":
     unittest.main()
