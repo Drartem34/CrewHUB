@@ -40,9 +40,10 @@
       const data = await r.json();
       if (!data.ok) {
         $("error").textContent = data.error;
-        if (navigator.vibrate) navigator.vibrate(150);
+        if (!quiet(action) && navigator.vibrate) navigator.vibrate(150);
         busy = false;
-        if (!quiet(action)) await call("check");
+        // Відмова (напр. зміну вже закрив сервер): беремо свіжий стан, щоб не показувати й не пінгувати стару зміну
+        if (action !== "check") await call("check");
         return;
       }
       $("error").textContent = "";
@@ -67,6 +68,7 @@
         setTimeout(() => call(action, extra, attempt + 1), 1500 * Math.pow(2, attempt));
       } else {
         $("error").textContent = "Немає зв'язку з сервером. Зміна на сервері продовжується, сторінка підключиться сама";
+        if (!quiet(action)) setTimeout(() => call("check"), 30000);  // і справді підключається: пробуємо раз на 30 с
       }
     } finally {
       if (!quiet(action) && !retrying) { busy = false; if (state) render(); }
@@ -139,7 +141,10 @@
     clearTimeout(hbTimer);
     if (!state) return;
     if (!state.shift) {  // автостарт: поки сторінка відкрита, раз на хвилину питаємо, чи не час починати
-      if (state.auto_start && state.on_work_network) hbTimer = setTimeout(() => call("auto"), 60000 * (0.9 + Math.random() * 0.2));
+      if (state.auto_start && state.on_work_network) {
+        // після помилки мережі теж плануємо наступну спробу (раніше автостарт тоді замовкав до перезавантаження)
+        hbTimer = setTimeout(async () => { await call("auto"); scheduleHeartbeat(); }, 60000 * (0.9 + Math.random() * 0.2));
+      }
       return;
     }
     const ms = (state.heartbeat_seconds || 20) * 1000 * (0.85 + Math.random() * 0.3);
