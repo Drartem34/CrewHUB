@@ -154,6 +154,34 @@ class HardeningTest(CrewHubBase):
         core.init_db()  # свій пароль — більше не чіпаємо
         self.assertEqual(self.sql("select must_change_password from users where username = 'admin'")[0][0], 0)
 
+    # --- 🔴 6. Перебір паролів ----------------------------------------------------------------
+    def test_password_guessing_is_throttled(self):
+        c = core.app.test_client()
+        for i in range(5):
+            self.assertEqual(c.post("/login", data={"username": "067 123 45 67", "password": f"x{i}"}).status_code, 200)
+        # шоста спроба навіть з правильним паролем — відмова; інший запис того ж номера — той самий акаунт
+        r = c.post("/login", data={"username": "+380671234567", "password": "1234"})
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("Забагато невдалих спроб", r.get_data(as_text=True))
+        # з іншого IP людина входить
+        other = core.app.test_client()
+        r = other.post("/login", data={"username": "0671234567", "password": "1234"}, headers={"X-Forwarded-For": "10.0.0.7"})
+        self.assertEqual(r.status_code, 302)
+
+    def test_password_spraying_from_one_ip_is_throttled(self):
+        c = core.app.test_client()
+        h = {"X-Forwarded-For": "10.9.9.9"}
+        for i in range(20):
+            c.post("/login", data={"username": f"06700000{i:02d}", "password": "123456"}, headers=h)
+        self.assertEqual(c.post("/login", data={"username": "0671234567", "password": "1234"}, headers=h).status_code, 429)
+
+    def test_registration_spam_is_throttled(self):
+        c = core.app.test_client()
+        codes = [c.post("/register", data={"full_name": "Тест Тестенко", "phone": f"06711100{i:02d}", "password": "123456",
+                                           "password2": "123456"}).status_code for i in range(7)]
+        self.assertEqual(codes[:5], [200] * 5)
+        self.assertEqual(codes[5:], [429, 429])
+
 
 if __name__ == "__main__":
     unittest.main()

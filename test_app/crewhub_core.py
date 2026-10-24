@@ -212,6 +212,68 @@ _people_lock = threading.RLock()  # запис особових папок і ї
 _hash_slots = threading.BoundedSemaphore(int(os.environ.get("CREWHUB_HASH_SLOTS", "4")))
 
 
+class Throttle:
+    """Обмеження спроб (вхід, реєстрація, перевірка пароля) без сторонніх бібліотек: ковзне вікно в пам'яті.
+    Перезапуск сервера скидає лічильники — це прийнятно, перебір однаково впреться в ліміт знову."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.hits = {}
+
+    def recent(self, key, window):
+        """Скільки спроб за останні window секунд і через скільки секунд найстаріша з них «згорить»."""
+        t = time.time()
+        with self.lock:
+            q = [x for x in self.hits.get(key, ()) if t - x < window]
+            if q:
+                self.hits[key] = q
+            else:
+                self.hits.pop(key, None)
+            return len(q), (int(window - (t - q[0])) + 1 if q else 0)
+
+    def add(self, key):
+        t = time.time()
+        with self.lock:
+            self.hits.setdefault(key, []).append(t)
+            if len(self.hits) > 20000:  # не даємо лічильникам з'їсти пам'ять: прибираємо тих, хто давно мовчить
+                for k in [k for k, q in self.hits.items() if t - q[-1] > 3600]:
+                    del self.hits[k]
+
+    def clear(self, key):
+        with self.lock:
+            self.hits.pop(key, None)
+
+    def reset(self):
+        with self.lock:
+            self.hits.clear()
+
+
+_throttle = Throttle()
+# (ключ, кількість, вікно в секундах): перевищив хоч одне — чекає, пароль навіть не перевіряється
+LOGIN_LIMITS = (("acct-ip", 5, 900), ("ip", 20, 900), ("acct", 50, 3600))
+
+
+def login_blocked(acct, ip):
+    """Секунд до наступної дозволеної спроби входу, або 0."""
+    keys = {"acct-ip": f"login:{acct}:{ip}", "ip": f"login-ip:{ip}", "acct": f"login:{acct}"}
+    wait = 0
+    for kind, limit, window in LOGIN_LIMITS:
+        n, left = _throttle.recent(keys[kind], window)
+        if n >= limit:
+            wait = max(wait, left)
+    return wait
+
+
+def login_failed(acct, ip):
+    for key in (f"login:{acct}:{ip}", f"login-ip:{ip}", f"login:{acct}"):
+        _throttle.add(key)
+
+
+def wait_text(seconds):
+    m = max(1, (seconds + 59) // 60)
+    return f"Забагато невдалих спроб. Спробуйте через {m} хв"
+
+
 def verify_password(pw_hash, password):
     with _hash_slots:
         return check_password_hash(pw_hash, password)
@@ -1961,8 +2023,18 @@ def _force_password_change():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        u = find_login(db(), request.form.get("username"))
-        if u and verify_password(u["password_hash"], request.form.get("password", "")):
+        ident = (request.form.get("username") or "").strip()
+        u = find_login(db(), ident)
+        acct = f"u{u['id']}" if u else (normalize_phone(ident) or ident.lower())[:40]
+        ip = client_ip()
+        if wait := login_blocked(acct, ip):
+            flash(wait_text(wait))
+            return render_template("login.html", ip=ip, registration_open=setting("registration_open") == "1"), 429
+        if not (u and verify_password(u["password_hash"], request.form.get("password", ""))):
+            login_failed(acct, ip)
+            u = None
+        if u:
+            _throttle.clear(f"login:{acct}:{ip}")
             if u["status"] == "pending":
                 flash("Акаунт ще не підтверджено: заявка чекає на перевірку адміністратора або модератора")
             elif u["status"] == "dismissed":
@@ -1990,6 +2062,11 @@ def register():
         return redirect(url_for("login"))
     form = request.form
     if request.method == "POST":
+        key = f"register:{client_ip()}"
+        if _throttle.recent(key, 3600)[0] >= 5:
+            flash("Забагато реєстрацій з цієї мережі. Спробуйте пізніше або попросіть адміністратора")
+            return render_template("register.html", done=False, form=form), 429
+        _throttle.add(key)
         name = " ".join(form.get("full_name", "").split())
         phone = normalize_phone(form.get("phone"))
         pw = form.get("password", "")
@@ -2585,7 +2662,11 @@ def me_profile():
 def me_password():
     u = current_user()
     new = request.form.get("new", "")
-    if not verify_password(u["password_hash"], request.form.get("current", "")):
+    key = f"pw:{u['id']}"
+    if _throttle.recent(key, 900)[0] >= 5:
+        flash(wait_text(_throttle.recent(key, 900)[1]))
+    elif not verify_password(u["password_hash"], request.form.get("current", "")):
+        _throttle.add(key)
         flash("Поточний пароль неправильний")
     elif len(new) < 6:
         flash("Новий пароль закороткий (мінімум 6 символів)")
