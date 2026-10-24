@@ -736,7 +736,11 @@ def device_key(sent=None):
     if m:
         return "app-" + m.group(1)
     sent = (sent or "").strip()
-    return sent[:80] if re.fullmatch(r"[\w .:-]{4,80}", sent or "") else None
+    # Браузер: «web-1a2b3c4d» (старі сторінки слали ще « · Win32» — платформу відкидаємо, ключ той самий,
+    # що запам'ятала реєстрація; інакше автозміна в браузері ніколи не впізнавала «свій» телефон)
+    if m := re.match(r"(web-[0-9a-f]{4,32})(?![0-9a-f])", sent):
+        return m.group(1)
+    return sent[:80] if re.fullmatch(r"[\w .:-]{4,80}", sent) else None
 
 
 def device_name():

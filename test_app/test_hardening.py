@@ -486,6 +486,18 @@ class HardeningTest(CrewHubBase):
         rows = self.sql("select status, close_reason from shifts where user_id = ? order by id", uid)
         self.assertEqual([tuple(r) for r in rows], [("closed", "duplicate"), ("active", None)])
 
+    # --- 🟡 1. Браузер упізнає «свій» телефон ------------------------------------------------------
+    def test_browser_device_id_matches_registration(self):
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.app.test_request_context(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0)"}):
+            self.assertEqual(core.device_key("web-1a2b3c4d"), "web-1a2b3c4d")
+            self.assertEqual(core.device_key("web-1a2b3c4d · Win32"), "web-1a2b3c4d")  # закешована стара сторінка
+            with core.connect() as c:
+                core.remember_device(c, uid, core.device_key("web-1a2b3c4d"), WORK_IP)  # реєстрація
+                self.assertTrue(core.device_allowed(c, uid, core.device_key("web-1a2b3c4d · Win32"), WORK_IP))
+                self.assertFalse(core.device_allowed(c, uid, core.device_key("web-99999999"), WORK_IP))
+                c.commit()
+
 
 if __name__ == "__main__":
     unittest.main()

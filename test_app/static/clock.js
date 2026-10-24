@@ -7,7 +7,7 @@
     try {
       let id = localStorage.getItem("crewhub_device");
       if (!id) { id = "web-" + Math.random().toString(16).slice(2, 10); localStorage.setItem("crewhub_device", id); }
-      return id + " · " + (navigator.userAgentData?.platform || navigator.platform || "");
+      return id;  // той самий id, що надіслала реєстрація: за ним сервер упізнає телефон людини
     } catch (e) { return "web"; }
   })();
   const money = (v) => v.toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + CREWHUB.currency;
