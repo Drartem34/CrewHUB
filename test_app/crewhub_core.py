@@ -230,7 +230,7 @@ create table if not exists shifts (id integer primary key, user_id integer not n
   is_edited integer not null default 0, note text, bg_ok integer not null default 0);
 create table if not exists breaks (id integer primary key, shift_id integer not null references shifts(id) on delete cascade,
   kind text not null, is_paid integer not null, started_at integer not null, ended_at integer,
-  rate_pct real not null default 100, reason text);
+  rate_pct real not null default 100, reason text, notified integer not null default 0);
 create table if not exists adjustments (id integer primary key, user_id integer not null references users(id) on delete cascade,
   amount real not null, reason text not null, day text not null, created_by integer, created_at integer not null);
 create table if not exists requests (id integer primary key, user_id integer not null references users(id) on delete cascade,
@@ -492,6 +492,8 @@ def init_db(seed=True):
         conn.execute("alter table breaks add column rate_pct real not null default 100")
     if "reason" not in bcols:  # для wifi_loss: 'silence' — телефон замовк (міг заснути), 'left' — справді вийшов з Wi-Fi
         conn.execute("alter table breaks add column reason text")
+    if "notified" not in bcols:  # для wifi_loss: 1 — людині й модераторам уже повідомили (пауза не коротка)
+        conn.execute("alter table breaks add column notified integer not null default 0")
     if "bg_ok" not in [r[1] for r in conn.execute("pragma table_info(shifts)")]:
         # 1 = застосунок працює без обмежень батареї і пінгує щохвилини навіть у сні: тиша = справжня втрата Wi-Fi
         conn.execute("alter table shifts add column bg_ok integer not null default 0")
@@ -1410,8 +1412,9 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
                 conn.execute("update breaks set ended_at = ?, started_at = max(started_at, ?), reason = 'left' where id = ?",
                              (t, since, b["id"]))
                 log_clock(conn, user["id"], shift["id"], "wifi_restored", ip, shift["location_id"], True, device)
-                notify(conn, user["id"], "Зміну відновлено", "Ви знову в робочій мережі")
-                notify_staff(conn, "Wi-Fi відновлено", f"{user['full_name']} знову на точці")
+                if b["notified"]:  # про втрату повідомляли — повідомляємо й про повернення
+                    notify(conn, user["id"], "Зміну відновлено", "Ви знову в робочій мережі")
+                    notify_staff(conn, "Wi-Fi відновлено", f"{user['full_name']} знову на точці")
             conn.execute("update shifts set status = 'active' where id = ?", (shift["id"],))
         elif away and shift["status"] == "active" and t - away >= 60 and not keep:
             # Вийшов і повернувся, поки сервер чекав: відсутність — неоплачувана перерва
@@ -1432,14 +1435,17 @@ def sleepy_shift(shift):
     return (shift["device"] or "").startswith("app-") and not shift["bg_ok"]
 
 
+# Сповіщати про втрату Wi-Fi лише якщо пауза триває стільки: короткі збої роутера чи перехід між точками
+# доступу не засипають людину й кожного модератора парою «втрачено / відновлено»
+WIFI_NOTIFY_AFTER = 180
+
+
 def start_wifi_pause(conn, shift, since, reason, ip=None, log=True):
-    """Пауза через Wi-Fi: 'left' — телефон точно поза точкою, 'silence' — просто довго не озивався."""
+    """Пауза через Wi-Fi: 'left' — телефон точно поза точкою, 'silence' — просто довго не озивався.
+    Сповіщення надішле sweep(), якщо пауза протримається WIFI_NOTIFY_AFTER секунд."""
     conn.execute("insert into breaks(shift_id, kind, is_paid, rate_pct, started_at, reason) values (?, 'wifi_loss', 0, 0, ?, ?)",
                  (shift["id"], since, reason))
     conn.execute("update shifts set status = 'paused' where id = ?", (shift["id"],))
-    who = conn.execute("select full_name from users where id = ?", (shift["user_id"],)).fetchone()
-    notify(conn, shift["user_id"], "Зміну поставлено на паузу", "Поверніться в робочий Wi-Fi, щоб продовжити")
-    notify_staff(conn, "Втрата Wi-Fi", f"{who[0] if who else ''}: зміна на паузі")
     if log:
         log_clock(conn, shift["user_id"], shift["id"], "wifi_lost", ip, shift["location_id"], False, None, {"reason": reason, "since": since})
 
@@ -1490,6 +1496,12 @@ def sweep(conn):
             start_wifi_pause(conn, s, s["last_seen_at"], "silence", s["last_seen_ip"], log=False)
         log_clock(conn, s["user_id"], s["id"], "wifi_lost", s["last_seen_ip"], s["location_id"], False, None,
                   {"action": action})
+    for b in conn.execute("select b.id, s.user_id, u.full_name from breaks b join shifts s on s.id = b.shift_id"
+                          " join users u on u.id = s.user_id where b.kind = 'wifi_loss' and b.ended_at is null and b.notified = 0"
+                          " and s.status = 'paused' and b.started_at <= ?", (t - WIFI_NOTIFY_AFTER,)).fetchall():
+        conn.execute("update breaks set notified = 1 where id = ?", (b["id"],))
+        notify(conn, b["user_id"], "Зміну поставлено на паузу", "Поверніться в робочий Wi-Fi, щоб продовжити")
+        notify_staff(conn, "Втрата Wi-Fi", f"{b['full_name']}: зміна на паузі")
     forgive = setting_int("silence_forgive_minutes", conn) * 60
     for b in conn.execute("select b.id, b.shift_id, b.started_at, b.reason, s.user_id, s.started_at as shift_start, s.last_seen_ip,"
                           " s.location_id, s.device, s.bg_ok from breaks b join shifts s on s.id = b.shift_id"

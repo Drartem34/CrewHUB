@@ -498,6 +498,32 @@ class HardeningTest(CrewHubBase):
                 self.assertFalse(core.device_allowed(c, uid, core.device_key("web-99999999"), WORK_IP))
                 c.commit()
 
+    # --- 🟡 3. Короткі збої Wi-Fi не засипають сповіщеннями -------------------------------------------
+    def test_short_wifi_blip_sends_no_notifications(self):
+        ivan = self.login("ivan")
+        ua = dict(self.APP, **{"X-Forwarded-For": WORK_IP})
+        ivan.post("/api/clock/start", json={}, headers=ua)
+        ivan.post("/api/clock/left", json={"away_since": core.now()}, headers=dict(ua, **{"X-Forwarded-For": HOME_IP}))
+        with core.connect() as c:
+            core.sweep(c)
+        ivan.post("/api/clock/heartbeat", json={}, headers=ua)  # за хвилину вже знову в Wi-Fi
+        self.assertEqual(self.sql("select count(*) from notifications where title like '%Wi-Fi%' or title like '%паузу%'"
+                                  " or title like '%відновлено%'")[0][0], 0)
+
+    def test_long_wifi_loss_notifies_once_and_restore_follows(self):
+        ivan = self.login("ivan")
+        ua = dict(self.APP, **{"X-Forwarded-For": WORK_IP})
+        ivan.post("/api/clock/start", json={}, headers=ua)
+        self.sql("update shifts set started_at = started_at - 3600")
+        ivan.post("/api/clock/left", json={"away_since": core.now() - 600}, headers=dict(ua, **{"X-Forwarded-For": HOME_IP}))
+        with core.connect() as c:
+            core.sweep(c)
+            core.sweep(c)  # вдруге не дублює
+        self.assertEqual(self.sql("select count(*) from notifications where title = 'Втрата Wi-Fi'")[0][0], 2)  # модератор + адмін
+        self.assertEqual(self.sql("select count(*) from notifications where title = 'Зміну поставлено на паузу'")[0][0], 1)
+        ivan.post("/api/clock/heartbeat", json={}, headers=ua)
+        self.assertEqual(self.sql("select count(*) from notifications where title = 'Wi-Fi відновлено'")[0][0], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
