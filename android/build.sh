@@ -21,11 +21,18 @@ dalvik-exchange --dex --min-sdk-version=23 --output="$OUT/classes.dex" "$OUT/cla
 (cd "$OUT" && aapt add -f unsigned.apk classes.dex >/dev/null)
 zipalign -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
-# Ключ підпису: той самий файл потрібен для оновлень поверх встановленого застосунку
-if [ ! -f crewhub.keystore ]; then
-  keytool -genkeypair -keystore crewhub.keystore -alias crewhub -keyalg RSA -keysize 2048 -validity 10000 \
-    -storepass crewhub123 -keypass crewhub123 -dname "CN=CrewHub, O=CrewHub, C=UA" >/dev/null 2>&1
+# Ключ підпису: той самий ключ потрібен для оновлень поверх встановленого застосунку.
+# Ключ і пароль — секрет: не кладіть їх у git і не пересилайте (див. .gitignore). Зробіть резервну копію обох файлів.
+KEYSTORE="${CREWHUB_KEYSTORE:-crewhub.keystore}"
+PASS_FILE="${CREWHUB_KS_PASS_FILE:-keystore.pass}"
+if [ ! -f "$KEYSTORE" ]; then
+  (umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(24))" > "$PASS_FILE")
+  keytool -genkeypair -keystore "$KEYSTORE" -alias crewhub -keyalg RSA -keysize 2048 -validity 10000 \
+    -storepass "$(cat "$PASS_FILE")" -keypass "$(cat "$PASS_FILE")" -dname "CN=CrewHub, O=CrewHub, C=UA" >/dev/null 2>&1
+  echo "Створено новий ключ підпису $KEYSTORE (пароль у $PASS_FILE). Збережіть копію обох файлів у надійному місці."
 fi
-apksigner sign --ks crewhub.keystore --ks-pass pass:crewhub123 --key-pass pass:crewhub123 \
+export KS_PASS="${CREWHUB_KS_PASS:-$( [ -f "$PASS_FILE" ] && cat "$PASS_FILE" )}"
+[ -n "$KS_PASS" ] || { echo "Немає пароля ключа: вкажіть CREWHUB_KS_PASS або файл $PASS_FILE"; exit 1; }
+apksigner sign --ks "$KEYSTORE" --ks-pass env:KS_PASS --key-pass env:KS_PASS \
   --out "$OUT/CrewHub.apk" "$OUT/aligned.apk"
 apksigner verify "$OUT/CrewHub.apk" && echo "Готово: $OUT/CrewHub.apk"
