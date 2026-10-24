@@ -22,3 +22,5 @@ ANDROID_JAR=шлях/до/android.jar ./build.sh   # API 34; → build/CrewHub.a
 підписаний старим ключем, оновити поверх не вийде: видаліть його з телефона один раз і встановіть новий.
 
 QR-сканер використовує libs/zxing-core-3.5.3.jar (ZXing, Apache 2.0); build.sh підключає всі jar з libs/ сам.
+
+Повний опис застосунку (що вміє, дозволи, що шле серверу, батарея) — у [docs/07-android.md](../docs/07-android.md).
