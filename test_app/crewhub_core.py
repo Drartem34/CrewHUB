@@ -51,7 +51,23 @@ def _setup_timezone():
 
 
 SERVER_TZ = _setup_timezone() or (time.tzname[0] if time.tzname else "")
-DB_PATH = os.environ.get("CREWHUB_DB", os.path.join(BASE_DIR, "crewhub_test.db"))
+
+
+def _default_data_dir():
+    home = os.path.expanduser("~")
+    if home.startswith("~") or not os.path.isabs(home):  # служба без домашньої папки
+        return os.path.join(os.path.dirname(BASE_DIR), "CrewHub-data")
+    return os.path.join(home, "CrewHub-data")
+
+
+# Папка даних: база, особові папки, копії, журнали, settings.ini і server_id. Лежить ОКРЕМО від коду
+# (за замовчуванням ~/CrewHub-data): нову версію програми можна розпакувати поверх старої чи в будь-яку іншу
+# папку — люди, зміни, правила й точки лишаються. CREWHUB_DATA задає інше місце (флешка, другий диск).
+DATA_DIR = os.path.abspath(os.path.expanduser(os.environ.get("CREWHUB_DATA") or _default_data_dir()))
+LEGACY_DB = os.path.join(BASE_DIR, "crewhub_test.db")  # до версії 17 база лежала поруч з кодом
+DB_PATH = os.environ.get("CREWHUB_DB", os.path.join(DATA_DIR, "crewhub.db"))
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.ini")  # правила, точки й Wi-Fi текстом (див. settings_file.py)
+LOG_DIR = os.path.join(DATA_DIR, "logs")
 # Через тунель (Pinggy, ngrok) справжній IP клієнта лежить у X-Forwarded-For. Заголовку віримо лише тоді,
 # коли його дописує наш тунель (start.py вмикає це сам для pinggy з xff, або CREWHUB_TRUST_PROXY=1),
 # і лише для з'єднань з цього ж комп'ютера. Беремо ОСТАННЮ адресу: її дописав тунель, усе лівіше
@@ -307,9 +323,9 @@ create index if not exists notifications_user on notifications(user_id, is_read)
 create index if not exists audit_target on audit(target_user_id, id);
 """
 
-BACKUP_DIR = os.environ.get("CREWHUB_BACKUP_DIR", os.path.join(BASE_DIR, "backups"))
+BACKUP_DIR = os.environ.get("CREWHUB_BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
 # Особові папки: people/<Ім'я>/ з профілем, змінами, відсутностями, аватаркою. Синхронізує profiles.py
-PEOPLE_DIR = os.environ.get("CREWHUB_PEOPLE_DIR", os.path.join(BASE_DIR, "people"))
+PEOPLE_DIR = os.environ.get("CREWHUB_PEOPLE_DIR", os.path.join(DATA_DIR, "people"))
 RECOVERED = {"from_backup": False}  # check_db відновив базу з копії: profiles.py підтягне свіжі дані з папок
 BACKUP_KEEP = int(os.environ.get("CREWHUB_BACKUP_KEEP", "30"))
 # «Завантажити копію» в «Правилах» кладе файл окремо: скільки б разів не натиснули, щоденні копії не витісняються
@@ -1790,6 +1806,51 @@ def _db_ok(path):
         return False
 
 
+def migrate_legacy_data():
+    """Версії до 17 тримали базу, особові папки й копії поруч з кодом (test_app/). Один раз переносимо їх
+    у папку даних, інакше нова версія стартувала б з порожньою базою. Стара база лишається поруч
+    перейменованою (страховка). Повертає текст для консолі або None, якщо переносити нічого; RuntimeError —
+    стару базу не вдалося скопіювати цілою (тоді вона лишається на місці, а сервер стартує з новою)."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if ("CREWHUB_DB" in os.environ or os.path.exists(DB_PATH) or not os.path.exists(LEGACY_DB)
+            or os.path.normcase(DATA_DIR) == os.path.normcase(BASE_DIR)):
+        return None
+    import shutil
+    moving = DB_PATH + ".moving"
+    src = sqlite3.connect(LEGACY_DB)
+    try:
+        src.execute("pragma wal_checkpoint(truncate)")  # усе з журналу WAL — у сам файл бази
+        dst = sqlite3.connect(moving)
+        src.backup(dst)  # цілісна копія навіть з відкритим записом
+        dst.close()
+    finally:
+        src.close()
+    if not _db_ok(moving):
+        os.remove(moving)
+        raise RuntimeError(f"копія старої бази {LEGACY_DB} не пройшла перевірку, вона лишилась на місці")
+    os.replace(moving, DB_PATH)
+    os.replace(LEGACY_DB, f"{LEGACY_DB}.перенесено-{date.today():%Y-%m-%d}")
+    for suffix in ("-wal", "-shm"):
+        if os.path.exists(LEGACY_DB + suffix):
+            os.remove(LEGACY_DB + suffix)
+    for name in ("people", "backups", "server_id.txt"):
+        old, new = os.path.join(BASE_DIR, name), os.path.join(DATA_DIR, name)
+        if not os.path.exists(old):
+            continue
+        if not os.path.exists(new):
+            shutil.move(old, new)
+        elif os.path.isdir(old):  # частина вже є в новому місці — доносимо те, чого там немає
+            for child in os.listdir(old):
+                if not os.path.exists(os.path.join(new, child)):
+                    shutil.move(os.path.join(old, child), os.path.join(new, child))
+    try:
+        with open(os.path.join(BASE_DIR, "ДЕ_ДАНІ.txt"), "w", encoding="utf-8") as f:
+            f.write(f"Дані CrewHub (база, особові папки, копії, settings.ini) тепер лежать окремо від програми:\n{DATA_DIR}\n")
+    except OSError:
+        pass
+    return f"Дані перенесено з папки програми в {DATA_DIR}"
+
+
 def list_backups():
     if not os.path.isdir(BACKUP_DIR):
         return []
@@ -1805,7 +1866,18 @@ def list_backups():
 # Фонові потоки звітують про себе: коли востаннє все пройшло добре і яка була помилка.
 # /health і банер в адмінці показують, якщо котрийсь замовк чи падає (раніше помилка лише друкувалась у консоль).
 WORKERS = {}
-WORKER_NAMES = {"sweep": "Контроль Wi-Fi", "backup": "Автобекап", "people": "Особові папки"}
+WORKER_NAMES = {"sweep": "Контроль Wi-Fi", "backup": "Автобекап", "people": "Особові папки", "config": "Файл settings.ini",
+                "lan": "Пристрої в мережі"}
+
+
+def config_changed(conn):
+    """Правила, точки чи Wi-Fi змінились в адмінці — одразу переписуємо settings.ini (див. settings_file.py).
+    Помилка запису файлу не має зламати збереження: база вже має нові значення, фон повторить запис."""
+    try:
+        import settings_file
+        settings_file.sync(conn)
+    except Exception:  # noqa: BLE001
+        log.exception("settings.ini не записано")
 
 
 def run_worker(name, every, step):
@@ -3372,6 +3444,7 @@ def admin():
     elif tab == "settings":
         ctx["settings"] = {k: setting(k) for k in DEFAULT_SETTINGS}
         ctx.update(backups=list_backups()[:10], backup_dir=BACKUP_DIR, backup_keep=BACKUP_KEEP, people_dir=PEOPLE_DIR,
+                   data_dir=DATA_DIR, settings_file=SETTINGS_FILE, db_path=DB_PATH,
                    backup_mirror=backup_mirror_dir() or "", mirror_error=RECOVERED.get("mirror_error"),
                    mirror_env=bool(os.environ.get("CREWHUB_BACKUP_MIRROR")))
         import profiles
@@ -3680,6 +3753,7 @@ def admin_rates():
                 audit(conn, actor["id"], "UPDATE", "users", u["id"], u["id"], {"hourly_rate": [u["hourly_rate"], rate]})
                 changed += 1
         conn.commit()
+        config_changed(conn)
     flash(f"Загальна ставка {rate} {setting('currency')}/год" + (f", оновлено працівників: {changed}. Відкриті зміни дорахуються за старою ставкою"
                                                                if scope != "default" else ". Її отримають нові працівники"))
     return redirect(request.referrer or url_for("admin", tab="employees"))
@@ -4002,6 +4076,7 @@ def admin_zones():
                     conn.execute("delete from networks where id = ?", (old["id"],))
                     audit(conn, actor["id"], "DELETE", "networks", old["id"], None, {"cidr": [old["cidr"], None]})
         conn.commit()
+        config_changed(conn)
     return redirect(url_for("admin", tab="zones"))
 
 
@@ -4030,6 +4105,7 @@ def admin_backup_mirror():
         meta_set(conn, "backup_mirror", path)
         audit(conn, current_user()["id"], "UPDATE", "settings", None, None, {"backup_mirror": [old, path]})
         conn.commit()
+        config_changed(conn)
     if path:
         with _people_lock:
             backup_db()
@@ -4064,6 +4140,7 @@ def admin_settings():
         if changes:
             audit(conn, current_user()["id"], "UPDATE", "settings", None, None, changes)
         conn.commit()
+        config_changed(conn)
     if bad:
         flash("Збережено, крім неправильних значень (лишились попередні): " + ", ".join(bad))
         return redirect(url_for("admin", tab="settings"))

@@ -8,6 +8,7 @@ _tmp = tempfile.mkdtemp()
 os.environ["CREWHUB_DEMO"] = "users"  # тестові акаунти без демо-історії
 os.environ["CREWHUB_TRUST_PROXY"] = "1"  # тести імітують тунель: IP телефона в X-Forwarded-For
 os.environ["CREWHUB_CSRF"] = "0"  # CSRF вимкнено для основних тестів; окремий тест вмикає його явно
+os.environ["CREWHUB_DATA"] = _tmp  # settings.ini, журнали — у тимчасовій папці, а не в ~/CrewHub-data
 os.environ["CREWHUB_DB"] = os.path.join(_tmp, "test.db")
 os.environ["CREWHUB_BACKUP_DIR"] = os.path.join(_tmp, "backups")
 os.environ["CREWHUB_PEOPLE_DIR"] = os.path.join(_tmp, "people")
@@ -15,6 +16,9 @@ os.environ["CREWHUB_PEOPLE_DIR"] = os.path.join(_tmp, "people")
 import crewhub_core as core  # noqa: E402
 import profiles  # noqa: E402
 import recover_admin as recover  # noqa: E402
+import settings_file  # noqa: E402
+
+core.log.addHandler(__import__("logging").NullHandler())  # попередження сервера не засмічують вивід тестів
 
 WORK_IP = "203.0.113.10"
 HOME_IP = "8.8.8.8"
@@ -28,6 +32,9 @@ class CrewHubBase(unittest.TestCase):
                 os.remove(core.DB_PATH + suffix)
         shutil.rmtree(core.PEOPLE_DIR, ignore_errors=True)
         shutil.rmtree(core.BACKUP_DIR, ignore_errors=True)
+        if os.path.exists(core.SETTINGS_FILE):
+            os.remove(core.SETTINGS_FILE)  # кожен тест — з чистою папкою даних
+        settings_file._state.update(file=None, db=None, server={})
         profiles._state.update(last_scan=0.0, warning=None)
         core._throttle.reset()  # ліміти спроб входу не переходять з тесту в тест
         core._stats_cache.update(at=0.0, data=None)  # кеші «Огляду» теж

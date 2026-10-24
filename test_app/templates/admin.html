@@ -428,6 +428,15 @@
 <div class="card"><button class="primary">{{ icon('check', 'sm') }}Зберегти правила</button>
   <span class="muted small" style="margin-left:8px">Нові множники перераховують і минулі зміни в табелі. Перед зміною правил посеред місяця вивантажте зарплату в CSV.</span></div>
 </form>
+<div class="card">
+  <div class="card-head"><h3>{{ icon('store') }} Де лежать дані</h3><span class="muted small">окремо від програми — оновлення їх не чіпає</span></div>
+  <p class="muted small" style="margin-top:0">Нову версію CrewHub можна розпакувати поверх старої чи в іншу папку: люди, зміни, правила й точки лишаться.</p>
+  <dl class="kv small">
+    <dt>Папка даних</dt><dd><code>{{ data_dir }}</code></dd>
+    <dt>Правила й точки</dt><dd><code>{{ settings_file }}</code> — текстовий файл: зміни тут записуються в нього самі, а правка файлу (Блокнотом) підхоплюється за 10 секунд</dd>
+    <dt>База</dt><dd><code>{{ db_path }}</code></dd>
+  </dl>
+</div>
 <div class="grid-2">
 <div class="card">
   <div class="card-head"><h3>{{ icon('users') }} Особові папки</h3></div>

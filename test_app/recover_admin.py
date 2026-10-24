@@ -44,6 +44,7 @@ def pick_admin(conn, wanted=None):
 
 
 def main(argv):
+    core.migrate_legacy_data()  # стара версія тримала базу поруч з кодом
     core.init_db(seed=False)
     conn = core.connect()
     admin = pick_admin(conn, argv[1] if len(argv) > 1 else None)

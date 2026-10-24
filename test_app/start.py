@@ -11,9 +11,12 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 
-from crewhub_core import BASE_DIR, DB_PATH, app, check_db, get_local_ip, init_db, local_ips, start_backups, start_sweeper
+import settings_file
+from crewhub_core import (DATA_DIR, DB_PATH, LOG_DIR, app, check_db, get_local_ip, init_db, local_ips, migrate_legacy_data,
+                          start_backups, start_sweeper)
 
-PORT = int(os.environ.get("CREWHUB_PORT", "5000"))
+# Порт: змінна середовища → [server] port у settings.ini (папка даних) → 5000
+PORT = int(os.environ.get("CREWHUB_PORT") or settings_file.port() or settings_file.DEFAULT_PORT)
 
 
 class Colors:
@@ -47,9 +50,8 @@ def visible_len(s):
 
 
 # === ЛОГ ===
-# Один файл logs/crewhub.log з ротацією (5 × 1 МБ): не росте безкінечно і не множиться з кожним перезапуском.
-# Сюди пишуть помилки запитів, фонових потоків (контроль Wi-Fi, бекап, папки) і запуску.
-LOG_DIR = os.path.join(BASE_DIR, "logs")
+# Один файл logs/crewhub.log у папці даних з ротацією (5 × 1 МБ): не росте безкінечно і не множиться з кожним
+# перезапуском. Сюди пишуть помилки запитів, фонових потоків (контроль Wi-Fi, бекап, папки) і запуску.
 os.makedirs(LOG_DIR, exist_ok=True)
 log_path = os.path.join(LOG_DIR, "crewhub.log")
 _handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
@@ -195,6 +197,15 @@ if __name__ == "__main__":
         print(f"{Colors.RED} Порт {PORT} уже зайнято: CrewHub (чи інша програма) вже працює. Другий запуск не потрібен.{Colors.RESET}")
         sys.exit(0)  # 0 — щоб start.sh/start.bat не перезапускали його по колу
 
+    try:
+        moved = migrate_legacy_data()
+    except Exception as e:  # noqa: BLE001 — перенесення не має заважати запуску: стара база лишається на місці
+        master_log.exception("Перенесення даних: %s", e)
+        moved = f"Не вдалося перенести дані зі старої папки ({e}). Подробиці в {log_path}"
+    if moved:
+        master_log.warning(moved)
+        print_status("Перенесення даних у папку даних", not moved.startswith("Не вдалося"), moved)
+    print_status("Папка даних", True, DATA_DIR)
     problem = check_db()
     if problem:
         print_status("Перевірка бази", False, problem) if RICH else print(f"{Colors.YELLOW} {problem}{Colors.RESET}")
@@ -208,12 +219,19 @@ if __name__ == "__main__":
         print_status("База SQLite", False)
         raise
     import crewhub_core
+    try:
+        settings_file.sync()
+        print_status("Правила й точки (settings.ini)", True, crewhub_core.SETTINGS_FILE)
+    except Exception as e:  # noqa: BLE001
+        master_log.exception("settings.ini: %s", e)
+        print_status("Правила й точки (settings.ini)", False, str(e))
+    settings_file.start_sync()
     print_status("Часовий пояс", True, crewhub_core.SERVER_TZ)
     start_sweeper()
     print_status("Контроль Wi-Fi (фон)", True)
     import profiles
     profiles.start_folder_sync()
-    print_status("Особові папки працівників", True, os.path.relpath(profiles.core.PEOPLE_DIR))
+    print_status("Особові папки працівників", True, profiles.core.PEOPLE_DIR)
     start_backups()
     print_status("Автобекап бази (щодня)", True)
     try:
@@ -236,7 +254,7 @@ if __name__ == "__main__":
         time.sleep(1.5)
         requests_meter = tui.Requests()
         tui.attach_request_counter(requests_meter)
-        dashboard = tui.Dashboard(url, INFO, requests_meter, os.path.relpath(log_path))
+        dashboard = tui.Dashboard(url, INFO, requests_meter, log_path)
         dashboard.start()
         import atexit
         atexit.register(dashboard.stop)  # повертаємо звичайний екран терміналу після Ctrl+C
