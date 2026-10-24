@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon with context %}
+{% block title %}Реєстрація{% endblock %}
+{% block guest %}
+<div class="login-wrap">
+  <div class="card login-card">
+    <div class="brand" style="padding:0 0 6px"><span class="logo">{{ icon('logo') }}</span>{{ company }}</div>
+    {% if done %}
+      <div class="empty" style="padding:18px 0">{{ icon('check') }}<b>Заявку надіслано, {{ name.split()[0] }}!</b></div>
+      <p class="muted center">Заявка пішла адміністратору й модераторам. Поки її не перевірять і не підтвердять, увійти не вийде. Після підтвердження увійдіть зі своїм номером і паролем.</p>
+      <a class="btn primary xl" href="{{ url_for('login') }}">До входу</a>
+    {% else %}
+      <p class="muted" style="margin:0 0 20px">Реєстрація працівника. Номер телефону буде вашим логіном.</p>
+      <form method="post" class="stack" id="regForm">
+        <input type="hidden" name="device_id" id="regDevice">
+        <div><label>Ім'я та прізвище</label><input name="full_name" value="{{ form.full_name or '' }}" autocomplete="name" required></div>
+        <div><label>Номер телефону</label><input name="phone" type="tel" inputmode="tel" value="{{ form.phone or '' }}" autocomplete="tel" placeholder="067 123 45 67" required>
+          <small class="muted" id="phoneHint"></small></div>
+        <div><label>Пароль, від 6 символів</label><input name="password" type="password" minlength="6" autocomplete="new-password" required></div>
+        <div><label>Повторіть пароль</label><input name="password2" type="password" minlength="6" autocomplete="new-password" required></div>
+        <button class="primary xl">Зареєструватися</button>
+      </form>
+      <p class="center" style="margin:16px 0 0">Вже є акаунт? <a href="{{ url_for('login') }}"><b>Увійти</b></a></p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Підказка, як буде записано номер: той самий формат, що й на сервері
+  (function () {
+    const f = document.getElementById("regForm"); if (!f) return;
+    // Той самий id пристрою, що й у годиннику зміни: сервер запам'ятає цей телефон як телефон людини
+    try { let id = localStorage.getItem("crewhub_device"); if (!id) { id = "web-" + Math.random().toString(16).slice(2, 10); localStorage.setItem("crewhub_device", id); } f.device_id.value = id; } catch (e) {}
+    const norm = (raw) => {
+      let d = raw.replace(/\D/g, "");
+      if (d.length === 10 && d[0] === "0") d = "38" + d; else if (d.length === 9) d = "380" + d;
+      if (d.startsWith("380") && d.length !== 12) return null;
+      return d.length >= 10 && d.length <= 15 ? "+" + d : null;
+    };
+    const fmt = (p) => p.length === 13 ? `${p.slice(0, 4)} ${p.slice(4, 6)} ${p.slice(6, 9)} ${p.slice(9, 11)} ${p.slice(11)}` : p;
+    f.phone.oninput = () => { const p = norm(f.phone.value); phoneHint.textContent = f.phone.value ? (p ? "Логін: " + fmt(p) : "Перевірте номер") : ""; };
+    f.phone.oninput();
+    f.onsubmit = (e) => { if (f.password.value !== f.password2.value) { e.preventDefault(); toast("Паролі не збігаються"); } };
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, avatar, empty, month_nav, bars with context %}
+{% block title %}{{ u.full_name }}{% endblock %}
+{% block actions %}
+  <a class="btn sm" href="{{ url_for('admin', tab='employees') }}">{{ icon('left', 'sm') }}<span class="hide-mobile">Усі працівники</span></a>
+{% endblock %}
+{% block body %}
+{% if temp_pw %}
+<div class="banner warn">{{ icon('shield') }}<div class="grow">Тимчасовий пароль для {{ u.full_name }}: <b class="mono" style="font-size:18px">{{ temp_pw }}</b>
+  <div class="small">Покажеться лише зараз. Передайте його працівнику: при вході він одразу задасть свій пароль.</div></div>
+  <button class="sm" onclick="navigator.clipboard && navigator.clipboard.writeText('{{ temp_pw }}'); toast('Скопійовано')">{{ icon('copy', 'sm') }}Копіювати</button></div>
+{% endif %}
+<div class="grid-2">
+  <div>
+    <div class="card profile-hero">
+      <form method="post" action="{{ url_for('upload_photo', uid=u.id) }}" enctype="multipart/form-data" class="photo-edit">
+        {{ avatar(u, 'lg') }}
+        <label title="Змінити фото">{{ icon('camera', 'sm') }}<input type="file" name="photo" accept="image/*" onchange="this.form.requestSubmit()"></label>
+      </form>
+      <h2 style="margin-top:12px">{{ u.full_name }}</h2>
+      <div class="muted">{{ u.job_title or '' }}{% if u.department %} · {{ u.department }}{% endif %} · {{ ROLES[u.role] }}</div>
+      <p><span class="pill {{ 'ok' if u.status == 'active' else 'warn' }}">{{ STATUSES[u.status] }}</span>
+        {% if open_shift %}<span class="pill {{ 's-on_site' if open_shift.status == 'active' else 's-on_break' }}">на зміні з {{ open_shift.started_at|tm }} · {{ open_shift.worked_seconds|dur }}</span>{% endif %}</p>
+      <p style="margin:0"><b>{{ tenure_text(u.hire_date) }}</b></p>
+      <div class="row" style="justify-content:center;margin-top:12px">
+        {% if u.phone %}<a class="btn sm" href="tel:{{ u.phone }}">{{ icon('phone', 'sm') }}{{ u.phone|phone }}</a>{% endif %}
+        {% if u.telegram %}<a class="btn sm" href="https://t.me/{{ u.telegram|replace('@', '') }}" target="_blank">{{ icon('send', 'sm') }}{{ u.telegram }}</a>{% endif %}
+        {% if u.whatsapp|walink %}<a class="btn sm" href="{{ u.whatsapp|walink }}" target="_blank" rel="noopener">{{ icon('phone', 'sm') }}WhatsApp</a>{% endif %}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Години за тиждень</h3><span class="muted small">{{ week|sum(attribute='hours')|round(1) }} год</span></div>
+      {{ bars(week) }}
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{ icon('file') }} Особова папка</h3>
+        <a class="btn sm" href="{{ url_for('admin_employee_folder', uid=u.id) }}">{{ icon('download', 'sm') }}Завантажити</a></div>
+      <p class="muted small" style="margin:0">Усі дані {{ u.full_name }} лежать у папці <b>people/{{ u.folder or u.full_name }}</b> на сервері:
+        профіль, аватарка, зміни, відсутності, бонуси. Видалення папки видаляє акаунт.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{ icon('phone') }} Телефон людини</h3><span class="muted small">з нього вмикається автозміна</span></div>
+      {% for d in devices %}
+      <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div class="grow"><b>{{ d.name or 'Пристрій' }}</b><div class="muted small">прив'язано {{ d.created_at|dt }} · IP тоді {{ d.first_ip or '?' }}{% if d.last_seen_at %} · востаннє {{ d.last_seen_at|dt }}, IP {{ d.last_ip }}{% endif %}</div></div>
+        <form method="post" action="{{ url_for('admin_device_delete', uid=u.id, did=d.id) }}" data-confirm="Відв'язати {{ d.name or 'пристрій' }}? Наступний телефон, з якого прийде автопінг, прив'яжеться сам."><button class="sm">{{ icon('x', 'sm') }}Відв'язати</button></form>
+      </div>
+      {% else %}<div class="muted small">Ще не прив'язано. Телефон запам'ятається під час реєстрації або з першого автопінгу з робочого Wi-Fi.</div>{% endfor %}
+    </div>
+    {% if me.role == 'admin' and u.id != me.id %}
+    <div class="card">
+      <div class="card-head"><h3>{{ icon('shield') }} Доступ до акаунта</h3>
+        {% if u.must_change_password %}<span class="pill warn">чекає зміни пароля</span>{% endif %}</div>
+      <p class="muted small" style="margin-top:0">Логін: <b>{{ (u.phone|phone) or u.username }}</b>. Скидання дасть тимчасовий пароль, при вході працівник задасть свій.</p>
+      <div class="row">
+        <form method="post" action="{{ url_for('admin_reset_password', uid=u.id) }}" data-confirm="Скинути пароль для {{ u.full_name }}?">
+          <button>{{ icon('refresh', 'sm') }}Скинути пароль</button></form>
+        {% if remember_count %}
+        <form method="post" action="{{ url_for('admin_logout_all', uid=u.id) }}" data-confirm="Вийти на всіх пристроях {{ u.full_name }} ({{ remember_count }})? Наступного разу знадобиться логін і пароль.">
+          <button>{{ icon('logout', 'sm') }}Вийти на всіх ({{ remember_count }})</button></form>
+        {% endif %}
+        <form method="post" action="{{ url_for('admin_employee_delete', uid=u.id) }}"
+          data-confirm="Видалити акаунт {{ u.full_name }}? Разом з ним зникнуть усі його зміни, перерви і бонуси (його папка збережеться в backups/видалені). Якщо людина просто звільнилась, краще поставити статус «Звільнений».">
+          <button class="danger">{{ icon('x', 'sm') }}Видалити акаунт</button></form>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <form method="post" action="{{ url_for('admin_employee_save', uid=u.id) }}" class="card">
+    <div class="card-head"><h3>{{ icon('edit') }} Дані працівника</h3><span class="muted small">усі зміни пишуться в аудит</span></div>
+    <div class="form-grid">
+      <div class="full"><label>ПІБ</label><input name="full_name" value="{{ u.full_name }}" required></div>
+      <div><label>Посада</label><input name="job_title" value="{{ u.job_title or '' }}"></div>
+      <div><label>Відділ</label><input name="department" value="{{ u.department or '' }}"></div>
+      <div><label>Точка</label><select name="location_id"><option value="">—</option>{% for l in locations %}<option value="{{ l.id }}" {{ 'selected' if l.id == u.location_id }}>{{ l.name }}</option>{% endfor %}</select></div>
+      <div><label>Статус</label><select name="status">{% for k, v in STATUSES.items() %}<option value="{{ k }}" {{ 'selected' if k == u.status }}>{{ v }}</option>{% endfor %}</select></div>
+      <div><label>Ставка, {{ currency }}/год</label><input name="hourly_rate" value="{{ u.hourly_rate }}" inputmode="decimal"></div>
+      <div><label>Дата початку роботи</label><input type="date" name="hire_date" value="{{ u.hire_date or '' }}"></div>
+      <div><label>Телефон (це логін)</label><input name="phone" type="tel" value="{{ u.phone|phone }}" placeholder="067 123 45 67"></div>
+      <div><label>Telegram</label><input name="telegram" value="{{ u.telegram or '' }}"></div>
+      <div><label>WhatsApp</label><input name="whatsapp" type="tel" value="{{ u.whatsapp or '' }}" placeholder="067 123 45 67"></div>
+      <input type="hidden" name="photo_url" value="{{ u.photo_url or '' }}">
+      {% if me.role == 'admin' %}<div><label>Роль</label><select name="role">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == u.role }}>{{ v }}</option>{% endfor %}</select></div>{% endif %}
+      <div><label>Новий пароль</label><input name="password" type="password" placeholder="не змінювати" autocomplete="new-password"></div>
+    </div>
+    <p style="margin-bottom:0"><button class="primary">{{ icon('check', 'sm') }}Зберегти</button></p>
+  </form>
+</div>
+
+<div class="card-head" style="margin-top:6px">
+  {{ month_nav(nav, 'admin_employee', {'uid': u.id}) }}
+  <div class="row">
+    <button class="sm" data-dialog="shiftDlg" data-fill='{{ {"shift_id": "", "started_at": today ~ "T09:00", "ended_at": today ~ "T18:00", "hourly_rate": u.hourly_rate, "note": "", "title": "Додати зміну"}|tojson }}'>{{ icon('plus', 'sm') }}Зміна</button>
+    <button class="sm" data-dialog="adjDlg">{{ icon('trend', 'sm') }}Бонус / штраф</button>
+    <a class="btn sm" href="{{ url_for('admin_employee_csv', uid=u.id, month=nav.month) }}">{{ icon('download', 'sm') }}CSV</a>
+  </div>
+</div>
+<div class="grid">
+  <div class="card kpi"><span class="ic">{{ icon('list') }}</span><div><small>Змін</small><b>{{ totals.shifts }}</b></div></div>
+  <div class="card kpi"><span class="ic">{{ icon('clock') }}</span><div><small>Відпрацьовано</small><b>{{ totals.seconds|dur }}</b></div></div>
+  <div class="card kpi"><span class="ic warn">{{ icon('trend') }}</span><div><small>Бонуси / штрафи</small><b>{{ totals.adjust|money }}</b></div></div>
+  <div class="card kpi"><span class="ic ok">{{ icon('wallet') }}</span><div><small>До виплати</small><b>{{ totals.total|money }}</b>{% if totals.dayoff %}<small>з них дей-офф {{ totals.dayoff|money }}</small>{% endif %}</div></div>
+</div>
+<div class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Дата</th><th>Час</th><th class="hide-mobile">Точка</th><th class="hide-mobile">IP</th><th class="num">Години</th><th class="num">Сума</th><th></th></tr></thead>
+    <tbody>
+    {% for s in shifts %}
+    <tr>
+      <td class="nowrap"><b>{{ (s.started_at|dt)[:5] }}</b></td>
+      <td class="nowrap">{{ s.started_at|tm }}–{{ s.ended_at|tm }}
+        {% if s.status != 'closed' %}<span class="pill ok">триває</span>{% endif %}
+        {% if s.close_reason == 'wifi_lost' %}<span class="pill bad">втрата Wi-Fi</span>{% endif %}
+        {% if s.close_reason == 'auto_max_length' %}<span class="pill warn">автозакриття</span>{% endif %}
+        {% if s.is_edited %}<span class="pill plain">відредаговано</span>{% endif %}
+        {% if s.unpaid_break_seconds %}<div class="muted small">перерви {{ s.unpaid_break_seconds|dur }}</div>{% endif %}
+        {% if s.note %}<div class="muted small">{{ s.note }}</div>{% endif %}</td>
+      <td class="hide-mobile muted">{{ s.location or '' }}</td>
+      <td class="hide-mobile mono small">{{ s.start_ip or '' }}</td>
+      <td class="num">{{ s.worked_seconds|dur }}</td>
+      <td class="num"><b>{{ s.earnings|money }}</b><div class="muted small">{{ s.hourly_rate|money }}/год</div></td>
+      <td class="right"><button class="sm ghost" title="Редагувати" data-dialog="shiftDlg"
+        data-fill='{{ {"shift_id": s.id, "started_at": s.started_at|dtinput, "ended_at": (s.ended_at or now_ts)|dtinput, "hourly_rate": s.hourly_rate, "note": s.note or "", "title": "Редагувати зміну " ~ (s.started_at|dt)[:5]}|tojson }}'>{{ icon('edit', 'sm') }}</button></td>
+    </tr>
+    {% endfor %}
+    {% for a in adjustments %}
+    <tr><td><b>{{ a.day[8:] }}.{{ a.day[5:7] }}</b></td><td colspan="3">{{ 'Бонус' if a.amount > 0 else 'Штраф' }}: {{ a.reason }}</td><td></td>
+      <td class="num"><b style="color:var(--{{ 'ok' if a.amount > 0 else 'bad' }}-text)">{{ a.amount|money }}</b></td>
+      <td class="right"><form method="post" action="{{ url_for('admin_adjustment_delete', aid=a.id) }}" data-confirm="Скасувати {{ ('бонус' if a.amount > 0 else 'штраф') }} {{ a.amount|money }} ({{ a.reason }})?"><button class="sm ghost" title="Скасувати">{{ icon('x', 'sm') }}</button></form></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if not shifts and not adjustments %}{{ empty('У цьому місяці змін немає', 'list') }}{% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h3>{{ icon('shield') }} Останні підключення</h3><a class="small" href="{{ url_for('admin', tab='logs') }}">Увесь журнал</a></div>
+  <div class="table-wrap"><table><tbody>
+  {% for c in logs %}
+    <tr><td class="nowrap small">{{ c.created_at|dt }}</td><td><span class="pill {{ 'ok' if c.allowed else 'bad' }}">{{ EVENTS.get(c.event, c.event) }}</span></td>
+      <td class="mono">{{ c.ip or '' }}</td><td class="muted small hide-mobile">{{ c.details or c.device or '' }}</td></tr>
+  {% endfor %}
+  </tbody></table></div>
+  {% if not logs %}{{ empty('Підключень ще не було', 'wifi') }}{% endif %}
+</div>
+
+<dialog id="shiftDlg"><form method="post" action="{{ url_for('admin_shift_save') }}">
+  <div class="d-head"><h3 data-text="title">Зміна</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
+  <div class="d-body form-grid">
+    <input type="hidden" name="user_id" value="{{ u.id }}"><input type="hidden" name="shift_id">
+    <div><label>Початок</label><input type="datetime-local" name="started_at" required></div>
+    <div><label>Кінець</label><input type="datetime-local" name="ended_at" required></div>
+    <div><label>Ставка, {{ currency }}/год</label><input name="hourly_rate" inputmode="decimal"></div>
+    <div><label>Примітка</label><input name="note" placeholder="Причина правки"></div>
+    <p class="full muted small" style="margin:0">Відкриту зміну буде закрито вказаним часом. Правку видно працівнику і в журналі аудиту.</p>
+  </div>
+  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Зберегти</button></div>
+</form></dialog>
+
+<dialog id="adjDlg"><form method="post" action="{{ url_for('admin_adjustment') }}">
+  <div class="d-head"><h3>Бонус або штраф</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
+  <div class="d-body form-grid">
+    <input type="hidden" name="user_id" value="{{ u.id }}">
+    <div class="full segmented" style="display:flex">
+      <label class="check" style="flex:1"><input type="radio" name="kind" value="bonus" checked>Бонус</label>
+      <label class="check" style="flex:1"><input type="radio" name="kind" value="penalty">Штраф</label>
+    </div>
+    <div class="full segmented" style="display:flex">
+      <label class="check" style="flex:1"><input type="radio" name="unit" value="money" checked>Сума ({{ currency }})</label>
+      <label class="check" style="flex:1"><input type="radio" name="unit" value="pct">Відсоток (%)</label>
+    </div>
+    <div><label data-unit-label>Сума, {{ currency }}</label><input name="amount" inputmode="decimal" required></div>
+    <div><label>Дата</label><input type="date" name="day" value="{{ today }}"></div>
+    <div class="full"><label>Причина</label><input name="reason" required></div>
+    <p class="full muted small" style="margin:0" data-unit-hint hidden>Відсоток рахується від заробітку людини за той місяць, у який потрапляє дата (години + дей-офи, без інших бонусів і штрафів).</p>
+  </div>
+  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Додати</button></div>
+</form></dialog>
+<script>(function () {
+  var dlg = document.getElementById("adjDlg");
+  if (!dlg) return;
+  var lbl = dlg.querySelector("[data-unit-label]"), hint = dlg.querySelector("[data-unit-hint]"),
+      amt = dlg.querySelector("[name=amount]");
+  function sync() {
+    var pct = dlg.querySelector("[name=unit]:checked").value === "pct";
+    lbl.textContent = pct ? "Відсоток, %" : "Сума, {{ currency }}";
+    amt.placeholder = pct ? "напр. 10" : "";
+    hint.hidden = !pct;
+  }
+  dlg.querySelectorAll("[name=unit]").forEach(function (r) { r.addEventListener("change", sync); });
+  sync();
+})();</script>
+{% endblock %}

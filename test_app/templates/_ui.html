@@ -1,0 +1,142 @@
+{# Спільні макроси інтерфейсу: іконки, аватар, статуси. #}
+{% macro sprite() %}
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b50d2c"/><stop offset="1" stop-color="#ff4566"/></linearGradient>
+  </defs>
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M8.5 5.42A7.45 7.45 0 0 0 8.5 18.58M15.5 5.42A7.45 7.45 0 0 1 15.5 18.58" stroke-linecap="butt"/><circle cx="12" cy="12" r="2.5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 8L9 4l-3 8H2"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.3a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></symbol>
+  <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M2 2l20 20M8.5 16.3a5 5 0 0 1 7 0M5 12.6a10 10 0 0 1 5.2-2.7M16.7 10.9a10 10 0 0 1 2.3 1.7M2 8.8a15 15 0 0 1 4.2-2.8M10.7 5.1A15 15 0 0 1 22 8.8"/><circle cx="12" cy="20" r="1"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+  <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20M16 15h2"/><path d="M6 6V5a2 2 0 0 1 2-2h10"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+  <symbol id="i-coffee" viewBox="0 0 24 24"><path d="M17 8h1a4 4 0 0 1 0 8h-1M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/><path d="M6 2v2M10 2v2M14 2v2"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16M3 12a9 9 0 0 1 15.5-6.3L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M12 22s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="M23 6l-9.5 9.5-5-5L1 18"/><path d="M17 6h6v6"/></symbol>
+  <symbol id="i-utensils" viewBox="0 0 24 24"><path d="M3 2v7a3 3 0 0 0 6 0V2M6 2v20M21 15V2a5 5 0 0 0-5 5v6a2 2 0 0 0 2 2h3zM21 15v7"/></symbol>
+  <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 9l1.5-5h15L21 9M3 9v11h18V9M3 9h18M9 20v-6h6v6"/></symbol>
+</svg>
+{% endmacro %}
+
+{# Іконки: вбудований SVG-спрайт вище. Без зовнішніх шрифтів і скриптів — з'являються одразу, навіть без інтернету. #}
+{% macro icon(name, cls="") %}<svg class="icon {{ cls }}" data-fb="{{ name }}" aria-hidden="true"><use href="#i-{{ name }}"/></svg>{% endmacro %}
+
+{% macro avatar(u, size="") %}{% if u.photo_url %}<img class="avatar {{ size }}" src="{{ u.photo_url }}" alt="">{% else %}<span class="avatar {{ size }}">{{ (u.full_name or '?')[:1] }}</span>{% endif %}{% endmacro %}
+
+{% macro person(u, sub="", href="") %}{% if href %}<a class="person" href="{{ href }}">{% else %}<div class="person">{% endif %}{{ avatar(u) }}<div><b>{{ u.full_name }}</b>{% if sub %}<small>{{ sub }}</small>{% endif %}</div>{% if href %}</a>{% else %}</div>{% endif %}{% endmacro %}
+
+{% set STATE_LABELS = {'on_site': 'На точці', 'on_break': 'На перерві', 'wifi_lost': 'Втрачено Wi-Fi', 'idle_wifi': 'У Wi-Fi, без зміни', 'late': 'Спізнюється', 'scheduled': 'Скоро зміна', 'absent': 'Відсутній', 'off': 'Не на зміні'} %}
+{% macro state_pill(state) %}<span class="pill s-{{ state }}">{{ STATE_LABELS[state] }}</span>{% endmacro %}
+
+{% macro req_pill(status) %}<span class="pill {{ {'pending': 'warn', 'approved': 'ok', 'rejected': 'bad', 'cancelled': '', 'granted': 'brand', 'expired': ''}[status] }}">{{ REQUEST_STATUSES[status] }}</span>{% endmacro %}
+
+{% macro empty(text, ic="inbox") %}<div class="empty">{{ icon(ic) }}{{ text }}</div>{% endmacro %}
+
+{% macro month_nav(nav, endpoint, extra={}) %}<span class="month-nav"><a class="btn icon-btn ghost" href="{{ url_for(endpoint, month=nav.prev, **extra) }}">{{ icon('left') }}</a><span>{{ nav.title }}</span><a class="btn icon-btn ghost" href="{{ url_for(endpoint, month=nav.next, **extra) }}">{{ icon('right') }}</a></span>{% endmacro %}
+
+{% macro bars(week) %}<div class="bars">{% for d in week %}<div class="b {{ 'today' if d.today }}" title="{{ d.date }}: {{ d.hours }} год"><span class="v">{{ d.hours if d.hours else '' }}</span><div class="col" style="height: {{ [d.pct, 3]|max }}%"></div><span class="l">{{ d.label }}</span></div>{% endfor %}</div>{% endmacro %}
+
+{% set ABS_ICON = {'day_off': 'calendar', 'vacation': 'sun', 'sick_leave': 'alert'} %}
+{# Тиждень команди: зміни і відсутності. editable — для модератора (видалення, додавання) #}
+{% macro month_table(mg, editable=False, me_id=None) %}
+{% set ABBR = {'day_off': 'Д', 'vacation': 'В', 'sick_leave': 'Л'} %}
+{% if editable %}
+<div class="row month-mode" style="flex-wrap:wrap;margin-bottom:10px">
+  <span class="muted small">Клік по клітинці ставить:</span>
+  <span class="view-switch mode-switch"><a class="on" href="#" data-mode="shift">Зміни</a><a href="#" data-mode="dayoff">Дей-офи</a></span>
+</div>
+{% endif %}
+<div class="table-wrap month-wrap"><table class="month mode-shift{{ ' editable' if editable }}">
+  <thead><tr><th class="who">Працівник</th>{% for d in mg.days %}<th class="{{ 'today' if d.today }}{{ ' weekend' if d.weekend }}">{{ d.n }}<small>{{ d.label }}</small></th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for u in mg.users %}
+  <tr class="{{ 'mine' if u.id == me_id }}">
+    <td class="who"><b>{{ u.full_name }}</b><small>{{ mg.count[u.id] }} дн.</small></td>
+    {% for d in mg.days %}
+    {% set ab = mg.absences.get((u.id, d.iso)) %}{% set sc = mg.cells.get((u.id, d.iso)) %}
+    <td class="mcell{{ ' weekend' if d.weekend }}{{ ' on' if sc }}{{ ' ab a-' ~ ab.type if ab }}{{ ' pending' if ab and ab.status == 'pending' }}"
+        {% if editable %}data-uid="{{ u.id }}" data-day="{{ d.iso }}" data-ab="{{ ab.type if ab else '' }}" tabindex="0"{% endif %}
+        title="{{ u.full_name }} · {{ d.date.strftime('%d.%m') }}{{ ' · ' ~ sc if sc }}{{ ' · ' ~ REQUEST_TYPES[ab.type] if ab }}">{% if ab %}{{ ABBR[ab.type] }}{% elif sc %}{{ sc.split('–')[0].split(':')[0] }}{% endif %}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<script>(function () { const w = document.querySelectorAll(".month-wrap"), b = w[w.length - 1], t = b && b.querySelector("th.today");
+  if (t) b.scrollLeft = Math.max(0, t.offsetLeft - b.querySelector("th.who").offsetWidth - 60); })();</script>
+<div class="row small muted legend" style="margin-top:10px;flex-wrap:wrap">
+  <span class="mkey on">9</span>робоча зміна (година початку) <span class="mkey a-day_off">Д</span>дей-офф <span class="mkey a-vacation">В</span>відпустка <span class="mkey a-sick_leave">Л</span>лікарняний
+  {% if editable %}<span class="spacer"></span><span>Режим «Зміни» — клік ставить/прибирає зміну; «Дей-офи» — ставить/знімає дей-офф.</span>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro week_table(grid, editable=False, me_id=None, endpoint='admin', extra={}) %}
+<div class="table-wrap"><table class="week{{ ' week-5' if not grid.weekend }}">
+  <thead><tr><th>Працівник</th>{% for d in grid.days %}<th class="{{ 'today' if d.today }}{{ ' weekend' if d.weekend }}">{{ d.label }}<small>{{ d.date.strftime('%d.%m') }}</small></th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for u in grid.users %}
+  <tr class="{{ 'mine' if u.id == me_id }}">
+    <td class="who">{{ person(u, (grid.hours[u.id] ~ ' год за графіком') if grid.hours[u.id] else '') }}</td>
+    {% for d in grid.days %}
+    {% set ab = grid.absences.get((u.id, d.iso)) %}
+    <td class="cell{{ ' weekend' if d.weekend }}">
+      {% if ab %}
+        <span class="absence a-{{ ab.type }}{{ ' pending' if ab.status == 'pending' }}" title="{{ ab.starts_on }} – {{ ab.ends_on }}{{ ' · ' ~ ab.comment if ab.comment }}">
+          {{ icon(ABS_ICON[ab.type], 'sm') }}{{ REQUEST_TYPES[ab.type] }}{% if ab.status == 'pending' %}<small>чекає погодження</small>{% endif %}
+          {% if editable %}<form method="post" action="{{ url_for('admin_absence') }}" data-confirm="Зняти позначку «{{ REQUEST_TYPES[ab.type] }}» ({{ ab.starts_on }} – {{ ab.ends_on }})?">
+            <input type="hidden" name="cancel_id" value="{{ ab.id }}"><input type="hidden" name="week" value="{{ grid.days[0].iso }}"><input type="hidden" name="weekend" value="{{ '1' if grid.weekend }}"><button title="Зняти">×</button></form>{% endif %}
+        </span>
+      {% endif %}
+      {% for sc in grid.cells.get((u.id, d.iso), []) %}
+        <span class="slot">{{ sc.starts_at|tm }}–{{ sc.ends_at|tm }}<small>{{ sc.location or '' }}</small>
+          {% if editable %}<form method="post" action="{{ url_for('admin_schedule') }}"><input type="hidden" name="delete_id" value="{{ sc.id }}"><input type="hidden" name="week" value="{{ grid.days[0].iso }}"><button title="Видалити">×</button></form>{% endif %}</span>
+      {% endfor %}
+      {% if not ab and not grid.cells.get((u.id, d.iso)) and not d.weekend %}<span class="workday">робочий день</span>{% endif %}
+      {% if editable %}
+        <span class="cell-actions">
+          {% if not ab %}<button type="button" class="sm" title="Лікарняний, дей-офф або відпустка" data-dialog="absDlg" data-fill='{{ {"user_id": u.id, "starts_on": d.iso, "ends_on": d.iso, "who": u.full_name}|tojson }}'>{{ icon('alert', 'sm') }}</button>{% endif %}
+          <button type="button" class="sm" title="Додати зміну" data-dialog="addSlot" data-fill='{{ {"user_id": u.id, "day": d.iso, "who": u.full_name}|tojson }}'>{{ icon('plus', 'sm') }}</button>
+        </span>
+      {% endif %}
+    </td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<div class="row small muted legend" style="margin-top:10px;flex-wrap:wrap">
+  {% for t in ['sick_leave', 'day_off', 'vacation'] %}<span class="absence a-{{ t }}">{{ icon(ABS_ICON[t], 'sm') }}{{ REQUEST_TYPES[t] }}</span>{% endfor %}
+  <span class="absence a-vacation pending">чекає погодження</span>
+  <span class="spacer"></span>
+  <a href="{{ url_for(endpoint, tab='schedule', week=grid.days[0].iso, weekend=None if grid.weekend else '1') }}">{{ 'Сховати вихідні' if grid.weekend else 'Показати суботу й неділю' }}</a>
+</div>
+{% endmacro %}

@@ -1,0 +1,522 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, avatar, person, state_pill, req_pill, empty, month_nav, bars, week_table, month_table, STATE_LABELS with context %}
+{% block title %}{{ {'live': 'Огляд', 'employees': 'Працівники', 'requests': 'Запити', 'schedule': 'Графік змін', 'zones': 'Точки і Wi-Fi', 'logs': 'Журнал підключень', 'audit': 'Журнал редагувань', 'payroll': 'Зарплата', 'settings': 'Правила компанії'}[tab] }}{% endblock %}
+{% block actions %}
+  {% if tab in ('employees', 'payroll') and me.role == 'admin' %}<button class="sm" data-dialog="rateDlg">{{ icon('wallet', 'sm') }}<span class="hide-mobile">Загальна ставка</span></button>{% endif %}
+  {% if tab == 'employees' %}<button class="primary sm" data-dialog="newEmp">{{ icon('plus', 'sm') }}<span class="hide-mobile">Працівник</span></button>{% endif %}
+  {% if tab == 'payroll' %}<a class="btn primary sm" href="{{ url_for('admin_payroll_csv', month=month) }}">{{ icon('download', 'sm') }}<span class="hide-mobile">CSV</span></a>{% endif %}
+{% endblock %}
+{% macro registrations() %}
+{% if pending_users %}
+<div class="card" style="border-color:var(--warn)">
+  <div class="card-head"><h3>{{ icon('user') }} Нові реєстрації · {{ pending_users|length }}</h3><span class="muted small">увійти в систему людина зможе лише після вашого підтвердження</span></div>
+  {% for p in pending_users %}
+  <form method="post" action="{{ url_for('admin_registration', uid=p.id, decision='approve') }}" class="row" style="padding:10px 0;border-bottom:1px solid var(--line)">
+    {{ person(p, (p.phone|phone) ~ ' · ' ~ (p.hire_date or '') ~ ((' · ' ~ p.device) if p.device else '')) }}<span class="spacer"></span>
+    <input name="job_title" placeholder="Посада" style="flex:1 1 120px;max-width:170px">
+    <select name="location_id" style="flex:1 1 120px;max-width:170px">{% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
+    <input name="hourly_rate" value="{{ default_rate }}" inputmode="decimal" title="Ставка, {{ currency }}/год" style="width:90px">
+    {% if me.role == 'admin' %}<select name="role" title="Роль" style="width:auto">{% for k, v in ROLES.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>{% endif %}
+    <button formaction="{{ url_for('admin_registration', uid=p.id, decision='reject') }}" data-confirm-btn="Відхилити і видалити реєстрацію {{ p.full_name }}?">{{ icon('x', 'sm') }}Відхилити</button>
+    <button class="ok">{{ icon('check', 'sm') }}Підтвердити</button>
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+{% block body %}
+
+{% if tab == 'live' %}
+{% if pending_users %}<a class="banner warn" href="{{ url_for('admin', tab='requests') }}">{{ icon('user') }}<div><b>Нові реєстрації: {{ pending_users|length }}</b> · чекають вашого підтвердження, до того людина не може увійти</div><span class="spacer"></span>{{ icon('right', 'sm') }}</a>{% endif %}
+<div class="grid">
+  <div class="card kpi"><span class="ic ok">{{ icon('users') }}</span><div><small>Зараз на зміні</small><b id="k-active">{{ counts.on_site + counts.on_break + counts.wifi_lost }}</b></div></div>
+  <div class="card kpi"><span class="ic">{{ icon('clock') }}</span><div><small>Годин сьогодні</small><b id="k-hours">{{ stats.today_hours }}</b></div></div>
+  <div class="card kpi"><span class="ic warn">{{ icon('wallet') }}</span><div><small>Фонд за місяць</small><b id="k-month">{{ stats.month_total|money }}</b></div></div>
+  <a class="card kpi" href="{{ url_for('admin', tab='requests') }}" style="color:inherit"><span class="ic bad">{{ icon('inbox') }}</span><div><small>Запити чекають</small><b id="k-pending">{{ stats.pending }}</b></div></a>
+</div>
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h3>Хто зараз де</h3><span class="muted small">оновлюється автоматично</span></div>
+    <div class="row" style="margin-bottom:10px" id="chips">
+      {% for k in ['on_site', 'on_break', 'wifi_lost', 'idle_wifi', 'late', 'scheduled', 'absent', 'off'] %}
+      <button class="sm chip" data-state="{{ k }}"><span class="pill s-{{ k }} plain" style="padding:0 7px" id="c-{{ k }}">{{ counts[k] }}</span>{{ STATE_LABELS[k] }}</button>
+      {% endfor %}
+    </div>
+    <div id="liveList">
+      {% for r in rows %}
+      <div class="row live-row" data-state="{{ r.state }}" style="padding:10px 0;border-bottom:1px solid var(--line)">
+        {{ person(r.user, r.user.job_title or '', url_for('admin_employee', uid=r.user.id)) }}<span class="spacer"></span>{{ state_pill(r.state) }}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="card-head"><h3>Години команди за тиждень</h3><span class="muted small">{{ week|sum(attribute='hours')|round(1) }} год</span></div>
+      {{ bars(week) }}
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Безпека сьогодні</h3><a class="small" href="{{ url_for('admin', tab='logs') }}">Журнал</a></div>
+      <div class="kpi"><span class="ic {{ 'bad' if stats.denied_today else 'ok' }}">{{ icon('shield') }}</span>
+        <div><small>Відмов і підключень з чужих мереж</small><b id="k-denied">{{ stats.denied_today }}</b></div></div>
+    </div>
+  </div>
+</div>
+
+{% elif tab == 'employees' %}
+{{ registrations() }}
+
+<div class="card">
+  <div class="card-head">
+    <div class="segmented"><a href="{{ url_for('admin', tab='employees') }}" class="{{ 'on' if not archive }}">Активні</a><a href="{{ url_for('admin', tab='employees', archive='1') }}" class="{{ 'on' if archive }}">Архів</a></div>
+    <input id="empSearch" placeholder="Пошук" style="max-width:260px">
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Працівник</th><th>Роль</th><th class="hide-mobile">Точка</th><th class="hide-mobile">Статус</th><th class="hide-mobile">Стаж</th><th class="num">Ставка</th></tr></thead>
+    <tbody id="empRows">
+    {% for u in users %}
+    <tr data-q="{{ (u.full_name ~ ' ' ~ (u.job_title or '') ~ ' ' ~ u.username ~ ' ' ~ (u.phone or '') ~ ' ' ~ (u.phone|phone))|lower }}">
+      <td>{{ person(u, ((u.phone|phone) or u.username) ~ (' · ' ~ u.job_title if u.job_title else ''), url_for('admin_employee', uid=u.id)) }}</td>
+      <td>{% if me.role == 'admin' %}<select class="role-pick r-{{ u.role }}" data-uid="{{ u.id }}" data-was="{{ u.role }}" aria-label="Роль">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == u.role }}>{{ v }}</option>{% endfor %}</select>
+        {% else %}<span class="pill plain {{ 'brand' if u.role != 'employee' }}">{{ ROLES[u.role] }}</span>{% endif %}</td>
+      <td class="hide-mobile muted">{{ u.location or '—' }}</td>
+      <td class="hide-mobile"><span class="pill {{ {'active': 'ok', 'vacation': 'info', 'sick_leave': 'warn', 'dismissed': 'plain'}[u.status] }}">{{ STATUSES[u.status] }}</span></td>
+      <td class="hide-mobile muted small">{{ tenure_text(u.hire_date)|replace('В команді з ', '') }}</td>
+      <td class="num">{{ u.hourly_rate|money }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if not users %}{{ empty('Тут поки нікого', 'users') }}{% endif %}
+</div>
+<dialog id="newEmp"><form method="post" action="{{ url_for('admin_employee_new') }}">
+  <div class="d-head"><h3>Новий працівник</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
+  <div class="d-body form-grid">
+    <div class="full"><label>ПІБ</label><input name="full_name" required></div>
+    <div><label>Посада</label><input name="job_title"></div>
+    <div><label>Точка</label><select name="location_id">{% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select></div>
+    <div><label>Номер телефону (це логін)</label><input name="phone" type="tel" placeholder="067 123 45 67" required></div>
+    <div><label>Пароль, від 6 символів</label><input name="password" minlength="6" required></div>
+    <div><label>Ставка, {{ currency }}/год</label><input name="hourly_rate" value="{{ default_rate }}" inputmode="decimal"></div>
+    <div><label>Дата початку роботи</label><input type="date" name="hire_date"></div>
+    {% if me.role == 'admin' %}<div><label>Роль</label><select name="role">{% for k, v in ROLES.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>{% endif %}
+  </div>
+  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Додати</button></div>
+</form></dialog>
+
+{% elif tab == 'requests' %}
+{{ registrations() }}
+{% set pending = requests|selectattr('status', 'equalto', 'pending')|list %}
+{% set done = requests|rejectattr('status', 'equalto', 'pending')|list %}
+<h3 style="margin:4px 0 12px">Чекають рішення · {{ pending|length }}</h3>
+{% for r in pending %}
+<div class="card">
+  <div class="row">
+    <span class="kpi"><span class="ic warn">{{ icon({'day_off': 'calendar', 'vacation': 'sun', 'sick_leave': 'alert', 'shift_swap': 'refresh', 'time_edit': 'edit', 'shift_add': 'plus'}[r.type]) }}</span></span>
+    <div class="grow"><b>{{ r.author }}</b> · {{ REQUEST_TYPES[r.type] }}<div class="muted small">{{ r.created_at|dt }}</div></div>
+  </div>
+  <div style="margin:12px 0">
+    {% if r.type == 'time_edit' %}
+      <div class="diff">Було: <s>{{ r.s_start|dt }} – {{ r.s_end|tm }}</s><br>Просить: <ins><b>{{ r.proposed_start|dt }} – {{ r.proposed_end|tm }}</b></ins></div>
+    {% elif r.type == 'shift_add' %}
+      <div class="diff">Просить додати зміну: <ins><b>{{ r.proposed_start|dt }} – {{ r.proposed_end|tm }}</b></ins> <span class="muted">({{ (r.proposed_end - r.proposed_start)|dur }})</span></div>
+    {% elif r.type == 'shift_swap' %}
+      Зміна <b>{{ r.sc_start|dt }}–{{ r.sc_end|tm }}</b> переходить до <b>{{ r.swap_name }}</b>
+      <span class="pill {{ 'ok' if r.swap_accepted == 1 else 'warn' }}">{{ 'колега погодився' if r.swap_accepted == 1 else 'колега ще не відповів' }}</span>
+    {% elif r.type == 'day_off' and not r.starts_on %}<b>Дозвіл на дей-офф</b> <span class="muted">(після дозволу людина сама обирає день протягом 3 днів)</span>
+    {% else %}<b>{{ r.starts_on }} – {{ r.ends_on }}</b> <span class="muted">(зміни в графіку на ці дні буде знято)</span>{% endif %}
+    {% if r.comment %}<div class="muted" style="margin-top:6px">«{{ r.comment }}»</div>{% endif %}
+  </div>
+  <form method="post" action="{{ url_for('admin_request', rid=r.id, decision='approve') }}" class="row">
+    <input name="comment" placeholder="Коментар працівнику (необов'язково)" class="grow" style="flex:1 1 220px">
+    <button formaction="{{ url_for('admin_request', rid=r.id, decision='reject') }}">{{ icon('x', 'sm') }}Відхилити</button>
+    <button class="ok" {{ 'disabled' if r.type == 'shift_swap' and r.swap_accepted != 1 }}>{{ icon('check', 'sm') }}Схвалити</button>
+  </form>
+</div>
+{% else %}<div class="card">{{ empty('Усі запити розглянуто', 'check') }}</div>{% endfor %}
+{% if done %}
+<div class="card">
+  <div class="card-head"><h3>Історія</h3></div>
+  <div class="table-wrap"><table><tbody>
+  {% for r in done %}
+    <tr><td><b>{{ r.author }}</b></td><td>{{ REQUEST_TYPES[r.type] }}</td>
+      <td class="muted small hide-mobile">{% if r.starts_on %}{{ r.starts_on }} – {{ r.ends_on }}{% elif r.proposed_start %}{{ r.proposed_start|dt }}{% elif r.sc_start %}{{ r.sc_start|dt }}{% endif %}</td>
+      <td>{{ req_pill(r.status) }}</td></tr>
+  {% endfor %}
+  </tbody></table></div>
+</div>
+{% endif %}
+
+{% elif tab == 'schedule' and mgrid %}
+<div class="card">
+  <div class="card-head">
+    <span class="month-nav"><a class="btn icon-btn ghost" href="{{ url_for('admin', tab='schedule', view='month', month=mgrid.prev) }}">{{ icon('left') }}</a><span>{{ mgrid.title }}</span><a class="btn icon-btn ghost" href="{{ url_for('admin', tab='schedule', view='month', month=mgrid.next) }}">{{ icon('right') }}</a></span>
+    <div class="row">
+      <span class="view-switch"><a href="{{ url_for('admin', tab='schedule') }}">Тиждень</a><a class="on" href="{{ url_for('admin', tab='schedule', view='month') }}">Місяць</a></span>
+      <form method="post" action="{{ url_for('schedule_fill') }}" data-confirm="Поставити всім стандартні зміни на всі робочі дні {{ mgrid.title|lower }}? Дні відсутності і вже заповнені не чіпаються.">
+        <input type="hidden" name="month" value="{{ mgrid.month }}"><button class="sm primary">{{ icon('calendar', 'sm') }}Розставити робочі дні</button></form>
+    </div>
+  </div>
+  {{ month_table(mgrid, editable=True) }}
+</div>
+{% elif tab == 'schedule' %}
+<div class="card">
+  <div class="card-head">
+    <span class="month-nav"><a class="btn icon-btn ghost" href="{{ url_for('admin', tab='schedule', week=grid.prev, weekend='1' if grid.weekend else None) }}">{{ icon('left') }}</a><span>{{ grid.title }}</span><a class="btn icon-btn ghost" href="{{ url_for('admin', tab='schedule', week=grid.next, weekend='1' if grid.weekend else None) }}">{{ icon('right') }}</a></span>
+    <div class="row">
+      <span class="view-switch"><a class="on" href="{{ url_for('admin', tab='schedule') }}">Тиждень</a><a href="{{ url_for('admin', tab='schedule', view='month') }}">Місяць</a></span>
+      <a class="btn sm" href="{{ url_for('admin', tab='schedule') }}">Сьогодні</a>
+      <button class="sm primary" data-dialog="absDlg">{{ icon('alert', 'sm') }}Позначити відсутність</button>
+      <form method="post" action="{{ url_for('admin_schedule') }}" data-confirm="Скопіювати всі зміни з попереднього тижня на цей?">
+        <input type="hidden" name="action" value="copy_week"><input type="hidden" name="week" value="{{ grid.days[0].iso }}">
+        <button class="sm">{{ icon('copy', 'sm') }}<span class="hide-mobile">Скопіювати мин. тиждень</span></button></form>
+    </div>
+  </div>
+  <p class="muted small" style="margin-top:0">Пн–Пт за замовчуванням робочі дні. Тут видно, хто на лікарняному, у дей-оффі чи відпустці. Відпустки й лікарняні погоджуються у «Запитах», дей-оффи дає тімлід. Щоб швидко розставити зміни всій команді, відкрийте «Місяць».</p>
+  {{ week_table(grid, editable=True) }}
+</div>
+<dialog id="absDlg"><form method="post" action="{{ url_for('admin_absence') }}">
+  <div class="d-head"><h3>Відсутність</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
+  <div class="d-body form-grid">
+    <input type="hidden" name="week" value="{{ grid.days[0].iso }}"><input type="hidden" name="weekend" value="{{ '1' if grid.weekend }}">
+    <div class="full"><label>Працівник</label><select name="user_id">{% for u in users %}<option value="{{ u.id }}">{{ u.full_name }}</option>{% endfor %}</select></div>
+    <div class="full"><label>Що</label><select name="type"><option value="sick_leave">Лікарняний</option><option value="day_off">Дей-офф</option><option value="vacation">Відпустка</option></select></div>
+    <div><label>З</label><input type="date" name="starts_on" value="{{ grid.days[0].iso }}" required></div>
+    <div><label>По (включно)</label><input type="date" name="ends_on"></div>
+    <div class="full"><label>Коментар</label><input name="comment"></div>
+  </div>
+  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Позначити</button></div>
+</form></dialog>
+<dialog id="addSlot"><form method="post" action="{{ url_for('admin_schedule') }}" id="slotForm">
+  <div class="d-head"><h3>Зміна: <span data-text="who"></span></h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
+  <div class="d-body form-grid">
+    <input type="hidden" name="user_id"><input type="hidden" name="week" value="{{ grid.days[0].iso }}">
+    <input type="hidden" name="starts_at"><input type="hidden" name="ends_at">
+    <div class="full"><label>День</label><input type="date" name="day" required></div>
+    <div><label>З</label><input type="time" name="t_from" value="09:00" required></div>
+    <div><label>До</label><input type="time" name="t_to" value="18:00" required></div>
+    <div class="full"><label>Точка</label><select name="location_id">{% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select></div>
+    <div class="full"><label>Примітка</label><input name="note"></div>
+  </div>
+  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Додати</button></div>
+</form></dialog>
+
+{% elif tab == 'zones' %}
+<div class="banner info">{{ icon('wifi') }}<div>Ваш IP зараз: <b class="mono">{{ your_ip }}</b> · сервер у локальній мережі: <b class="mono">{{ server_ip }}</b></div></div>
+<div class="card">
+  <div class="card-head"><h3>{{ icon('phone') }} Швидке підключення телефонів</h3>
+    <button class="sm" type="button" onclick="printConnect()">{{ icon('download', 'sm') }}<span class="hide-mobile">Друк</span></button></div>
+  <p class="muted small" style="margin-top:0">Працівник відкриває CrewHub на телефоні і натискає «Сканувати QR-код» (або вводить код). Застосунок підключиться до сервера сам,
+    а якщо до точки прикріплено Wi-Fi, ще й запропонує підключитися до нього. Працівник бачить у застосунку <b>{{ connect.company }}</b>, а не адресу сервера.</p>
+  <div class="connect-grid" id="connectGrid">
+  {% for l, nets in zones if l.is_active %}
+    <div class="connect-card">
+      <div class="qr" data-qr="{{ connect.links[l.id] }}"></div>
+      <b>{{ connect.company }}</b><span class="muted small">{{ l.name }}{% if l.wifi_ssid %} · Wi-Fi «{{ l.wifi_ssid }}»{% endif %}</span>
+    </div>
+  {% endfor %}
+  </div>
+  {% if connect.code %}<div class="row" style="margin-top:12px">{{ icon('shield', 'sm') }}<span>Код підключення:</span><b class="mono" style="font-size:20px;letter-spacing:2px">{{ connect.code }}</b></div>{% endif %}
+  {% if connect.url.startswith('http://127.') %}<div class="banner warn small" style="margin-top:10px">{{ icon('alert', 'sm') }}Сервер не бачить локальну мережу: відкрийте цю сторінку за адресою з вікна сервера, тоді QR буде правильний</div>{% endif %}
+</div>
+{% if me.role == 'admin' and bind_cidr %}
+<div class="card">
+  {% if your_zone %}
+  <div class="row">{{ icon('check') }}<div class="grow">Мережа, з якої ви зараз зайшли, вже прив'язана до точки <b>{{ your_zone.name }}</b>: звідси можна вмикати таймер.</div></div>
+  {% else %}
+  <form method="post" action="{{ url_for('admin_zones') }}" class="row">
+    <input type="hidden" name="action" value="bind_current">
+    <div class="grow" style="flex:1 1 260px">{{ icon('wifi') }} <b>Прив'язати мою поточну мережу</b>
+      <div class="muted small">Буде додано <b class="mono">{{ bind_cidr }}</b>. Відкрийте цю сторінку з телефону або ПК у Wi-Fi точки, і працівники зможуть вмикати таймер лише з цієї мережі.</div></div>
+    <select name="location_id" style="flex:0 1 200px">{% for l, nets in zones %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
+    <button class="primary">{{ icon('plus', 'sm') }}Прив'язати</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% if me.role == 'admin' and unknown %}
+<div class="card" style="border-color:var(--warn)">
+  <div class="card-head"><h3>{{ icon('alert') }} Спроби з невідомих мереж</h3><span class="muted small">за 3 дні</span></div>
+  <p class="muted small" style="margin-top:0">Хтось пробував почати зміну з мережі, якої немає в жодній точці. Якщо це Wi-Fi вашої точки, прив'яжіть його тут.</p>
+  {% for u in unknown %}
+  <form method="post" action="{{ url_for('admin_zones') }}" class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">
+    <input type="hidden" name="action" value="network"><input type="hidden" name="cidr" value="{{ u.cidr }}">
+    <input type="hidden" name="label" value="З журналу: {{ u.who or '' }}">
+    <div class="grow" style="flex:1 1 220px"><b class="mono">{{ u.ip }}</b> <span class="muted small">→ зона {{ u.cidr }}</span>
+      <div class="muted small">{{ u.who or 'невідомо' }} · {{ u.last|dt }} · спроб: {{ u.count }}</div></div>
+    <select name="location_id" style="flex:0 1 180px">{% for l, nets in zones %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
+    <button class="sm">{{ icon('plus', 'sm') }}Прив'язати</button>
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
+<p class="muted" style="margin-top:-4px">У локальній мережі сервер бачить адреси 192.168.x.x, тому підмережу Wi-Fi додано автоматично. У бойовій версії в інтернеті сервер бачить публічний IP роутера, і кожній точці потрібен статичний IP від провайдера.</p>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+{% for l, nets in zones %}
+<div class="card">
+  <div class="card-head">
+    <div class="row"><span class="kpi"><span class="ic {{ '' if l.is_active else 'bad' }}">{{ icon('store') }}</span></span><div><h3>{{ l.name }}</h3><div class="muted small">{{ l.address or '' }}</div></div></div>
+    <form method="post" action="{{ url_for('admin_zones') }}"><input type="hidden" name="action" value="toggle"><input type="hidden" name="location_id" value="{{ l.id }}">
+      <button class="sm">{{ 'Вимкнути' if l.is_active else 'Увімкнути' }}</button></form>
+  </div>
+  {% for n in nets %}
+    <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">{{ icon('wifi', 'sm') }}<b class="mono">{{ n.cidr }}</b><span class="muted small grow">{{ n.label or '' }}</span>
+      {% if me.role == 'admin' %}<form method="post" action="{{ url_for('admin_zones') }}" data-confirm="Видалити мережу {{ n.cidr }}?"><input type="hidden" name="action" value="delete_network"><input type="hidden" name="network_id" value="{{ n.id }}"><button class="sm ghost">{{ icon('x', 'sm') }}</button></form>{% endif %}</div>
+  {% else %}<div class="banner warn small" style="margin:0">{{ icon('alert', 'sm') }}Немає Wi-Fi зон: з цієї точки зміну не почати</div>{% endfor %}
+  {% if me.role == 'admin' %}
+  <form method="post" action="{{ url_for('admin_zones') }}" class="row" style="margin-top:12px;flex-wrap:wrap">
+    <input type="hidden" name="action" value="wifi"><input type="hidden" name="location_id" value="{{ l.id }}">
+    <span class="muted small" style="flex:1 1 100%">Прикріплений Wi-Fi (для QR: телефон підключиться до нього сам)</span>
+    <input name="wifi_ssid" placeholder="Назва Wi-Fi" value="{{ l.wifi_ssid or '' }}" maxlength="32" style="flex:1 1 120px">
+    <input name="wifi_password" type="password" placeholder="Пароль" value="{{ l.wifi_password or '' }}" maxlength="63" style="flex:1 1 110px" autocomplete="off">
+    <button class="sm">{{ icon('check', 'sm') }}</button>
+  </form>
+  {% elif l.wifi_ssid %}<div class="muted small" style="margin-top:8px">{{ icon('wifi', 'sm') }} Прикріплений Wi-Fi: «{{ l.wifi_ssid }}»</div>{% endif %}
+  {% if me.role == 'admin' %}
+  <form method="post" action="{{ url_for('admin_zones') }}" class="row" style="margin-top:12px">
+    <input type="hidden" name="action" value="network"><input type="hidden" name="location_id" value="{{ l.id }}">
+    <input name="cidr" placeholder="{{ your_ip }} або 203.0.113.0/29" class="grow mono" style="flex:1 1 160px" required>
+    <input name="label" placeholder="Підпис" style="flex:1 1 100px">
+    <button class="primary sm">{{ icon('plus', 'sm') }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+<div class="card">
+  <h3 style="margin-bottom:12px">Нова точка</h3>
+  <form method="post" action="{{ url_for('admin_zones') }}" class="stack"><input type="hidden" name="action" value="location">
+    <input name="name" placeholder="Назва" required><input name="address" placeholder="Адреса"><button class="primary">{{ icon('plus', 'sm') }}Додати точку</button></form>
+</div>
+</div>
+{% if me.role != 'admin' %}<p class="muted">Wi-Fi зони змінює лише адміністратор.</p>{% endif %}
+
+{% elif tab == 'logs' %}
+<div class="card">
+  <div class="card-head"><div class="segmented">
+    <a href="{{ url_for('admin', tab='logs') }}" class="{{ 'on' if not request.args.get('only') }}">Усі</a>
+    <a href="{{ url_for('admin', tab='logs', only='bad') }}" class="{{ 'on' if request.args.get('only') == 'bad' }}">Лише підозрілі</a></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Час</th><th>Хто</th><th>Подія</th><th>IP</th><th class="hide-mobile">Точка</th><th class="hide-mobile">Пристрій</th></tr></thead>
+    <tbody>
+    {% for c in logs if request.args.get('only') != 'bad' or not c.allowed %}
+    <tr>
+      <td class="nowrap small">{{ c.created_at|dt }}</td><td>{{ c.full_name or '—' }}</td>
+      <td><span class="pill {{ 'ok' if c.allowed else 'bad' }}">{{ EVENTS.get(c.event, c.event) }}</span>{% if c.details %}<div class="muted small">{{ c.details }}</div>{% endif %}</td>
+      <td class="mono">{{ c.ip or '' }}</td><td class="hide-mobile">{{ c.location or '' }}</td><td class="hide-mobile muted small">{{ c.device or '' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if not logs %}{{ empty('Подій ще немає', 'shield') }}{% endif %}
+</div>
+
+{% elif tab == 'audit' %}
+<div class="card">
+  {% set ENT = {'users': 'профіль', 'shifts': 'зміну', 'adjustments': 'бонус/штраф', 'requests': 'запит', 'schedule': 'графік', 'locations': 'точку', 'networks': 'Wi-Fi зону', 'settings': 'правила'} %}
+  <div class="timeline">
+  {% for a in audit %}
+    <div class="t {{ 'bad' if a.action == 'DELETE' }}">
+      <b>{{ a.actor or 'система' }}</b> {{ {'INSERT': 'створив', 'UPDATE': 'змінив', 'DELETE': 'видалив'}[a.action] }} {{ ENT.get(a.entity, a.entity) }}{% if a.target %} · <b>{{ a.target }}</b>{% endif %}
+      <span class="muted small">{{ a.created_at|dt }}</span>
+      <div class="diff">{% for k, v in (a.changes|fromjson).items() %}<span class="muted">{{ k }}:</span> {% if v is sequence and v is not string %}<s>{{ v[0] if v[0] is not none else '∅' }}</s> → <ins>{{ v[1] if v|length > 1 and v[1] is not none else '∅' }}</ins>{% else %}{{ v }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+    </div>
+  {% endfor %}
+  </div>
+  {% if not audit %}{{ empty('Редагувань ще не було', 'file') }}{% endif %}
+</div>
+
+{% elif tab == 'payroll' %}
+<div class="card-head">{{ month_nav(nav, 'admin', {'tab': 'payroll'}) }}</div>
+<div class="grid">
+  <div class="card kpi"><span class="ic">{{ icon('users') }}</span><div><small>Працівників</small><b>{{ rows|selectattr('shifts')|list|length }}</b></div></div>
+  <div class="card kpi"><span class="ic">{{ icon('clock') }}</span><div><small>Годин</small><b>{{ rows|sum(attribute='hours')|round(1) }}</b></div></div>
+  <div class="card kpi"><span class="ic warn">{{ icon('trend') }}</span><div><small>Бонуси / штрафи</small><b>{{ (rows|sum(attribute='bonuses') + rows|sum(attribute='penalties'))|money }}</b></div></div>
+  <div class="card kpi"><span class="ic ok">{{ icon('wallet') }}</span><div><small>До виплати</small><b>{{ rows|sum(attribute='total')|money }}</b></div></div>
+</div>
+<div class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Працівник</th><th class="num">Ставка</th><th class="num">Змін</th><th class="num">Годин</th><th class="num">За години</th><th class="num">Бонуси</th><th class="num">Штрафи</th><th class="num">До виплати</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr><td>{{ person(r.user, r.user.job_title or '', url_for('admin_employee', uid=r.user.id, month=month)) }}</td>
+      <td class="num">{{ r.user.hourly_rate|money }}</td><td class="num">{{ r.shifts }}</td><td class="num">{{ r.hours }}</td>
+      <td class="num">{{ r.earned|money }}{% if r.extra %}<div class="muted small">з них ×: {{ r.extra|money }}</div>{% endif %}{% if r.dayoff %}<div class="muted small">+ дей-офф: {{ r.dayoff|money }}</div>{% endif %}</td><td class="num">{{ r.bonuses|money }}</td><td class="num">{{ r.penalties|money }}</td><td class="num"><b>{{ r.total|money }}</b></td>
+      <td><a class="btn sm ghost" title="Табель CSV" href="{{ url_for('admin_employee_csv', uid=r.user.id, month=month) }}">{{ icon('download', 'sm') }}</a></td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td>Разом</td><td></td><td class="num">{{ rows|sum(attribute='shifts') }}</td><td class="num">{{ rows|sum(attribute='hours')|round(2) }}</td><td class="num">{{ rows|sum(attribute='earned')|money }}</td>
+      <td class="num">{{ rows|sum(attribute='bonuses')|money }}</td><td class="num">{{ rows|sum(attribute='penalties')|money }}</td><td class="num">{{ rows|sum(attribute='total')|money }}</td><td></td></tr></tfoot>
+  </table></div>
+</div>
+
+{% elif tab == 'settings' %}
+<form method="post" action="{{ url_for('admin_settings') }}">
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h3>{{ icon('clock') }} Робочий час і автозміна</h3></div>
+    <label class="check"><input type="checkbox" name="auto_start" {{ 'checked' if settings.auto_start == '1' }}><span><b>Автостарт:</b> зміна починається сама, коли телефон підключився до робочого Wi-Fi</span></label>
+    <label class="check"><input type="checkbox" name="device_lock" {{ 'checked' if settings.device_lock == '1' }}><span><b>Лише свій телефон:</b> автозміна вмикається тільки з телефона, з якого людина зареєструвалась (або першого, з якого прийшла). Новий телефон — відв'яжіть старий у картці працівника</span></label>
+    <div class="form-grid" style="margin-top:6px">
+      <div><label>Зміна починається о</label><input type="time" name="work_start" value="{{ settings.work_start }}"></div>
+      <div><label>Зміна закінчується о</label><input type="time" name="work_end" value="{{ settings.work_end }}"></div>
+      <div><label>Прийшов раніше, хв</label><input name="auto_early_minutes" inputmode="numeric" value="{{ settings.auto_early_minutes }}"></div>
+      <div><label>Закрити після кінця, без Wi-Fi (год:хв)</label><input name="auto_close_minutes" inputmode="numeric" placeholder="1:30"
+        value="{{ '%d:%02d' % ((settings.auto_close_minutes|int) // 60, (settings.auto_close_minutes|int) % 60) }}"></div>
+    </div>
+    <label class="check"><input type="checkbox" name="work_weekends" {{ 'checked' if settings.work_weekends == '1' }}>Автостарт і в суботу та неділю</label>
+    <p class="muted small">Хто підключився раніше, отримує відлік з початку зміни. Якщо після кінця зміни телефон {{ '%d:%02d' % ((settings.auto_close_minutes|int) // 60, (settings.auto_close_minutes|int) % 60) }} не був у робочому Wi-Fi,
+      зміна закривається часом, коли він пішов, і цей час не оплачується. Повернувся раніше — зміна триває.
+      Особистий «Графік» людини на день важливіший за ці години. Кінець раніше за початок (22:00–06:00) — нічна зміна.</p>
+    <div class="card-head" style="margin:14px 0 8px"><h3>{{ icon('wallet') }} Нічна зміна і вихідні</h3></div>
+    <div class="form-grid">
+      <div><label>Ніч починається о</label><input type="time" name="night_start" value="{{ settings.night_start }}"></div>
+      <div><label>Ніч закінчується о</label><input type="time" name="night_end" value="{{ settings.night_end }}"></div>
+      <div><label>Нічні години, множник</label><input name="night_multiplier" inputmode="decimal" value="{{ settings.night_multiplier }}"></div>
+      <div><label>Субота й неділя, множник</label><input name="weekend_multiplier" inputmode="decimal" value="{{ settings.weekend_multiplier }}"></div>
+    </div>
+    <p class="muted small" style="margin-bottom:0">2 означає оплату ×2, 1 вимикає надбавку. Рахується похвилинно: зміна 20:00–02:00 при ночі з 22:00 отримає ×3 лише за 4 години. Якщо ніч припадає на вихідний, береться більший множник, а не обидва разом.</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{ icon('coffee') }} Обід і пауза</h3></div>
+    {% for k, label in [('lunch', 'Обід'), ('rest', 'Пауза')] %}
+    <div class="stack" style="padding:6px 0 10px;{{ 'border-bottom:1px solid var(--line);' if loop.first }}">
+      <label class="check"><input type="checkbox" name="{{ k }}_enabled" {{ 'checked' if settings[k ~ '_enabled'] == '1' }}><span><b>{{ label }}:</b>&nbsp;показувати кнопку працівникам</span></label>
+      <label class="check"><input type="checkbox" name="{{ k }}_is_paid" {{ 'checked' if settings[k ~ '_is_paid'] == '1' }}>Оплачується (лічильник не стає на паузу)</label>
+      <div class="row"><label style="margin:0">Оплата під час перерви, % від ставки</label><input name="{{ k }}_rate_pct" inputmode="decimal" style="max-width:90px" value="{{ settings[k ~ '_rate_pct'] }}"></div>
+    </div>
+    {% endfor %}
+    <p class="muted small" style="margin-bottom:0">100% — як за роботу, 50% — половина, 150% — більше. Діє, лише якщо перерва оплачується.</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{ icon('wifi') }} Контроль Wi-Fi</h3></div>
+    <div class="form-grid">
+      <div><label>Допустима втрата Wi-Fi, хв (браузер)</label><input name="wifi_grace_minutes" type="number" min="1" value="{{ settings.wifi_grace_minutes }}"></div>
+      <div><label>Те саме для застосунку, хв</label><input name="sleep_grace_minutes" type="number" min="1" value="{{ settings.sleep_grace_minutes }}" title="Телефон, який лежить без дотиків, засинає і пінгує рідше"></div>
+      <div class="full"><label>Телефон заснув, але потім озвався з робочого Wi-Fi: рахувати цей час як роботу, якщо пауза не довша, хв</label><input name="silence_forgive_minutes" type="number" min="0" value="{{ settings.silence_forgive_minutes }}"></div>
+      <div><label>Що робити при втраті</label><select name="wifi_loss_action">
+        <option value="pause" {{ 'selected' if settings.wifi_loss_action == 'pause' }}>Ставити на паузу</option>
+        <option value="close" {{ 'selected' if settings.wifi_loss_action == 'close' }}>Закривати зміну</option></select></div>
+      <div><label>Закрити, якщо пауза довша, хв</label><input name="wifi_pause_close_minutes" type="number" min="1" value="{{ settings.wifi_pause_close_minutes }}"></div>
+      <div><label>Інтервал пінгу, сек</label><input name="heartbeat_seconds" type="number" min="5" value="{{ settings.heartbeat_seconds }}"></div>
+    </div>
+    <label class="check" style="margin-top:10px"><input type="checkbox" name="offline_keeps_counting" {{ 'checked' if settings.offline_keeps_counting == '1' }}><span><b>Зміна рахується далі, якщо зв'язок втрачено.</b> Без паузи: зміна йде до кінця робочого часу і закривається сама. Вихід з Wi-Fi тоді теж не зупиняє лічильник</span></label>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{ icon('calendar') }} Дей-оффи</h3></div>
+    <div class="form-grid">
+      <div><label>Людей з дей-оффом в один день, макс.</label><input name="dayoff_per_day" type="number" min="0" value="{{ settings.dayoff_per_day }}"></div>
+      <div><label>Дей-оффів на людину за місяць</label><input name="dayoff_per_month" type="number" min="0" value="{{ settings.dayoff_per_month }}"></div>
+    </div>
+    <label class="check" style="margin-top:10px"><input type="checkbox" name="dayoff_paid" {{ 'checked' if settings.dayoff_paid == '1' }}>Дей-офф оплачується як повний робочий день ({{ settings.work_start }}–{{ settings.work_end }}) за ставкою людини</label>
+    <p class="muted small" style="margin-bottom:0">0 — без обмеження.</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{ icon('shield') }} Дисципліна і доступ</h3></div>
+    <label class="check"><input type="checkbox" name="registration_open" {{ 'checked' if settings.registration_open == '1' }}>Дозволити самостійну реєстрацію (з підтвердженням)</label>
+    <div class="form-grid" style="margin-top:10px">
+      <div><label>Спізнення після, хв</label><input name="late_threshold_minutes" type="number" min="0" value="{{ settings.late_threshold_minutes }}"></div>
+      <div><label>Максимальна зміна, год</label><input name="max_shift_hours" type="number" min="1" value="{{ settings.max_shift_hours }}"></div>
+      <div><label>Назва компанії</label><input name="company_name" value="{{ settings.company_name }}"></div>
+      <div><label>Валюта</label><input name="currency" value="{{ settings.currency }}"></div>
+    </div>
+  </div>
+</div>
+<div class="card"><button class="primary">{{ icon('check', 'sm') }}Зберегти правила</button>
+  <span class="muted small" style="margin-left:8px">Нові множники перераховують і минулі зміни в табелі. Перед зміною правил посеред місяця вивантажте зарплату в CSV.</span></div>
+</form>
+<div class="grid-2">
+<div class="card">
+  <div class="card-head"><h3>{{ icon('users') }} Особові папки</h3></div>
+  <p class="muted small" style="margin-top:0">У кожного працівника своя папка з його іменем: <code>{{ people_dir }}</code>.
+    Там профіль (ім'я, телефон, роль, посада, ставка), аватарка, усі зміни, дей-оффи, відпустки, лікарняні, бонуси й графік.</p>
+  <ul class="small" style="margin:0;padding-left:18px;line-height:1.7">
+    <li>Видалили папку — акаунт і всі його дані видаляються за кілька секунд.</li>
+    <li>Повернули папку (з бекапу) — людина відновлюється з усією історією.</li>
+    <li>Поправили <code>profile.json</code> — зміни потрапляють у систему.</li>
+    <li>Видалені через адмінку папки не зникають, а переїжджають у <code>backups/видалені</code>.</li>
+  </ul>
+  {% if people_warning %}<div class="banner bad" style="margin-top:10px">{{ icon('alert') }}<span>{{ people_warning }}</span></div>{% endif %}
+</div>
+<div class="card">
+  <div class="card-head"><h3>{{ icon('download') }} Резервні копії</h3>
+    <a class="btn sm primary" href="{{ url_for('admin_backup_download') }}">{{ icon('download', 'sm') }}<span class="hide-mobile">Завантажити зараз</span></a></div>
+  <p class="muted small" style="margin-top:0">Копія = база + усі особові папки одним zip. Робиться при запуску і щодня, зберігаються останні {{ backup_keep }}.
+    Основна папка: <code>{{ backup_dir }}</code>.</p>
+  <form method="post" action="{{ url_for('admin_backup_mirror') }}" class="stack">
+    <label>Друга копія: Google Диск, флешка, інший диск</label>
+    <div class="row"><input name="path" class="grow" value="{{ backup_mirror }}" placeholder="напр. G:\Мій диск\CrewHub" {{ 'disabled' if mirror_env }}>
+      <button class="sm" {{ 'disabled' if mirror_env }}>Зберегти</button></div>
+    <span class="muted small">Вставте шлях до папки на комп'ютері-сервері. Для Google Диска встановіть «Google Drive для комп'ютера»: він створює диск G:, усе з нього саме вивантажується в хмару. Порожнє поле вимикає другу копію.</span>
+    {% if mirror_error %}<div class="banner bad">{{ icon('alert') }}<span>Друга копія не записалась: {{ mirror_error }}</span></div>{% endif %}
+  </form>
+  {% for b in backups %}
+    <div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line)">{{ icon('file', 'sm') }}<span class="grow">{{ b.name }}</span><span class="muted">{{ b.size }}</span><span class="muted">{{ b.mtime|dt }}</span></div>
+  {% else %}<div class="muted small" style="margin-top:8px">Копій ще немає.</div>{% endfor %}
+</div>
+</div>
+{% endif %}
+{% if me.role == 'admin' %}
+<dialog id="rateDlg"><form method="post" action="{{ url_for('admin_rates') }}">
+  <div class="d-head"><h3>Загальна ставка</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
+  <div class="d-body form-grid">
+    <div class="full"><label>Ставка, {{ currency }}/год</label><input name="rate" value="{{ default_rate }}" inputmode="decimal" required></div>
+    <div class="full stack">
+      <label class="check"><input type="radio" name="scope" value="default" checked>Лише для нових працівників</label>
+      <label class="check"><input type="radio" name="scope" value="employees">Нові + усі працівники зараз</label>
+      <label class="check"><input type="radio" name="scope" value="all">Нові + працівники і модератори</label>
+    </div>
+    <p class="full muted small" style="margin:0">Окрему ставку людини потім можна змінити в її картці. Відкриті зміни дорахуються за старою ставкою, закриті не змінюються. Усе пишеться в журнал редагувань.</p>
+  </div>
+  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Застосувати</button></div>
+</form></dialog>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if tab == 'zones' %}
+<script src="{{ url_for('static', filename='qrcode.js') }}"></script>
+<script>
+  document.querySelectorAll('[data-qr]').forEach((el) => {
+    const q = qrcode(0, 'M'); q.addData(el.dataset.qr); q.make();
+    el.innerHTML = q.createSvgTag({ cellSize: 5, margin: 3, scalable: true });
+  });
+  function printConnect() {
+    const w = window.open('', '_blank');
+    w.document.write('<html><head><meta charset="utf-8"><title>Підключення</title><style>body{font-family:sans-serif;display:flex;flex-wrap:wrap;gap:24px}'
+      + '.connect-card{display:flex;flex-direction:column;align-items:center;gap:4px;width:260px;padding:16px;border:1px solid #ccc;border-radius:12px}'
+      + '.qr svg{width:220px;height:220px}</style></head><body>' + connectGrid.innerHTML + '</body></html>');
+    w.document.close(); w.focus(); setTimeout(() => w.print(), 300);
+  }
+</script>
+{% elif tab == 'live' %}<script>window.CURRENCY = {{ currency|tojson }};</script><script src="{{ url_for('static', filename='live.js') }}?v=4"></script>
+{% elif tab == 'employees' %}
+<script>
+  // Роль змінюється одразу, без збереження форми; сервер не дасть прибрати останнього адміністратора
+  document.querySelectorAll('.role-pick').forEach((sel) => sel.onchange = async () => {
+    sel.disabled = true;
+    try {
+      const r = await fetch('/admin/employee/' + sel.dataset.uid + '/role', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: sel.value }) });
+      const d = await r.json();
+      if (!d.ok) sel.value = d.role || sel.dataset.was;
+      sel.dataset.was = sel.value; sel.className = 'role-pick r-' + sel.value;
+      toast(d.ok ? d.message : d.error);
+    } catch (e) { sel.value = sel.dataset.was; toast('Немає зв\'язку з сервером'); }
+    sel.disabled = false;
+  });
+</script>
+<script>empSearch.oninput = () => { const q = empSearch.value.toLowerCase(); document.querySelectorAll('#empRows tr').forEach((r) => r.style.display = r.dataset.q.includes(q) ? '' : 'none'); };</script>
+{% elif tab == 'schedule' and not mgrid %}
+<script>
+  // День + час з форми → datetime-local для сервера; нічна зміна переходить на наступний день
+  slotForm.onsubmit = () => {
+    const f = slotForm, d = f.day.value;
+    f.starts_at.value = d + 'T' + f.t_from.value;
+    let end = new Date(d + 'T' + f.t_to.value);
+    if (f.t_to.value <= f.t_from.value) end.setDate(end.getDate() + 1);
+    const p = (n) => String(n).padStart(2, '0');
+    f.ends_at.value = `${end.getFullYear()}-${p(end.getMonth() + 1)}-${p(end.getDate())}T${f.t_to.value}`;
+  };
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon with context %}
+{% block title %}Вхід{% endblock %}
+{% block guest %}
+<div class="login-wrap">
+  <div class="card login-card">
+    <div class="brand" style="padding:0 0 6px"><span class="logo">{{ icon('logo') }}</span>{{ company }}</div>
+    <p class="muted" style="margin:0 0 20px">Облік змін з перевіркою робочого Wi-Fi</p>
+    <form method="post" class="stack" id="loginForm">
+      <div><label>Номер телефону</label><input name="username" type="tel" inputmode="tel" autocomplete="username" placeholder="067 123 45 67" autofocus required></div>
+      <div><label>Пароль</label><input name="password" type="password" autocomplete="current-password" required></div>
+      <button class="primary xl">Увійти</button>
+    </form>
+    {% if registration_open %}
+    <p class="center" style="margin:16px 0 0">Вперше тут? <a href="{{ url_for('register') }}"><b>Зареєструватися</b></a></p>
+    {% endif %}
+    {% if demo_accounts %}
+    <p class="muted small" style="margin:20px 0 8px">Тестові акаунти (натисніть, щоб увійти):</p>
+    <div class="demo-users">
+      {% for u, p, title, ic in [('050 000 00 01','admin123','Адмін','shield'),('050 000 00 02','moder123','Модератор','users'),('067 123 45 67','1234','Іван, оператор','user'),('093 765 43 21','1234','Ольга, спеціаліст','user')] %}
+      <button type="button" title="{{ u }}" onclick="loginForm.username.value='{{ u }}';loginForm.password.value='{{ p }}';loginForm.requestSubmit()">{{ icon(ic, 'sm') }}{{ title }}</button>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="banner info" style="margin:18px 0 0">{{ icon('wifi') }}<div>Сервер бачить ваш IP: <b>{{ ip }}</b></div></div>
+    {% if in_app %}
+    <p class="center small" style="margin:14px 0 0"><a href="crewhub://settings">Змінити адресу сервера</a></p>
+    {% elif apk_ready %}
+    <a class="btn xl" style="margin-top:12px;width:100%;box-sizing:border-box;justify-content:center" href="{{ url_for('download_apk') }}">{{ icon('download', 'sm') }}Завантажити застосунок для Android</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

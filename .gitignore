@@ -1,0 +1,18 @@
+# Дані сервера: база, копії, особові папки, журнали — не в репозиторій
+test_app/crewhub_test.db*
+test_app/*.db
+test_app/*.db-*
+test_app/backups/
+test_app/people/
+test_app/logs/
+test_app/static/uploads/
+test_app/static/*.apk
+.venv/
+test_app/.venv/
+__pycache__/
+*.pyc
+# Android: збірка і ключ підпису (секрет, зберігайте окремо)
+android/build/
+android/*.keystore
+android/*.jks
+android/keystore.pass

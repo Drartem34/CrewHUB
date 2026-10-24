@@ -1,0 +1,98 @@
+{% from "_ui.html" import sprite, icon, avatar with context %}
+{%- set staff = me and me.role in STAFF_ROLES -%}
+{%- set tab_now = request.args.get('tab') or ('live' if endpoint == 'admin' else 'clock') -%}
+{%- set here = endpoint ~ ':' ~ tab_now if endpoint in ('admin', 'me') else endpoint -%}
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#e8173d">
+  <meta name="crewhub-company" content="{{ company }}">
+  <meta name="crewhub-csrf" content="{{ csrf_token }}">
+  <title>{% block title %}{{ company }}{% endblock %} · {{ company }}</title>
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=11">
+  <link rel="stylesheet" href="{{ url_for('static', filename='motion.css') }}?v=3">
+  <script>try { var t = localStorage.getItem('crewhub_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); document.documentElement.dataset.theme = t; } catch (e) {}
+  try { var m = localStorage.getItem('crewhub_motion') || 'auto', c = document.documentElement.classList, n = navigator;
+    if (m === 'off') c.add('motion-off');
+    else if (m === 'lite' || (m === 'auto' && (localStorage.getItem('crewhub_lite') === '1' || / CrewHubLite/.test(n.userAgent) || (n.deviceMemory && n.deviceMemory <= 2) || (n.hardwareConcurrency && n.hardwareConcurrency <= 2)))) c.add('lite');
+  } catch (e) {}</script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+{{ sprite() }}
+{% if me and not guest_page %}
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="{{ url_for('index') }}"><span class="logo">{{ icon('logo') }}</span>{{ company }}</a>
+    <nav class="nav">
+      {% if staff %}
+        <div class="nav-section">Керування</div>
+        {% for key, title, ic in [('live','Огляд','activity'),('employees','Працівники','users'),('requests','Запити','inbox'),('schedule','Графік','calendar'),('zones','Точки і Wi-Fi','wifi'),('logs','Підключення','shield'),('audit','Журнал редагувань','file'),('payroll','Зарплата','wallet')] %}
+        <a href="{{ url_for('admin', tab=key) }}" class="{{ 'on' if here == 'admin:' ~ key }}">{{ icon(ic) }}{{ title }}{% if key == 'requests' and pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
+        {% endfor %}
+        {% if me.role == 'admin' %}<a href="{{ url_for('admin', tab='settings') }}" class="{{ 'on' if here == 'admin:settings' }}">{{ icon('settings') }}Правила</a>{% endif %}
+        <div class="nav-section">Моя робота</div>
+      {% endif %}
+      {% for key, title, ic in [('clock','Зміна','clock'),('timesheet','Мій табель','list'),('schedule','Мій графік','calendar'),('requests','Мої запити','inbox'),('team','Колеги','users'),('profile','Профіль','user'),('app','Налаштування додатку','settings')] %}
+      <a href="{{ url_for('me', tab=key) }}" class="{{ 'on' if here == 'me:' ~ key }}">{{ icon(ic) }}{{ title }}</a>
+      {% endfor %}
+      {% if me.role in DAYOFF_ROLES %}<a href="{{ url_for('me', tab='dayoffs') }}" class="{{ 'on' if here == 'me:dayoffs' }}">{{ icon('calendar') }}Дей-оффи й обміни{% if me.role == 'teamlead' and pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>{% endif %}
+    </nav>
+    <div class="me">
+      {{ avatar(me, 'sm') }}
+      <div><b>{{ me.full_name }}</b><small>{{ ROLES[me.role] }}</small></div>
+      <a class="btn icon-btn ghost" href="{{ url_for('logout') }}" title="Вийти">{{ icon('logout') }}</a>
+    </div>
+  </aside>
+  <div class="scrim" onclick="document.body.classList.remove('menu-open')"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn ghost menu-btn" onclick="document.body.classList.toggle('menu-open')" aria-label="Меню">{{ icon('menu') }}</button>
+      <h1>{% block heading %}{{ self.title() }}{% endblock %}</h1>
+      {% block actions %}{% endblock %}
+      <button class="icon-btn ghost bell" id="bellBtn" aria-label="Сповіщення">{{ icon('bell') }}{% if notifications %}<span class="dot"></span>{% endif %}</button>
+      <button class="icon-btn ghost" id="themeBtn" aria-label="Тема">{{ icon('moon') }}</button>
+    </header>
+    <div class="card notif-panel" id="notifPanel">
+      <div class="card-head"><h3>Сповіщення</h3>
+        {% if notifications %}<form method="post" action="{{ url_for('notifications_read') }}"><button class="sm">Прочитано</button></form>{% endif %}</div>
+      {% for n in notifications %}
+        <div class="notif-item">{{ icon('bell', 'sm') }}<div><b>{{ n.title }}</b>{% if n.body %}<div class="muted small">{{ n.body }}</div>{% endif %}<div class="muted small">{{ n.created_at|dt }}</div></div></div>
+      {% else %}<div class="muted">Нових сповіщень немає</div>{% endfor %}
+    </div>
+    <main class="content">
+      {% block body %}{% endblock %}
+    </main>
+  </div>
+
+  <nav class="bottombar">
+    {% if staff %}
+      {% set items = [(url_for('admin', tab='live'),'admin:live','Огляд','activity'),(url_for('admin', tab='employees'),'admin:employees','Люди','users'),(url_for('admin', tab='requests'),'admin:requests','Запити','inbox'),(url_for('me', tab='clock'),'me:clock','Зміна','clock')] %}
+    {% elif me.role == 'teamlead' %}
+      {% set items = [(url_for('me', tab='clock'),'me:clock','Зміна','clock'),(url_for('me', tab='schedule'),'me:schedule','Графік','calendar'),(url_for('me', tab='dayoffs'),'me:dayoffs','Команда','users'),(url_for('me', tab='requests'),'me:requests','Запити','inbox')] %}
+    {% else %}
+      {% set items = [(url_for('me', tab='clock'),'me:clock','Зміна','clock'),(url_for('me', tab='timesheet'),'me:timesheet','Табель','list'),(url_for('me', tab='schedule'),'me:schedule','Графік','calendar'),(url_for('me', tab='requests'),'me:requests','Запити','inbox')] %}
+    {% endif %}
+    {% for href, key, title, ic in items %}
+      <a href="{{ href }}" class="{{ 'on' if here == key }}">{{ icon(ic) }}{{ title }}{% if key in ('admin:requests', 'me:dayoffs') and pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
+    {% endfor %}
+    <a href="#" onclick="document.body.classList.add('menu-open'); return false">{{ icon('menu') }}Меню</a>
+  </nav>
+</div>
+{% else %}
+  {% block guest %}{% endblock %}
+{% endif %}
+
+<div class="toasts" id="toasts">{% for m in get_flashed_messages() %}<div class="toast">{{ m }}</div>{% endfor %}</div>
+<script src="{{ url_for('static', filename='app.js') }}?v=10"></script>
+<script src="{{ url_for('static', filename='motion.js') }}?v=3"></script>
+<script src="{{ url_for('static', filename='nav.js') }}?v=1"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

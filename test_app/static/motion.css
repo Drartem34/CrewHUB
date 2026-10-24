@@ -1,0 +1,206 @@
+/* CrewHub Motion — живий інтерфейс у стилі iOS.
+   Правило швидкодії: анімуються лише transform і opacity (їх малює відеокарта, без перерахунку сторінки).
+   html.lite — слабкий телефон: без розмиття, без каскадів і переходів сторінок, лише легкі натискання.
+   html.motion-off або системне «Зменшити рух» — анімації вимкнено. */
+:root {
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+  --spring-soft: cubic-bezier(.22, 1.2, .36, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --press: .085s;
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring: linear(0, 0.044, 0.158, 0.311, 0.481, 0.649, 0.802, 0.93, 1.029, 1.099, 1.142, 1.161, 1.161, 1.148, 1.126, 1.099, 1.071, 1.045,
+      1.022, 1.003, 0.989, 0.98, 0.975, 0.973, 0.975, 0.977, 0.982, 0.986, 0.991, 0.995, 0.998, 1.001, 1.003, 1.004, 1.004, 1.003, 1.002, 1.001, 1);
+    --spring-soft: linear(0, 0.023, 0.082, 0.164, 0.259, 0.359, 0.458, 0.552, 0.638, 0.715, 0.783, 0.84, 0.888, 0.927, 0.957, 0.981, 0.999,
+      1.012, 1.02, 1.025, 1.028, 1.028, 1.026, 1.023, 1.018, 1.012, 1.008, 1.004, 1.002, 1);
+  }
+}
+
+/* Дотик: без синього підсвічування Android і без затримки 300 мс */
+html { -webkit-tap-highlight-color: transparent; }
+a, button, .btn, label, summary, input, select { touch-action: manipulation; }
+
+/* ── Натискання: кнопка «вдавлюється» і пружинисто повертається ── */
+button, .btn, .nav a, .bottombar a, .segmented a, a.person, a.card, .team-card, .demo-users button, .photo-edit label, .kpi .ic, .avatar {
+  transition: transform .5s var(--spring), background-color .2s, border-color .2s, color .2s, opacity .2s, filter .2s, box-shadow .25s;
+}
+button.pressed:not(:disabled), .btn.pressed, button:active:not(:disabled), .btn:active { transform: scale(.94); transition-duration: var(--press); transition-timing-function: ease-out; }
+button.xl:active:not(:disabled) { transform: scale(.965, .94); }
+.nav a:active, .segmented a:active, .nav a.pressed, .segmented a.pressed { transform: scale(.96); transition-duration: var(--press); }
+.bottombar a:active, .bottombar a.pressed { transform: scale(.86); transition-duration: var(--press); }
+a.person:active, a.card:active, .team-card:active, a.person.pressed, a.card.pressed { transform: scale(.975); transition-duration: var(--press); }
+.avatar:active { transform: scale(.9); transition-duration: var(--press); }
+
+/* Велика кнопка зміни: желейний відскок після натискання */
+button.jelly { animation: jelly .7s var(--ease-out); }
+@keyframes jelly {
+  0% { transform: scale(.96, .92); } 30% { transform: scale(1.05, .97); } 50% { transform: scale(.98, 1.03); }
+  70% { transform: scale(1.015, .995); } 100% { transform: scale(1); }
+}
+
+/* Десктоп: картки ледь піднімаються під мишкою */
+@media (hover: hover) and (pointer: fine) {
+  a.card:hover, .team-card:hover, .grid > .card:hover { transform: translateY(-3px); box-shadow: 0 2px 4px rgba(16, 24, 40, .05), 0 14px 32px rgba(16, 24, 40, .1); }
+  .grid > .card, .team-card { transition: transform .55s var(--spring), box-shadow .3s; }
+  .nav a:hover .icon { transform: translateX(2px) scale(1.08); }
+  .nav a .icon { transition: transform .45s var(--spring); }
+  button:hover:not(:disabled) .icon, .btn:hover .icon { transform: scale(1.12); }
+  button .icon, .btn .icon { transition: transform .45s var(--spring); }
+}
+
+/* ── Іконки: кожна має свій рух при дотику ── */
+.icon.anim { animation-duration: .7s; animation-timing-function: var(--ease-out); animation-fill-mode: none; }
+.icon.anim[data-anim="jump"] { animation-name: aJump; }
+.icon.anim[data-anim="ring"] { animation-name: aRing; transform-origin: 50% 10%; animation-duration: .9s; }
+.icon.anim[data-anim="spin"] { animation-name: aSpin; animation-duration: .8s; }
+.icon.anim[data-anim="gear"] { animation-name: aGear; animation-duration: .9s; }
+.icon.anim[data-anim="tick"] { animation-name: aTick; animation-duration: .9s; }
+.icon.anim[data-anim="wiggle"] { animation-name: aWiggle; animation-duration: .55s; }
+.icon.anim[data-anim="pop"] { animation-name: aPop; }
+.icon.anim[data-anim="fly"] { animation-name: aFly; animation-duration: .8s; }
+.icon.anim[data-anim="right"] { animation-name: aRight; animation-duration: .55s; }
+.icon.anim[data-anim="left"] { animation-name: aLeft; animation-duration: .55s; }
+.icon.anim[data-anim="drop"] { animation-name: aDrop; }
+.icon.anim[data-anim="shake"] { animation-name: aShake; transform-origin: 50% 90%; }
+.icon.anim[data-anim="squish"] { animation-name: aSquish; animation-duration: .6s; }
+.icon.anim[data-anim="flip"] { animation-name: aFlip; animation-duration: .75s; }
+.icon.anim[data-anim="wave"] { animation-name: aWave; }
+@keyframes aJump { 0% { transform: none; } 25% { transform: translateY(-6px) scale(1.08, .94); } 45% { transform: translateY(0) scale(1.12, .86); }
+  62% { transform: translateY(-2px) scale(.96, 1.06); } 80% { transform: scale(1.02, .98); } 100% { transform: none; } }
+@keyframes aRing { 0%, 100% { transform: none; } 12% { transform: rotate(22deg); } 26% { transform: rotate(-18deg); } 40% { transform: rotate(13deg); }
+  54% { transform: rotate(-8deg); } 68% { transform: rotate(4deg); } 82% { transform: rotate(-2deg); } }
+@keyframes aSpin { 0% { transform: rotate(0); } 75% { transform: rotate(380deg); } 100% { transform: rotate(360deg); } }
+@keyframes aGear { 0% { transform: rotate(0); } 70% { transform: rotate(200deg); } 100% { transform: rotate(180deg); } }
+@keyframes aTick { 0% { transform: rotate(0) scale(1); } 40% { transform: rotate(250deg) scale(1.15); } 75% { transform: rotate(372deg) scale(.96); }
+  100% { transform: rotate(360deg) scale(1); } }
+@keyframes aWiggle { 0%, 100% { transform: none; } 20% { transform: rotate(-14deg) scale(1.1); } 45% { transform: rotate(11deg); }
+  70% { transform: rotate(-5deg); } 85% { transform: rotate(2deg); } }
+@keyframes aPop { 0% { transform: scale(1); } 30% { transform: scale(.7); } 60% { transform: scale(1.3); } 80% { transform: scale(.94); } 100% { transform: scale(1); } }
+@keyframes aFly { 0% { transform: none; opacity: 1; } 40% { transform: translate(14px, -14px) scale(.6); opacity: 0; }
+  41% { transform: translate(-12px, 12px) scale(.6); opacity: 0; } 100% { transform: none; opacity: 1; } }
+@keyframes aRight { 0%, 100% { transform: none; } 35% { transform: translateX(5px); } 65% { transform: translateX(-2px); } }
+@keyframes aLeft { 0%, 100% { transform: none; } 35% { transform: translateX(-5px); } 65% { transform: translateX(2px); } }
+@keyframes aDrop { 0% { transform: none; } 30% { transform: translateY(5px) scale(1.05, .9); } 55% { transform: translateY(-3px); }
+  78% { transform: translateY(1px); } 100% { transform: none; } }
+@keyframes aShake { 0%, 100% { transform: none; } 15% { transform: rotate(-12deg) translateY(-2px); } 35% { transform: rotate(10deg); }
+  55% { transform: rotate(-6deg); } 75% { transform: rotate(3deg); } }
+@keyframes aSquish { 0% { transform: none; } 30% { transform: scale(1.3, .7); } 55% { transform: scale(.85, 1.15); } 78% { transform: scale(1.05, .95); }
+  100% { transform: none; } }
+@keyframes aFlip { 0% { transform: perspective(200px) rotateY(0); } 60% { transform: perspective(200px) rotateY(200deg); }
+  100% { transform: perspective(200px) rotateY(180deg); } }
+@keyframes aWave { 0%, 100% { transform: none; opacity: 1; } 30% { transform: scale(.8); opacity: .5; } 60% { transform: scale(1.18); opacity: 1; } }
+
+/* ── Поява сторінки: картки м'яко виринають одна за одною ── */
+.rise { animation: rise .62s var(--spring-soft) backwards; animation-delay: calc(var(--i, 0) * 45ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } }
+.login-card { animation: rise .7s var(--spring-soft) backwards; }
+.login-card .logo, .brand .logo { animation: logoIn .9s var(--spring) .1s backwards; }
+@keyframes logoIn { from { transform: scale(.4) rotate(-25deg); opacity: 0; } }
+
+/* Значення в KPI, бейджі, пілюлі станів */
+.badge { animation: badgePop .55s var(--spring) backwards .25s; }
+@keyframes badgePop { from { transform: scale(0); } }
+.pill.changed { animation: pillFlash .6s var(--spring); }
+@keyframes pillFlash { 0% { transform: scale(.85); } 100% { transform: none; } }
+.bell .dot { animation: badgePop .5s var(--spring) backwards .4s; }
+
+/* Пульс «на точці»: замість дорогої тіні — кільце, що масштабується */
+.pulse { animation: none !important; position: relative; }
+.pulse::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: pulseRing 1.8s var(--ease-out) infinite;
+  will-change: transform, opacity; }
+.pulse.warn::after, .pulse.off::after { display: none; }
+@keyframes pulseRing { from { transform: scale(1); opacity: .6; } to { transform: scale(2.8); opacity: 0; } }
+
+/* Годинник зміни */
+.ring { transition: transform .6s var(--spring); }
+.ring .inner.bump { animation: ringBump .7s var(--spring-soft); }
+@keyframes ringBump { 0% { transform: scale(.94); } 100% { transform: none; } }
+.ring .time { display: inline-block; }
+
+/* ── Нижня панель: активна вкладка з «краплею» під іконкою ── */
+.bottombar a .icon { transition: transform .5s var(--spring); }
+.bottombar a.on .icon { transform: translateY(-1px) scale(1.12); }
+.bottombar a.on::before { content: ""; position: absolute; top: 1px; left: 50%; width: 52px; height: 30px; margin-left: -26px; border-radius: 15px;
+  background: var(--brand-soft); z-index: -1; animation: blob .6s var(--spring) backwards; }
+.bottombar a { isolation: isolate; }
+@keyframes blob { from { transform: scale(.3, .6); opacity: 0; } }
+.segmented a.on { animation: segIn .5s var(--spring) backwards; }
+@keyframes segIn { from { transform: scale(.9); opacity: .6; } }
+
+/* Бічне меню і затемнення */
+.sidebar { transition: transform .55s var(--spring-soft); }
+@media (max-width: 960px) {
+  .scrim { display: block !important; position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 25; opacity: 0; pointer-events: none; transition: opacity .3s; }
+  body.menu-open .scrim { opacity: 1; pointer-events: auto; }
+}
+
+/* ── Діалоги: пружинисто з'являються, плавно зникають ── */
+dialog[open] { animation: dlgIn .5s var(--spring-soft); }
+dialog[open]::backdrop { animation: fadeIn .25s ease-out; }
+dialog.closing { animation: dlgOut .18s ease-in forwards; }
+dialog.closing::backdrop { animation: fadeOut .18s ease-in forwards; }
+@keyframes dlgIn { from { opacity: 0; transform: translateY(24px) scale(.94); } }
+@keyframes dlgOut { to { opacity: 0; transform: translateY(10px) scale(.96); } }
+@keyframes fadeIn { from { opacity: 0; } }
+@keyframes fadeOut { to { opacity: 0; } }
+@media (max-width: 600px) {
+  dialog[open] { animation-name: sheetIn; }
+  @keyframes sheetIn { from { transform: translateY(60%); opacity: 0; } }
+}
+
+/* Панель сповіщень */
+.notif-panel { display: block; visibility: hidden; opacity: 0; transform: translateY(-8px) scale(.96); transform-origin: top right;
+  transition: opacity .18s, transform .45s var(--spring-soft), visibility 0s .2s; }
+.notif-panel.open { visibility: visible; opacity: 1; transform: none; transition: opacity .18s, transform .45s var(--spring-soft), visibility 0s; }
+
+/* Тости: виїжджають знизу, як сповіщення iOS */
+.toast { animation: toastIn .55s var(--spring-soft); transition: opacity .25s, transform .3s ease-in; }
+.toast.out { opacity: 0; transform: translateY(10px) scale(.92); }
+@keyframes toastIn { from { transform: translateY(26px) scale(.9); opacity: 0; } }
+
+/* ── Перемикачі як в iOS: повзунок розтягується, коли тиснеш ── */
+.check input[type=checkbox], input[type=checkbox].switch {
+  -webkit-appearance: none; appearance: none; flex: none; width: 46px; height: 28px; border-radius: 14px; margin: 0; padding: 0; position: relative;
+  background: var(--line); border: 0; cursor: pointer; transition: background-color .25s; }
+.check input[type=checkbox]::before, input[type=checkbox].switch::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 12px; background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .2); transition: transform .45s var(--spring), width .25s var(--ease-out); }
+.check input[type=checkbox]:checked, input[type=checkbox].switch:checked { background: var(--ok); }
+.check input[type=checkbox]:checked::before, input[type=checkbox].switch:checked::before { transform: translateX(18px); }
+.check input[type=checkbox]:active::before, input[type=checkbox].switch:active::before { width: 30px; }
+.check input[type=checkbox]:checked:active::before, input[type=checkbox].switch:checked:active::before { transform: translateX(12px); }
+.check input[type=checkbox]:focus { box-shadow: 0 0 0 3px var(--brand-soft); }
+
+/* Поля вводу: м'яке «світіння» */
+input, select, textarea { transition: border-color .2s, box-shadow .3s var(--ease-out), background-color .2s; }
+
+/* Перехід між сторінками: вміст лише проявляється (одна прозорість, без знімків екрана — дешево навіть для слабких телефонів) */
+.content { animation: pageIn .22s ease-out; }
+@keyframes pageIn { from { opacity: 0; } }
+body.leaving .content { opacity: .6; transition: opacity .12s; }
+
+/* Перемикач режиму анімацій у профілі */
+.motion-pick { display: inline-flex; }
+.motion-pick button { border-radius: 8px; padding: 6px 12px; font-size: 14px; border: 0; background: transparent; color: var(--muted); }
+.motion-pick button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+/* ── Слабкий телефон: лишаються тільки натискання і рух іконок (обидва — один шар на відеокарті) ── */
+html.lite .rise, html.lite .login-card, html.lite .login-card .logo, html.lite .brand .logo, html.lite .badge, html.lite .bell .dot,
+html.lite .segmented a.on, html.lite .bottombar a.on::before, html.lite .content, html.lite .pill.changed, html.lite .ring .inner.bump { animation: none; }
+html.lite .pulse::after { display: none; }
+html.lite button, html.lite .btn, html.lite .nav a, html.lite .bottombar a, html.lite .segmented a, html.lite a.person, html.lite a.card,
+html.lite .team-card, html.lite .avatar, html.lite .kpi .ic { transition: transform .3s var(--spring); }
+html.lite .icon.anim { animation-duration: .45s; }
+html.lite dialog[open], html.lite dialog[open]::backdrop { animation: none; }
+html.lite .toast { animation-duration: .25s; animation-timing-function: ease-out; }
+html.lite .sidebar { transition-duration: .25s; transition-timing-function: ease-out; }
+html.lite .card { box-shadow: none; }
+html.lite input, html.lite select, html.lite textarea { transition: none; }
+
+/* ── Рух вимкнено ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+html.motion-off *, html.motion-off *::before, html.motion-off *::after {
+  animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

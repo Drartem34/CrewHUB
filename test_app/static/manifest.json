@@ -1,0 +1,11 @@
+{
+  "name": "CrewHub",
+  "short_name": "CrewHub",
+  "description": "Облік змін з перевіркою робочого Wi-Fi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#e8173d",
+  "lang": "uk",
+  "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}
