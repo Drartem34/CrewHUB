@@ -427,6 +427,7 @@ public class MainActivity extends Activity {
         root.addView(progress, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)));
         progress.setVisibility(View.GONE);
         web = new WebView(this);
+        web.resumeTimers();  // таймери могли лишитись на паузі від попереднього WebView (pauseTimers — на весь процес)
         web.setBackgroundColor(Color.TRANSPARENT);          // без білого спалаху між сторінками в темній темі
         web.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         root.addView(web, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
@@ -710,9 +711,31 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (web != null) {
+            web.resumeTimers();
             web.onResume();
             // Повернулися в застосунок: сторінка зміни одразу перевіряє мережу (visibilitychange)
         }
+    }
+
+    @Override
+    protected void onPause() {
+        // Застосунок згорнули: зупиняємо таймери сторінки (лічильник щосекунди, пінг кожні 20 с, live-панель).
+        // У фоні присутність підтверджує лише WatchService — без подвійних пінгів і зайвої роботи процесора
+        if (web != null) {
+            web.onPause();
+            web.pauseTimers();
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (web != null) {
+            web.removeCallbacks(loadTimeout);
+            web.destroy();
+            web = null;
+        }
+        super.onDestroy();
     }
 
     @Override

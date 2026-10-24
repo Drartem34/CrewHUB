@@ -1089,15 +1089,20 @@ class CrewHubTest(CrewHubBase):
         self.assertEqual(self.sql("select status from shifts")[0][0], "active")
         self.assertFalse(self.sql("select 1 from breaks"))
 
-    def test_unrestricted_app_silence_is_noticed_fast(self):
+    def test_unrestricted_app_silence_uses_sleep_grace(self):
         self.login("ivan")
         ua = {"User-Agent": "Mozilla/5.0 (Linux; Android 14) CrewHubApp/1.8 background CrewHubDevice/fast0001",
               "X-Forwarded-For": WORK_IP}
         self.client.post("/api/clock/start", json={}, headers=ua)
         self.client.post("/api/clock/heartbeat", json={"unrestricted": True}, headers=ua)
         self.assertEqual(self.sql("select bg_ok from shifts")[0][0], 1)
-        # Wi-Fi вимкнули: 4 хв тиші від телефона без обмежень батареї — це вже втрата, а не сон
+        # Служба більше не тримає процесор увімкненим усю зміну (батарея): у сні пінг буває раз на 5–15 хв,
+        # тож 4 хв тиші — ще сон. Вихід з Wi-Fi застосунок повідомляє сам (away_since)
         self.sql("update shifts set last_seen_at = last_seen_at - 240")
+        with core.connect() as c:
+            core.sweep(c)
+        self.assertEqual(self.sql("select status from shifts")[0][0], "active")
+        self.sql("update shifts set last_seen_at = last_seen_at - 1500")  # 25 хв тиші — телефон вимкнули
         with core.connect() as c:
             core.sweep(c)
         self.assertEqual(self.sql("select status from shifts")[0][0], "paused")

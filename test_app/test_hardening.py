@@ -69,9 +69,32 @@ class HardeningTest(CrewHubBase):
         self.login("ivan")
         self.assertGreaterEqual(self._silent(30 * 60, self.APP), 3600 + 30 * 60 - 5)
 
-    def test_unrestricted_app_silence_is_not_forgiven(self):
+    def test_unrestricted_app_sleep_is_treated_like_any_app(self):
+        # Служба не тримає процесор усю зміну (батарея), тож і «без обмежень» телефон у сні мовчить по 5–15 хв
         self.login("ivan")
-        self.assertLess(self._silent(30 * 60, self.APP, {"unrestricted": True}), 3600 + 60)
+        self.assertGreaterEqual(self._silent(30 * 60, self.APP, {"unrestricted": True}), 3600 + 30 * 60 - 5)
+        self.sql("delete from shifts")
+        self.assertLess(self._silent(3 * 3600, self.APP, {"unrestricted": True}), 3600 + 60)
+
+    # --- 🔋 Застосунок не пінгує даремно ---------------------------------------------------------------
+    def test_next_check_lets_phone_sleep_until_work_time(self):
+        from datetime import datetime, timedelta
+        self.login("ivan")
+        r = self.client.post("/api/clock/auto", json={}, headers=dict(self.APP, **{"X-Forwarded-For": HOME_IP})).get_json()
+        self.assertEqual(r["next_check"], 1800)  # чужа мережа: пів години (мережу телефон помітить і так)
+        with core.connect() as c:
+            c.execute("update settings set value = '1' where key = 'auto_start'")
+            c.commit()
+            uid = self.sql("select id from users where username = 'ivan'")[0][0]
+            user = c.execute("select * from users where id = ?", (uid,)).fetchone()
+            loc = core.match_location(c, WORK_IP)
+            evening = datetime.combine(datetime.now().date(), datetime.min.time()) + timedelta(hours=22)
+            t = int(evening.timestamp())
+            nxt = core.next_window_start(c, uid, t)
+            self.assertGreater(nxt, t)
+            self.assertEqual(datetime.fromtimestamp(nxt + 30 * 60).strftime("%H:%M"), "09:00")  # початок мінус ранній прихід
+            self.assertEqual(core.next_check(c, user, loc, t, {}), 3600)  # не довше години між перевірками
+            self.assertEqual(core.next_check(c, user, loc, nxt - 300, {}), 300)
 
     def test_fake_away_since_cannot_shrink_long_absence(self):
         self.login("ivan")

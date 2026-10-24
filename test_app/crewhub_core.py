@@ -1228,6 +1228,44 @@ def _why(user, ip, loc, t, text):
     return None
 
 
+def next_window_start(conn, user_id, t, horizon_days=7):
+    """Коли наступного разу почнеться робочий час людини (уже з запасом на ранній прихід), або None."""
+    early = setting_int("auto_early_minutes", conn) * 60
+    found = []
+    sc = conn.execute("select starts_at from schedule where user_id = ? and starts_at - ? > ? order by starts_at limit 1",
+                      (user_id, early, t)).fetchone()
+    if sc:
+        found.append(sc[0] - early)
+    ws = hhmm_minutes(setting("work_start", conn), 540)
+    weekends = setting("work_weekends", conn) == "1"
+    today = datetime.fromtimestamp(t).date()
+    for i in range(horizon_days):
+        d = today + timedelta(days=i)
+        if (d.weekday() >= 5 and not weekends) or absence_on(conn, user_id, d):
+            continue
+        d0, d1 = day_bounds(d, d)
+        if conn.execute("select 1 from schedule where user_id = ? and starts_at >= ? and starts_at < ?", (user_id, d0, d1)).fetchone():
+            continue  # цей день за особистим графіком (уже враховано вище)
+        a = int((datetime.combine(d, datetime.min.time()) + timedelta(minutes=ws)).timestamp()) - early
+        if a > t:
+            found.append(a)
+            break
+    return min(found) if found else None
+
+
+def next_check(conn, user, loc, t, res):
+    """Через скільки секунд застосунку є сенс знову питати про автозміну (поки зміни немає). Замість пінгу кожні
+    2–5 хв цілодобово телефон спить до початку робочого часу; зміну мережі він помічає й так, без пінгів."""
+    if res.get("waiting_until"):
+        return max(int(res["waiting_until"]) - t, 5)
+    if loc is None:
+        return 1800       # не робоча мережа: перевіримо, коли зміниться мережа, або за пів години
+    if res.get("other_device") or user["status"] != "active" or setting("auto_start", conn) != "1":
+        return 3600
+    nxt = next_window_start(conn, user["id"], t)
+    return min(max((nxt - t) if nxt else 3600, 60), 3600)
+
+
 def work_hours_text(conn):
     days = "щодня" if setting("work_weekends", conn) == "1" else "Пн–Пт"
     return f"{setting('work_start', conn)}–{setting('work_end', conn)} {days}"
@@ -1307,6 +1345,7 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
                 "ip": ip, "shift": shift_stats(conn, s) if s else None,
                 "heartbeat_seconds": setting_int("heartbeat_seconds", conn), "auto_start": setting("auto_start", conn) == "1",
                 "why": None if s or user["id"] not in _presence or _presence[user["id"]]["t"] != t else _presence[user["id"]]["why"],
+                "next_check": None if s else next_check(conn, user, loc, t, extra or {}),
                 **(extra or {})}
 
     if action in ("check", "auto", "heartbeat") and not shift:
@@ -1431,8 +1470,9 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
 
 
 def sleepy_shift(shift):
-    """Зміна з застосунку, телефон якого може заснути (з обмеженнями батареї): його тишу можна простити."""
-    return (shift["device"] or "").startswith("app-") and not shift["bg_ok"]
+    """Зміна з застосунку: телефон засинає і пінгує рідше (служба не тримає процесор увімкненим — бережемо батарею),
+    тож його тишу можна простити. Вихід з Wi-Fi застосунок повідомляє окремо, з точним часом (away_since)."""
+    return (shift["device"] or "").startswith("app-")
 
 
 # Сповіщати про втрату Wi-Fi лише якщо пауза триває стільки: короткі збої роутера чи перехід між точками
@@ -1471,9 +1511,9 @@ def sweep(conn):
     keep = setting("offline_keeps_counting", conn) == "1"
     for s in conn.execute("select s.*, u.full_name from shifts s join users u on u.id = s.user_id"
                           " where s.status = 'active' and s.last_seen_at < ?", (t - grace,)).fetchall():
-        if (s["device"] or "").startswith("app-") and s["last_seen_at"] >= t - (max(grace, 180) if s["bg_ok"] else sleep):
-            # застосунок: телефон міг просто заснути, фонова служба пінгує рідше. Без обмежень батареї
-            # застосунок пінгує щохвилини і в сні, тож 3 хв тиші — це вже вимкнений чи втрачений Wi-Fi
+        if sleepy_shift(s) and s["last_seen_at"] >= t - sleep:
+            # застосунок: телефон міг просто заснути, у сні Android будить службу раз на 5–15 хв.
+            # Вихід з Wi-Fi служба повідомляє сама (away_since), тож тут чекаємо лише на випадок, що телефон вимкнули
             continue
         w = work_window(conn, s["user_id"], s["started_at"]) if keep else None
         if w:
