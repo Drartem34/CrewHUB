@@ -46,7 +46,7 @@
     <div class="me">
       {{ avatar(me, 'sm') }}
       <div><b>{{ me.full_name }}</b><small>{{ ROLES[me.role] }}</small></div>
-      <a class="btn icon-btn ghost" href="{{ url_for('logout') }}" title="Вийти">{{ icon('logout') }}</a>
+      <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="icon-btn ghost" title="Вийти" aria-label="Вийти">{{ icon('logout') }}</button></form>
     </div>
   </aside>
   <div class="scrim" onclick="document.body.classList.remove('menu-open')"></div>

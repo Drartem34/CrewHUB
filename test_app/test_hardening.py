@@ -206,6 +206,28 @@ class HardeningTest(CrewHubBase):
             js = f.read()
         self.assertNotIn("${state.location}", js)
 
+    # --- 🔴 11. «Аватарка» /logout і вихід через GET ----------------------------------------------
+    def test_photo_url_cannot_be_set_from_form(self):
+        mod = self.login("moder", "moder123")
+        ivan = self.sql("select id from users where username = 'ivan'")[0][0]
+        mod.post(f"/admin/employee/{ivan}", data={"full_name": "Іван Петренко", "hourly_rate": "120", "status": "active",
+                                                  "phone": "0671234567", "photo_url": "/logout"})
+        self.assertIsNone(self.sql("select photo_url from users where id = ?", ivan)[0][0])
+        # стара база з підміненим photo_url: на сторінках і в live — без картинки
+        self.sql("update users set photo_url = '/logout' where id = ?", ivan)
+        self.assertNotIn('src="/logout"', mod.get("/admin?tab=employees").get_data(as_text=True))
+        self.assertNotIn("/logout", str([r["photo"] for r in mod.get("/api/live").get_json()["rows"]]))
+        self.assertEqual(core.safe_photo("/avatar/5?v=123"), "/avatar/5?v=123")
+        self.assertIsNone(core.safe_photo("https://evil.example/x.png"))
+
+    def test_logout_requires_post(self):
+        ivan = self.login("ivan")
+        self.assertEqual(ivan.get("/logout").status_code, 200)  # сторінка підтвердження
+        self.assertEqual(ivan.get("/me").status_code, 200)       # усе ще в акаунті
+        r = ivan.post("/logout")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(ivan.get("/me").status_code, 302)
+
 
 if __name__ == "__main__":
     unittest.main()

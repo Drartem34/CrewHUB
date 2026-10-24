@@ -83,7 +83,6 @@
       <div><label>Телефон (це логін)</label><input name="phone" type="tel" value="{{ u.phone|phone }}" placeholder="067 123 45 67"></div>
       <div><label>Telegram</label><input name="telegram" value="{{ u.telegram or '' }}"></div>
       <div><label>WhatsApp</label><input name="whatsapp" type="tel" value="{{ u.whatsapp or '' }}" placeholder="067 123 45 67"></div>
-      <input type="hidden" name="photo_url" value="{{ u.photo_url or '' }}">
       {% if me.role == 'admin' %}<div><label>Роль</label><select name="role">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == u.role }}>{{ v }}</option>{% endfor %}</select></div>{% endif %}
       <div><label>Новий пароль</label><input name="password" type="password" placeholder="не змінювати" autocomplete="new-password"></div>
     </div>

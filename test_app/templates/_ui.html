@@ -50,7 +50,7 @@
 {# Іконки: вбудований SVG-спрайт вище. Без зовнішніх шрифтів і скриптів — з'являються одразу, навіть без інтернету. #}
 {% macro icon(name, cls="") %}<svg class="icon {{ cls }}" data-fb="{{ name }}" aria-hidden="true"><use href="#i-{{ name }}"/></svg>{% endmacro %}
 
-{% macro avatar(u, size="") %}{% if u.photo_url %}<img class="avatar {{ size }}" src="{{ u.photo_url }}" alt="">{% else %}<span class="avatar {{ size }}">{{ (u.full_name or '?')[:1] }}</span>{% endif %}{% endmacro %}
+{% macro avatar(u, size="") %}{% if u.photo_url|photo %}<img class="avatar {{ size }}" src="{{ u.photo_url|photo }}" alt="">{% else %}<span class="avatar {{ size }}">{{ (u.full_name or '?')[:1] }}</span>{% endif %}{% endmacro %}
 
 {% macro person(u, sub="", href="") %}{% if href %}<a class="person" href="{{ href }}">{% else %}<div class="person">{% endif %}{{ avatar(u) }}<div><b>{{ u.full_name }}</b>{% if sub %}<small>{{ sub }}</small>{% endif %}</div>{% if href %}</a>{% else %}</div>{% endif %}{% endmacro %}
 

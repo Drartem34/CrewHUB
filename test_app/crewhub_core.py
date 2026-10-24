@@ -1932,6 +1932,15 @@ def own_record_blocked(actor, uid):
 OWN_RECORD_MSG = "Свої зміни, ставку, бонуси й запити погоджує адміністратор"
 
 
+PHOTO_URL_RE = re.compile(r"/avatar/\d+(\?v=\d+)?")
+
+
+@app.template_filter("photo")
+def safe_photo(v):
+    """Аватарка лише з нашого /avatar/<id>; будь-що інше в старих базах (чужий сайт, /logout) — без фото."""
+    return v if v and PHOTO_URL_RE.fullmatch(v) else None
+
+
 @app.template_filter("walink")
 def wa_link(v):
     """Номер WhatsApp → посилання wa.me (лише цифри). Український 0XX… перетворюємо на 380XX…."""
@@ -2173,8 +2182,11 @@ def download_demo_apk():
                      download_name="CrewHub_Demo.apk")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
+    # Вихід — лише POST з токеном: GET-посилання на /logout у картинці чи на чужому сайті більше нікого не викидає
+    if request.method == "GET":
+        return render_template("logout.html", guest_page=True) if current_user() else redirect(url_for("login"))
     resp = redirect(url_for("login"))
     cookie = request.cookies.get(REMEMBER_COOKIE)
     if cookie:
@@ -2775,7 +2787,7 @@ def _live_payload(conn):
     for r in rows:
         s, sc = r["shift"], r["schedule"]
         out.append({
-            "id": r["user"]["id"], "name": r["user"]["full_name"], "job": r["user"]["job_title"], "photo": r["user"]["photo_url"],
+            "id": r["user"]["id"], "name": r["user"]["full_name"], "job": r["user"]["job_title"], "photo": safe_photo(r["user"]["photo_url"]),
             "state": r["state"], "location": r["location"],
             "started_at": s["started_at"] if s else None, "worked": s["worked_seconds"] if s else None,
             "status": s["status"] if s else None, "break_paid": bool(s["open_break"]["is_paid"]) if s and s["open_break"] else False,
@@ -2964,7 +2976,9 @@ def admin_employee_csv(uid):
     return Response("\ufeff" + buf.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={name}"})
 
 
-EDITABLE_USER_FIELDS = ["full_name", "job_title", "department", "location_id", "phone", "telegram", "whatsapp", "photo_url",
+# photo_url сюди не входить: його ставить лише завантаження фото (інакше в «аватарку» можна вписати /logout
+# чи адресу чужого сайту, і кожен, хто бачить список людей, мимоволі туди звертався б)
+EDITABLE_USER_FIELDS = ["full_name", "job_title", "department", "location_id", "phone", "telegram", "whatsapp",
                         "hourly_rate", "hire_date", "status"]
 
 
