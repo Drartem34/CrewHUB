@@ -631,6 +631,20 @@ class HardeningTest(CrewHubBase):
             c.execute("insert into requests(user_id, type, created_at) values (1, 'day_off', 1)")
             self.assertEqual(core.dashboard_stats(c)["pending"], stats["pending"] + 1)  # лічильники свіжі
 
+    def test_settings_read_once_per_page(self):
+        admin = self.login("admin", "admin123")
+        seen = []
+        orig = core.connect
+
+        def traced():
+            c = orig()
+            c.set_trace_callback(lambda q: seen.append(q) if "from settings" in q else None)
+            return c
+        core.connect = traced
+        self.addCleanup(setattr, core, "connect", orig)
+        self.assertEqual(admin.get("/admin?tab=payroll").status_code, 200)
+        self.assertLess(len(seen), 40, len(seen))  # раніше — по запиту на кожну суму на сторінці
+
 
 if __name__ == "__main__":
     unittest.main()

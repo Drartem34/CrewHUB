@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta
 from functools import wraps
 from urllib.parse import urlencode, urlsplit
 
-from flask import (Flask, Response, abort, flash, g, has_request_context, jsonify, redirect, render_template, send_file,
+from flask import (Flask, Response, abort, flash, g, has_app_context, has_request_context, jsonify, redirect, render_template, send_file,
                    request, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -629,8 +629,16 @@ def seed_demo_history(conn):
 
 
 def setting(key, conn=None):
-    row = (conn or db()).execute("select value from settings where key = ?", (key,)).fetchone()
-    v = clean_setting(key, row[0]) if row else None
+    if conn is None and has_app_context():
+        # Сторінка (шаблони, |money на кожну суму) читає налаштування сотні разів — з бази лише раз на запит
+        cache = g.get("settings_cache")
+        if cache is None:
+            cache = g.settings_cache = {r[0]: r[1] for r in db().execute("select key, value from settings")}
+        raw = cache.get(key)
+    else:
+        row = (conn or db()).execute("select value from settings where key = ?", (key,)).fetchone()
+        raw = row[0] if row else None
+    v = clean_setting(key, raw) if raw is not None else None
     return v if v is not None else DEFAULT_SETTINGS[key]
 
 
@@ -3580,6 +3588,7 @@ def admin_rates():
         conn = db()
         old = setting("default_hourly_rate", conn)
         conn.execute("update settings set value = ? where key = 'default_hourly_rate'", (f"{rate:g}",))
+        g.pop("settings_cache", None)
         audit(conn, actor["id"], "UPDATE", "settings", None, None, {"default_hourly_rate": [old, f"{rate:g}"]})
         changed = 0
         if scope in ("all", "employees"):
@@ -3969,6 +3978,7 @@ def admin_settings():
                 new[k] = old[k] if v is None else v
         for k, v in new.items():
             conn.execute("update settings set value = ? where key = ?", (v, k))
+        g.pop("settings_cache", None)
         changes = diff(old, new)
         if changes:
             audit(conn, current_user()["id"], "UPDATE", "settings", None, None, changes)
