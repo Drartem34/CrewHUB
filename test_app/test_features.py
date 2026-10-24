@@ -85,6 +85,18 @@ class SettingsFileTest(CrewHubBase):
         self.assertEqual(nets, {"203.0.113.0/28": "каса", "198.51.100.7/32": "роутер"})  # локальна мережа ПК прибрана
         self.assertIn("0.0.0.0/0", read(core.SETTINGS_FILE).split("[server]")[0])
 
+    def test_admin_change_survives_unrelated_hand_edit(self):
+        # Людина правила файл (інший ключ), а адмін за ці секунди змінив правило в адмінці:
+        # старе значення з файлу не має перекрити свіжу зміну
+        settings_file.sync()
+        self.edit_file(lambda t: t.replace("currency = грн", "currency = ₴"))
+        admin = self.login("admin", "admin123")
+        admin.post("/admin/settings", data={"company_name": "CrewHub Test", "late_threshold_minutes": "33", "currency": "грн"})
+        with core.connect() as c:
+            self.assertEqual(core.setting("late_threshold_minutes", c), "33")
+            self.assertEqual(core.setting("currency", c), "₴")  # ручна правка теж застосована
+        self.assertIn("late_threshold_minutes = 33", read(core.SETTINGS_FILE))
+
     def test_point_cannot_be_deleted_by_file_only_disabled(self):
         settings_file.sync()
         self.edit_file(lambda t: t.split("[point 1]")[0] + "[point 7]\nname = Нова\nactive = 0\nnetworks =\n    10.7.0.0/24\n")
@@ -156,6 +168,30 @@ class DataDirTest(CrewHubBase):
             self.assertTrue(any(n.startswith("crewhub_test.db.перенесено") for n in os.listdir(code)))
             self.assertIn(data, read(os.path.join(code, "ДЕ_ДАНІ.txt")))
             self.assertIsNone(core.migrate_legacy_data())  # другий запуск нічого не робить
+        finally:
+            os.environ["CREWHUB_DB"] = env_db
+            for k, v in saved.items():
+                setattr(core, k, v)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_any_entry_point_migrates_before_creating_new_db(self):
+        # profiles.py чи recover_admin.py, запущені до сервера, не мають створити порожню базу поверх перенесення
+        tmp = tempfile.mkdtemp()
+        code, data = os.path.join(tmp, "test_app"), os.path.join(tmp, "CrewHub-data")
+        os.makedirs(code)
+        legacy = os.path.join(code, "crewhub_test.db")
+        c = sqlite3.connect(legacy)
+        c.execute("create table marker(x)")
+        c.commit()
+        c.close()
+        saved = {k: getattr(core, k) for k in ("BASE_DIR", "DATA_DIR", "LEGACY_DB", "DB_PATH")}
+        env_db = os.environ.pop("CREWHUB_DB")
+        try:
+            core.BASE_DIR, core.DATA_DIR, core.LEGACY_DB = code, data, legacy
+            core.DB_PATH = os.path.join(data, "crewhub.db")
+            core.init_db(seed=False)
+            names = [r[0] for r in sqlite3.connect(core.DB_PATH).execute("select name from sqlite_master")]
+            self.assertIn("marker", names)  # стара база перенесена, а не створена нова
         finally:
             os.environ["CREWHUB_DB"] = env_db
             for k, v in saved.items():

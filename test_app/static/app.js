@@ -75,13 +75,19 @@
       wrap.parentNode.insertBefore(host, wrap);
       host.appendChild(wrap);
       wrap.scrollLeft = keep;
-      const sticky = () => { const c = wrap.querySelector("th.who, .week th:first-child"); return c && getComputedStyle(c).position === "sticky" ? c.offsetWidth : 0; };
+      // Ширина закріпленої колонки з іменами: міряємо лише при появі й зміні розміру, не на кожен кадр прокрутки
+      let stick = 0;
+      const measure = () => {
+        const c = wrap.querySelector("th.who, .week th:first-child");
+        stick = c && getComputedStyle(c).position === "sticky" ? c.offsetWidth : 0;
+        host.style.setProperty("--stick", stick + "px");
+      };
+      const sticky = () => stick;
       let programmatic = false, queued = false;
       const born = performance.now();  // сторінка сама прокрутила місяць до «сьогодні» — це не гортання людиною
       const update = () => {
         queued = false;
         const max = wrap.scrollWidth - wrap.clientWidth;
-        host.style.setProperty("--stick", sticky() + "px");
         host.classList.toggle("can-left", wrap.scrollLeft > 4);
         host.classList.toggle("can-right", wrap.scrollLeft < max - 4);
       };
@@ -98,7 +104,8 @@
         if (!programmatic && performance.now() - born > 500) markSwiped();
         if (!queued) { queued = true; requestAnimationFrame(update); }
       }, { passive: true });
-      if (window.ResizeObserver) new ResizeObserver(() => update()).observe(wrap);
+      if (window.ResizeObserver) new ResizeObserver(() => { measure(); update(); }).observe(wrap);
+      measure();
       update();
       if (!swiped && !hinted && host.classList.contains("can-right")) {
         hinted = true;  // одна підказка на сторінку — над першою широкою таблицею

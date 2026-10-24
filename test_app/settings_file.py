@@ -30,8 +30,13 @@ TRUE, FALSE = ("1", "yes", "true", "on", "так", "y"), ("0", "no", "false", "o
 UNITS = (("_minutes", "хв"), ("_hours", "год"), ("_seconds", "с"), ("_pct", "%"))
 CHOICE_HELP = {"pause": "пауза", "close": "закрити зміну"}
 DEFAULT_PORT = 5000
+# Правила, які лишились у базі від старих версій, але ні на що не впливають: у файл не пишемо, щоб не плутали
+UNUSED = {"sick_auto_approve"}
 
-_state = {"file": None, "db": None, "server": {}}  # підписи файлу й бази на момент останньої синхронізації
+# Підписи файлу й бази на момент останньої синхронізації і base — файл, яким ми його записали востаннє:
+# з ручної правки застосовуємо лише те, що людина справді змінила відносно base (інакше старе значення з файлу
+# перекрило б зміну, зроблену в адмінці за ці кілька секунд)
+_state = {"file": None, "db": None, "server": {}, "base": None}
 
 
 def _bool(v):
@@ -103,7 +108,8 @@ def render(snap, notes=(), port=None):
             "; Друга копія щоденних бекапів — папка на іншому диску чи флешці. Порожньо — вимкнено",
             f"backup_mirror = {_one_line(snap['server']['backup_mirror'])}", "", "[rules]"]
     for k, v in snap["rules"].items():
-        out += [f"; {_hint(k)}", f"{k} = {_one_line(v)}"]
+        if k not in UNUSED:
+            out += [f"; {_hint(k)}", f"{k} = {_one_line(v)}"]
     out += ["", "; ─── Точки ───",
             "; Кожна точка — розділ [point N], де N — її номер. Нова точка — новий розділ з новим номером.",
             "; active: 1 — працює, 0 — вимкнена (так точку «видаляють»: зміни й історія лишаються).",
@@ -125,7 +131,7 @@ def write(conn, notes=()):
     with open(tmp, "w", encoding="utf-8", newline="\r\n" if os.name == "nt" else "\n") as f:
         f.write(text)
     os.replace(tmp, core.SETTINGS_FILE)  # атомарно: сервер чи людина ніколи не побачать півфайлу
-    _state.update(file=_file_sig(), db=_sig(snapshot(conn)))
+    _state.update(file=_file_sig(), db=_sig(snapshot(conn)), base=parse(text))
 
 
 def parse(text):
@@ -156,8 +162,10 @@ def _networks(raw, sec, notes):
     return out
 
 
-def apply(conn, cp):
-    """Застосовує файл до бази. Повертає (зміни для журналу, список проблем)."""
+def apply(conn, cp, base=None):
+    """Застосовує файл до бази. base — файл, яким сервер записав його востаннє (None — застосувати все, як при
+    запуску): значення, що збігаються з base, людина не чіпала, і вони не перекривають новіші з бази.
+    Повертає (зміни для журналу, список проблем)."""
     changes, notes = {}, []
     sections = {}
     for sec in cp.sections():
@@ -167,8 +175,14 @@ def apply(conn, cp):
         elif not POINT_RE.fullmatch(sec.strip()):
             notes.append(f"невідомий розділ [{sec}]")
 
+    def edited(d, key):
+        sec = d.name
+        return not (base is not None and base.has_option(sec, key) and base.get(sec, key) == d[key])
+
     rules = sections.get("rules", {})
-    for key in rules:
+    for key in [k for k in rules if edited(rules, k)]:
+        if key in UNUSED:
+            continue
         if key not in core.DEFAULT_SETTINGS:
             notes.append(f"[rules] {key}: такого правила немає")
             continue
@@ -191,7 +205,7 @@ def apply(conn, cp):
             _state["server"]["port"] = int(port)
         else:
             notes.append(f"[server] port = «{port}»: має бути число 1–65535")
-    if "backup_mirror" in server:
+    if "backup_mirror" in server and edited(server, "backup_mirror"):
         mirror, old = server["backup_mirror"].strip().strip('"'), core.meta_get(conn, "backup_mirror") or ""
         if mirror != old:
             core.meta_set(conn, "backup_mirror", mirror)
@@ -200,7 +214,10 @@ def apply(conn, cp):
     for sec in cp.sections():
         m = POINT_RE.fullmatch(sec.strip())
         if m:
-            _apply_point(conn, int(m[1]), sec, cp[sec], changes, notes)
+            known = conn.execute("select 1 from locations where id = ?", (int(m[1]),)).fetchone()
+            # точки ще немає в базі — беремо з файлу все; є — лише те, що людина змінила
+            d = {k: v for k, v in cp[sec].items() if not known or edited(cp[sec], k)}
+            _apply_point(conn, int(m[1]), sec, d, changes, notes)
     return changes, notes
 
 
@@ -277,7 +294,8 @@ def sync(conn=None):
                     core.log.warning("settings.ini не прочитано: %s", e)
                     write(conn, [f"файл не вдалося прочитати ({type(e).__name__}: {e}); записано поточні налаштування з бази"])
                     return
-                changes, notes = apply(conn, cp)
+                # при запуску (файл ще не читали) файл важливіший за базу цілком; далі — лише змінене людиною
+                changes, notes = apply(conn, cp, _state["base"] if _state["file"] is not None else None)
                 if changes:
                     core.audit(conn, None, "UPDATE", "settings", None, None, {"джерело": [None, "settings.ini"], **changes})
                 conn.commit()

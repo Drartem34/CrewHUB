@@ -635,9 +635,9 @@ def _cli(argv):
             uid = import_folder(conn, name)
             conn.commit()
         if uid:
-            print(f"Імпортовано: «{name}» → акаунт id {uid}")
+            print(f"Імпортовано: «{name}» → акаунт id {uid}. Пароля в папці немає: скиньте його людині в адмінці")
             return 0
-        print(f"Не вдалося імпортувати «{name}»: у папці немає profile.json з іменем і паролем, "
+        print(f"Не вдалося імпортувати «{name}»: у папці немає profile.json з іменем, "
               "або працівник із таким номером уже є.")
         return 1
     if cmd == "import-all":

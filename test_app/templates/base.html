@@ -91,7 +91,7 @@
 {% endif %}
 
 <div class="toasts" id="toasts">{% for m in get_flashed_messages() %}<div class="toast">{{ m }}</div>{% endfor %}</div>
-<script src="{{ url_for('static', filename='app.js') }}?v=11"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=12"></script>
 <script src="{{ url_for('static', filename='motion.js') }}?v=4"></script>
 <script src="{{ url_for('static', filename='nav.js') }}?v=1"></script>
 {% block scripts %}{% endblock %}

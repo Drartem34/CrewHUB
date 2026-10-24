@@ -515,6 +515,15 @@ DEMO_PEOPLE = [
 
 def init_db(seed=True):
     """Створює таблиці і, якщо база порожня, тестові дані: акаунти, точку і Wi-Fi зону вашої локальної мережі."""
+    try:
+        # Будь-який вхід (сервер, recover_admin.py, profiles.py) спершу забирає стару базу з папки програми:
+        # інакше тут створилась би порожня нова, і перенесення вже ніколи б не відбулось
+        moved = migrate_legacy_data()
+        if moved:
+            log.warning(moved)
+    except Exception:  # noqa: BLE001 — стара база лишається на місці, сервер стартує з новою
+        log.exception("Перенесення даних зі старої папки")
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     conn = connect()
     conn.executescript(SCHEMA)
     cols = [r[1] for r in conn.execute("pragma table_info(users)")]
@@ -1821,8 +1830,7 @@ def migrate_legacy_data():
     перейменованою (страховка). Повертає текст для консолі або None, якщо переносити нічого; RuntimeError —
     стару базу не вдалося скопіювати цілою (тоді вона лишається на місці, а сервер стартує з новою)."""
     os.makedirs(DATA_DIR, exist_ok=True)
-    if ("CREWHUB_DB" in os.environ or os.path.exists(DB_PATH) or not os.path.exists(LEGACY_DB)
-            or os.path.normcase(DATA_DIR) == os.path.normcase(BASE_DIR)):
+    if "CREWHUB_DB" in os.environ or os.path.exists(DB_PATH) or not os.path.exists(LEGACY_DB):
         return None
     import shutil
     moving = DB_PATH + ".moving"
@@ -1844,7 +1852,7 @@ def migrate_legacy_data():
             os.remove(LEGACY_DB + suffix)
     for name in ("people", "backups", "server_id.txt"):
         old, new = os.path.join(BASE_DIR, name), os.path.join(DATA_DIR, name)
-        if not os.path.exists(old):
+        if not os.path.exists(old) or os.path.normcase(old) == os.path.normcase(new):
             continue
         if not os.path.exists(new):
             shutil.move(old, new)
