@@ -417,7 +417,7 @@ class CrewHubTest(CrewHubBase):
         admin.post("/admin/rates", data={"rate": "150", "scope": "employees"})
         rates = dict(self.sql("select username, hourly_rate from users"))
         self.assertEqual((rates["ivan"], rates["olha"], rates["moder"], rates["admin"]), (150, 150, 180, 0))
-        self.assertEqual(core.setting("default_hourly_rate", core.connect()), "150.0")
+        self.assertEqual(float(core.setting("default_hourly_rate", core.connect())), 150.0)
         # модератор загальну ставку не змінює
         mod = self.login("moder", "moder123", client=core.app.test_client())
         self.assertEqual(mod.post("/admin/rates", data={"rate": "1", "scope": "all"}).status_code, 403)

@@ -9,6 +9,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import math
 import os
 import random
 import re
@@ -87,6 +88,87 @@ DEFAULT_SETTINGS = {
     "dayoff_paid": "1",              # дей-офф оплачується як повний робочий день за ставкою людини
     "registration_open": "1",        # чи можна зареєструватися самому (акаунт чекає підтвердження)
 }
+
+# Правила для кожного налаштування: (тип, межі, назва для повідомлень). Неприпустиме значення не зберігається,
+# а зіпсоване в базі (стара версія, ручна правка) читається як стандартне — сервер не падає ні від чого в «Правилах».
+SETTING_RULES = {
+    "company_name": ("text", 80, "Назва компанії"),
+    "currency": ("text", 10, "Валюта"),
+    "wifi_grace_minutes": ("int", 1, 120, "Допустима втрата Wi-Fi"),
+    "sleep_grace_minutes": ("int", 1, 240, "Допустима тиша застосунку"),
+    "silence_forgive_minutes": ("int", 0, 240, "Поблажка за сон телефона"),
+    "wifi_loss_action": ("choice", ("pause", "close"), "Дія при втраті Wi-Fi"),
+    "offline_keeps_counting": ("bool", "Зміна рахується без зв'язку"),
+    "wifi_pause_close_minutes": ("int", 1, 1440, "Закрити паузу через"),
+    "heartbeat_seconds": ("int", 5, 600, "Інтервал пінгу"),
+    "lunch_enabled": ("bool", "Обід"),
+    "lunch_is_paid": ("bool", "Оплачуваний обід"),
+    "lunch_rate_pct": ("float", 0, 500, "Оплата обіду, %"),
+    "rest_enabled": ("bool", "Пауза"),
+    "rest_is_paid": ("bool", "Оплачувана пауза"),
+    "rest_rate_pct": ("float", 0, 500, "Оплата паузи, %"),
+    "weekend_multiplier": ("float", 0, 10, "Множник вихідних"),
+    "night_multiplier": ("float", 0, 10, "Множник нічних годин"),
+    "night_start": ("time", "Початок ночі"),
+    "night_end": ("time", "Кінець ночі"),
+    "sick_auto_approve": ("bool", "Автопогодження лікарняного"),
+    "auto_start": ("bool", "Автостарт"),
+    "device_lock": ("bool", "Лише свій телефон"),
+    "work_start": ("time", "Початок робочого дня"),
+    "work_end": ("time", "Кінець робочого дня"),
+    "work_weekends": ("bool", "Робочі вихідні"),
+    "auto_early_minutes": ("int", 0, 240, "Ранній прихід"),
+    "auto_close_minutes": ("int", 1, 1440, "Закрити після кінця зміни через"),
+    "late_threshold_minutes": ("int", 0, 240, "Поріг запізнення"),
+    "max_shift_hours": ("int", 1, 48, "Максимальна зміна"),
+    "default_hourly_rate": ("float", 0, 1000000, "Загальна ставка"),
+    "dayoff_per_day": ("int", 0, 1000, "Дей-оффів на день"),
+    "dayoff_per_month": ("int", 0, 31, "Дей-оффів на місяць"),
+    "dayoff_paid": ("bool", "Оплачуваний дей-офф"),
+    "registration_open": ("bool", "Відкрита реєстрація"),
+}
+
+
+def _number(v):
+    """Скінченне число з рядка (кома теж підходить) або None. nan, inf, «2 хв» — None."""
+    try:
+        x = float(str(v).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def clean_setting(key, raw):
+    """Перевірене значення налаштування (рядок у тому вигляді, як воно лежить у базі) або None, якщо воно неприпустиме."""
+    rule = SETTING_RULES.get(key)
+    v = str(raw if raw is not None else "").strip()
+    if rule is None:
+        return v
+    kind = rule[0]
+    if kind == "bool":
+        return v if v in ("0", "1") else None
+    if kind == "choice":
+        return v if v in rule[1] else None
+    if kind == "text":
+        v = re.sub(r"[\x00-\x1f]", "", v)[:rule[1]].strip()
+        return v or None
+    if kind == "time":
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", v)
+        if not m or int(m[1]) > 23 or int(m[2]) > 59:
+            return None
+        return f"{int(m[1]):02d}:{m[2]}"
+    if key == "auto_close_minutes" and (m := re.fullmatch(r"(\d{1,2}):(\d{2})", v)):  # вводиться і як 1:30
+        v = str(int(m[1]) * 60 + int(m[2]))
+    x = _number(v)
+    lo, hi = rule[1], rule[2]
+    if x is None or not lo <= x <= hi:
+        return None
+    return str(int(x)) if kind == "int" else f"{x:g}"
+
+
+def setting_label(key):
+    return SETTING_RULES.get(key, (key,))[-1]
+
 
 ROLES = {"employee": "Працівник", "teamlead": "Тімлід", "moderator": "Модератор", "admin": "Адміністратор"}
 STAFF_ROLES = ("moderator", "admin")                # повне керування (вкладки «Керування»)
@@ -515,11 +597,16 @@ def seed_demo_history(conn):
 
 def setting(key, conn=None):
     row = (conn or db()).execute("select value from settings where key = ?", (key,)).fetchone()
-    return row[0] if row else DEFAULT_SETTINGS[key]
+    v = clean_setting(key, row[0]) if row else None
+    return v if v is not None else DEFAULT_SETTINGS[key]
 
 
 def setting_int(key, conn=None):
     return int(float(setting(key, conn)))
+
+
+def setting_float(key, conn=None):
+    return float(setting(key, conn))
 
 
 def audit(conn, actor_id, action, entity, entity_id, target_user_id, changes):
@@ -854,20 +941,11 @@ def ip_in_location(conn, ip, location_id):
 # ---------------------------------------------------------------------------
 def pay_rules(conn):
     """Множники оплати з налаштувань: вихідні, нічні години."""
-    st = {r[0]: r[1] for r in conn.execute("select key, value from settings")}
-
     def num(k):
-        try:
-            return max(float(st.get(k, DEFAULT_SETTINGS[k]).replace(",", ".")), 0)
-        except ValueError:
-            return 1.0
+        return setting_float(k, conn)
 
     def minutes(k):
-        try:
-            h, m = (st.get(k) or DEFAULT_SETTINGS[k]).split(":")
-            return (int(h) * 60 + int(m)) % 1440
-        except ValueError:
-            return 0
+        return hhmm_minutes(setting(k, conn), 0) % 1440
     return {"weekend": num("weekend_multiplier"), "night": num("night_multiplier"),
             "night_start": minutes("night_start"), "night_end": minutes("night_end")}
 
@@ -1241,10 +1319,7 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
         if setting(kind + "_enabled", conn) != "1":
             return {"ok": False, "error": "Цей вид перерви вимкнено адміністратором"}
         paid = setting_int(kind + "_is_paid", conn)
-        try:
-            pct = max(float(setting(kind + "_rate_pct", conn).replace(",", ".")), 0)
-        except ValueError:
-            pct = 100.0
+        pct = setting_float(kind + "_rate_pct", conn)
         conn.execute("insert into breaks(shift_id, kind, is_paid, rate_pct, started_at) values (?, ?, ?, ?, ?)",
                      (shift["id"], kind, paid, pct if paid else 0, t))
         conn.execute("update shifts set status = 'paused' where id = ?", (shift["id"],))
@@ -3201,16 +3276,16 @@ def admin_rates():
     actor = current_user()
     try:
         rate = round(float(request.form.get("rate", "").replace(",", ".")), 2)
-        assert rate >= 0
-    except (ValueError, AssertionError):
+        assert 0 <= rate <= 1000000
+    except (ValueError, AssertionError, OverflowError):
         flash("Вкажіть ставку числом")
         return redirect(request.referrer or url_for("admin", tab="employees"))
     scope = request.form.get("scope", "default")  # default | all | employees
     with _lock:
         conn = db()
         old = setting("default_hourly_rate", conn)
-        conn.execute("update settings set value = ? where key = 'default_hourly_rate'", (str(rate),))
-        audit(conn, actor["id"], "UPDATE", "settings", None, None, {"default_hourly_rate": [old, str(rate)]})
+        conn.execute("update settings set value = ? where key = 'default_hourly_rate'", (f"{rate:g}",))
+        audit(conn, actor["id"], "UPDATE", "settings", None, None, {"default_hourly_rate": [old, f"{rate:g}"]})
         changed = 0
         if scope in ("all", "employees"):
             roles = ("employee", "teamlead") if scope == "employees" else ("employee", "teamlead", "moderator")
@@ -3534,13 +3609,9 @@ def admin_zones():
     return redirect(url_for("admin", tab="zones"))
 
 
-NUMBER_SETTINGS = ("weekend_multiplier", "night_multiplier", "lunch_rate_pct", "rest_rate_pct", "auto_early_minutes",
-                   "sleep_grace_minutes", "silence_forgive_minutes",
-                   "dayoff_per_day", "dayoff_per_month")
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
                      "offline_keeps_counting", "dayoff_paid")
-TIME_SETTINGS = ("night_start", "night_end", "work_start", "work_end")
 
 
 @app.post("/admin/backup_mirror")
@@ -3578,30 +3649,27 @@ def admin_settings():
     with _lock:
         conn = db()
         old = {k: setting(k, conn) for k in DEFAULT_SETTINGS}
-        new = {}
+        new, bad = {}, []
         for k in DEFAULT_SETTINGS:
             if k in CHECKBOX_SETTINGS:
                 new[k] = "1" if request.form.get(k) else "0"
             elif k in request.form:
-                v = request.form[k].strip().replace(",", ".") if k in NUMBER_SETTINGS else request.form[k].strip()
-                if k in NUMBER_SETTINGS:
-                    try:
-                        v = f"{max(float(v), 0):g}"
-                    except ValueError:
-                        v = ""
-                elif k in TIME_SETTINGS and not re.fullmatch(r"\d{1,2}:\d{2}", v):
-                    v = ""
-                elif k == "auto_close_minutes":  # вводиться як 1:30 (год:хв) або хвилинами
-                    m = re.fullmatch(r"(\d{1,2}):(\d{2})", v)
-                    v = str(int(m[1]) * 60 + int(m[2])) if m else (v if v.isdigit() else "")
-                    v = "" if v == "0" else v
-                new[k] = v or old[k]
+                if not request.form[k].strip():
+                    new[k] = old[k]  # порожнє поле — лишаємо як було
+                    continue
+                v = clean_setting(k, request.form[k])
+                if v is None:
+                    bad.append(setting_label(k))
+                new[k] = old[k] if v is None else v
         for k, v in new.items():
             conn.execute("update settings set value = ? where key = ?", (v, k))
         changes = diff(old, new)
         if changes:
             audit(conn, current_user()["id"], "UPDATE", "settings", None, None, changes)
         conn.commit()
+    if bad:
+        flash("Збережено, крім неправильних значень (лишились попередні): " + ", ".join(bad))
+        return redirect(url_for("admin", tab="settings"))
     flash("Правила збережено")
     return redirect(url_for("admin", tab="settings"))
 

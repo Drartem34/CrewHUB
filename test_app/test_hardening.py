@@ -258,6 +258,38 @@ class HardeningTest(CrewHubBase):
         self.sync()
         self.assertNotIn("scrypt:", open(core.os.path.join(path, "profile.json"), encoding="utf-8").read())
 
+    # --- 🟠 1. Налаштування не можуть «вбити» сервер ---------------------------------------------
+    def test_bad_settings_are_rejected_on_save(self):
+        admin = self.login("admin", "admin123")
+        form = {k: v for k, v in self.sql("select key, value from settings")}
+        form.update(wifi_grace_minutes="2 хв", max_shift_hours="0", weekend_multiplier="nan", night_start="25:99",
+                    heartbeat_seconds="inf", company_name="Моя кава", auto_close_minutes="1:30")
+        form = {k: v for k, v in form.items() if v != "0" or k == "max_shift_hours"}
+        r = admin.post("/admin/settings", data=form, follow_redirects=True)
+        self.assertIn("крім неправильних", r.get_data(as_text=True))
+        got = dict(self.sql("select key, value from settings"))
+        self.assertEqual(got["wifi_grace_minutes"], "2")
+        self.assertEqual(got["max_shift_hours"], "16")
+        self.assertEqual(got["weekend_multiplier"], "1")   # у тестах вимкнено — так і лишилось
+        self.assertEqual(got["night_start"], "22:00")
+        self.assertEqual(got["heartbeat_seconds"], "20")
+        self.assertEqual(got["company_name"], "Моя кава")  # правильні значення збережено
+        self.assertEqual(got["auto_close_minutes"], "90")
+
+    def test_garbage_in_db_falls_back_to_defaults(self):
+        for k, v in (("wifi_grace_minutes", "2 хв"), ("heartbeat_seconds", "abc"), ("weekend_multiplier", "nan"),
+                     ("max_shift_hours", "0"), ("night_start", "xx"), ("lunch_rate_pct", "inf")):
+            self.sql("update settings set value = ? where key = ?", v, k)
+        self.login("ivan")
+        r = self.client.post("/api/clock/start", json={}, headers={"X-Forwarded-For": WORK_IP})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["heartbeat_seconds"], 20)
+        self.assertEqual(self.clock("break_start", kind="lunch")["shift"]["status"], "paused")
+        with core.connect() as c:
+            core.sweep(c)  # не падає
+            self.assertEqual(core.pay_rules(c)["weekend"], 2.0)
+        self.assertEqual(self.sql("select status from shifts")[0][0], "paused")  # max_shift_hours=0 не закрив зміну
+
 
 if __name__ == "__main__":
     unittest.main()
