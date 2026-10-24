@@ -1078,7 +1078,10 @@ def dayoff_days(conn, user_id, d_from, d_to, except_rid=0):
     for r in conn.execute("select starts_on, ends_on from requests where user_id = ? and type = 'day_off' and status = 'approved'"
                           " and starts_on <= ? and ends_on >= ? and id != ?",
                           (user_id, d_to.isoformat(), d_from.isoformat(), except_rid or 0)):
-        d, last = max(date.fromisoformat(r[0]), d_from), min(date.fromisoformat(r[1]), d_to)
+        a, b = parse_day(r[0]), parse_day(r[1])
+        if not a or not b:
+            continue  # зіпсована дата зі старої бази
+        d, last = max(a, d_from), min(b, d_to)
         while d <= last:
             out.add(d)
             d += timedelta(days=1)
@@ -1105,7 +1108,10 @@ def dayoff_full_days(conn, user_id, d_from, d_to):
     count = {}
     for r in conn.execute("select user_id, starts_on, ends_on from requests where type = 'day_off' and status = 'approved'"
                           " and starts_on <= ? and ends_on >= ? and user_id != ?", (d_to.isoformat(), d_from.isoformat(), user_id)):
-        d, last = max(date.fromisoformat(r[1]), d_from), min(date.fromisoformat(r[2]), d_to)
+        a, b = parse_day(r[1]), parse_day(r[2])
+        if not a or not b:
+            continue
+        d, last = max(a, d_from), min(b, d_to)
         while d <= last:
             count.setdefault(d, set()).add(r[0])
             d += timedelta(days=1)
@@ -1679,9 +1685,21 @@ def absence_on(conn, user_id, day, pending=False):
         (user_id, *statuses, day.isoformat(), day.isoformat())).fetchone()
 
 
+def absence_dates(f):
+    """Початок і кінець відсутності з форми як ISO-рядки, або (None, None), якщо дати неправильні."""
+    s = parse_day(f.get("starts_on"))
+    e = parse_day(f.get("ends_on")) if f.get("ends_on") else s
+    if not s or not e or e < s or (e - s).days >= MAX_ABSENCE_DAYS:
+        return None, None
+    return s.isoformat(), e.isoformat()
+
+
 def apply_absence(conn, r):
     """Схвалена відсутність прибирає заплановані зміни людини на ці дні."""
-    start, end = day_bounds(date.fromisoformat(r["starts_on"]), date.fromisoformat(r["ends_on"]))
+    a, b = parse_day(r["starts_on"]), parse_day(r["ends_on"])
+    if not a or not b:
+        return
+    start, end = day_bounds(a, b)
     conn.execute("delete from schedule where user_id = ? and starts_at >= ? and starts_at < ?", (r["user_id"], start, end))
 
 
@@ -1712,10 +1730,7 @@ def hours_by_day(conn, user_id=None, days=7):
 
 def month_range(month):
     """'2026-10' -> (date(2026,10,1), date(2026,10,31))"""
-    try:
-        d_from = date.fromisoformat((month or "") + "-01")
-    except ValueError:
-        d_from = date.today().replace(day=1)
+    d_from = parse_month(month)
     d_to = (d_from.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
     return d_from, d_to
 
@@ -1785,10 +1800,7 @@ def month_grid(conn, first, viewer=None):
 
 
 def parse_month(value):
-    try:
-        return date.fromisoformat((value or "") + "-01")
-    except ValueError:
-        return date.today().replace(day=1)
+    return parse_day(str(value or "")[:7] + "-01") or date.today().replace(day=1)
 
 
 def default_slot(conn, user_id, day):
@@ -1900,9 +1912,9 @@ def _plural(n, one, few, many):
 
 def tenure_text(hire_iso, today=None):
     """«В команді з травня 2025 (1 рік 5 міс.)»"""
-    if not hire_iso:
+    h = parse_day(hire_iso)
+    if not h:
         return ""
-    h = date.fromisoformat(hire_iso)
     today = today or date.today()
     months = max((today.year - h.year) * 12 + today.month - h.month - (1 if today.day < h.day else 0), 0)
     y, m = divmod(months, 12)
@@ -1941,8 +1953,41 @@ def fmt_fromjson(v):
     return json.loads(v) if v else {}
 
 
+# Усе, що приходить з форм і запитів, розбираємо тут: сміття чи дата поза розумними межами — None,
+# а маршрут показує людині зрозуміле повідомлення замість помилки 500.
+DATE_MIN, DATE_MAX = date(2000, 1, 1), date(2100, 12, 31)
+MAX_ABSENCE_DAYS = 366
+
+
+def parse_day(v):
+    """'2026-10-24' → date (2000–2100) або None."""
+    try:
+        d = date.fromisoformat(str(v or "").strip()[:10])
+    except ValueError:
+        return None
+    return d if DATE_MIN <= d <= DATE_MAX else None
+
+
+def parse_int(v, default=None):
+    try:
+        x = int(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+    return x if -2**63 <= x < 2**63 else default  # більше SQLite не вміщує
+
+
+def parse_amount(v, lo=0.0, hi=1_000_000.0):
+    """Сума чи ставка: скінченне число в межах або None."""
+    x = _number(v)
+    return x if x is not None and lo <= x <= hi else None
+
+
 def parse_dtinput(v):
-    return int(datetime.strptime(v, "%Y-%m-%dT%H:%M").timestamp()) if v else None
+    try:
+        d = datetime.strptime(str(v or "").strip(), "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return None
+    return int(d.timestamp()) if DATE_MIN <= d.date() <= DATE_MAX else None
 
 
 @app.context_processor
@@ -2342,10 +2387,7 @@ def me():
     elif tab == "timesheet":
         ctx.update(timesheet(conn, u["id"], request.args.get("month")))
     elif tab == "schedule":
-        try:
-            ref = date.fromisoformat(request.args.get("week", ""))
-        except ValueError:
-            ref = default_week_day()
+        ref = parse_day(request.args.get("week")) or default_week_day()
         ctx["grid"] = week_grid(conn, ref - timedelta(days=ref.weekday()), weekend=request.args.get("weekend") == "1",
                                 viewer=None if u["role"] in STAFF_ROLES else u)
         if request.args.get("view") == "month":
@@ -2437,8 +2479,12 @@ def me_request():
                             (u["id"],)).fetchone():
                 flash("Запит на дей-офф уже є: дочекайтесь дозволу або оберіть день")
                 return redirect(url_for("me", tab=f.get("back") or "schedule"))
-            day = f.get("day", "")
-            if day and day >= date.today().isoformat():
+            day = parse_day(f.get("day"))
+            if f.get("day") and not day:
+                flash("Невірна дата")
+                return redirect(url_for("me", tab=f.get("back") or "clock"))
+            if day and day >= date.today():
+                day = day.isoformat()
                 if err := dayoff_limit_error(conn, u["id"], date.fromisoformat(day)):
                     flash(err)
                     return redirect(url_for("me", tab=f.get("back") or "clock"))
@@ -2455,9 +2501,9 @@ def me_request():
             flash("Запит на дей-офф надіслано тімліду")
             return redirect(url_for("me", tab=f.get("back") or "schedule"))
         elif rtype in ("vacation", "sick_leave"):
-            s, e = f.get("starts_on"), f.get("ends_on") or f.get("starts_on")
-            if not s or e < s:
-                flash("Вкажіть правильні дати")
+            s, e = absence_dates(f)
+            if not s:
+                flash("Вкажіть правильні дати (не довше року)")
                 return redirect(url_for("me", tab=f.get("back") or "requests"))
             # Відсутність працівник лише просить: погоджує, змінює чи знімає тімлід (модератор) або адміністратор
             conn.execute("insert into requests(user_id, type, status, starts_on, ends_on, comment, created_at)"
@@ -2475,7 +2521,8 @@ def me_request():
 def me_dayoff_pick(rid):
     """Людина з дозволом обирає день дей-оффу (лише протягом DAYOFF_PICK_DAYS днів після дозволу)."""
     u = current_user()
-    day = request.form.get("day", "")
+    picked = parse_day(request.form.get("day"))
+    day = picked.isoformat() if picked else ""
     with _lock:
         conn = db()
         expire_grants(conn)
@@ -2557,8 +2604,10 @@ def schedule_toggle():
         abort(403)
     data = request.get_json(silent=True) or request.form
     try:
-        uid, day = int(data.get("user_id")), date.fromisoformat(data.get("day", ""))
+        uid, day = int(data.get("user_id")), parse_day(data.get("day"))
     except (TypeError, ValueError):
+        abort(400)
+    if not day:
         abort(400)
     start, end = day_bounds(day, day)
     with _lock:
@@ -2590,8 +2639,10 @@ def schedule_dayoff():
         abort(403)
     data = request.get_json(silent=True) or request.form
     try:
-        uid, day = int(data.get("user_id")), date.fromisoformat(data.get("day", ""))
+        uid, day = int(data.get("user_id")), parse_day(data.get("day"))
     except (TypeError, ValueError):
+        abort(400)
+    if not day:
         abort(400)
     with _lock:
         conn = db()
@@ -2668,7 +2719,9 @@ def team_dayoff():
         if action in ("approve", "reject") and r and r["status"] == "pending":
             if action == "approve" and r["starts_on"]:
                 # Заявка з конкретним днем (із кампанії) — погоджуємо саме цей день
-                if err := dayoff_limit_error(conn, r["user_id"], date.fromisoformat(r["starts_on"]), except_rid=r["id"]):
+                if not parse_day(r["starts_on"]):
+                    flash("У заявці неправильна дата: відхиліть її")
+                elif err := dayoff_limit_error(conn, r["user_id"], parse_day(r["starts_on"]), except_rid=r["id"]):
                     flash(err)
                 else:
                     conn.execute("update requests set status = 'approved', reviewer_id = ? where id = ?", (actor["id"], r["id"]))
@@ -2691,11 +2744,11 @@ def team_dayoff():
                 cur = conn.execute("insert into requests(user_id, type, comment, created_at) values (?, 'day_off', ?, ?)",
                                    (uid[0], f.get("comment") or None, now()))
                 grant_dayoff(conn, conn.execute("select * from requests where id = ?", (cur.lastrowid,)).fetchone(), actor)
-        elif action == "move" and r and r["status"] == "approved" and f.get("day", "") >= date.today().isoformat() \
-                and (err := dayoff_limit_error(conn, r["user_id"], date.fromisoformat(f["day"]), except_rid=r["id"])):
+        elif action == "move" and r and r["status"] == "approved" and (move_to := parse_day(f.get("day"))) \
+                and move_to >= date.today() and (err := dayoff_limit_error(conn, r["user_id"], move_to, except_rid=r["id"])):
             flash(err)
-        elif action == "move" and r and r["status"] == "approved" and f.get("day", "") >= date.today().isoformat():
-            day = f["day"]
+        elif action == "move" and r and r["status"] == "approved" and (move_to := parse_day(f.get("day"))) and move_to >= date.today():
+            day = move_to.isoformat()
             conn.execute("update requests set starts_on = ?, ends_on = ?, reviewer_id = ? where id = ?", (day, day, actor["id"], r["id"]))
             apply_absence(conn, conn.execute("select * from requests where id = ?", (r["id"],)).fetchone())
             audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"day": [r["starts_on"], day]})
@@ -2838,6 +2891,14 @@ def health():
         return jsonify({"ok": False, "error": str(e)}), 503
 
 
+@app.errorhandler(OverflowError)
+def _too_big(_e):
+    # /admin/employee/99999999999999999999: такого id не буває, SQLite не вміщує число — це «не знайдено», а не збій
+    if request.path.startswith("/api/") or request.is_json:
+        return jsonify({"ok": False, "error": "Не знайдено"}), 404
+    return render_template("error.html"), 404
+
+
 @app.errorhandler(500)
 def _server_error(e):
     # Помилка в одному запиті не валить сервер; людина бачить зрозумілий текст замість трасування
@@ -2964,10 +3025,7 @@ def admin():
             " left join schedule sc on sc.id = r.schedule_id"
             " order by (r.status = 'pending') desc, r.id desc limit 200").fetchall()
     elif tab == "schedule":
-        try:
-            ref = date.fromisoformat(request.args.get("week", ""))
-        except ValueError:
-            ref = default_week_day()
+        ref = parse_day(request.args.get("week")) or default_week_day()
         ctx["grid"] = week_grid(conn, ref - timedelta(days=ref.weekday()), weekend=request.args.get("weekend") == "1")
         if request.args.get("view") == "month":
             ctx["mgrid"] = month_grid(conn, parse_month(request.args.get("month")))
@@ -3075,8 +3133,13 @@ def admin_employee_save(uid):
             flash(OWN_RECORD_MSG + ". Свої контакти змініть у «Профілі»")
             return redirect(url_for("admin_employee", uid=uid))
         new = {k: (f.get(k, "").strip() or None) for k in EDITABLE_USER_FIELDS}
-        new["hourly_rate"] = float((new["hourly_rate"] or "0").replace(",", "."))
-        new["location_id"] = int(new["location_id"]) if new["location_id"] else None
+        new["hourly_rate"] = parse_amount(new["hourly_rate"] or "0")
+        new["location_id"] = parse_int(new["location_id"])
+        hire = new["hire_date"]
+        new["hire_date"] = parse_day(hire).isoformat() if parse_day(hire) else None
+        if new["hourly_rate"] is None or (hire and not new["hire_date"]):
+            flash("Перевірте ставку (число від 0) і дату початку роботи")
+            return redirect(url_for("admin_employee", uid=uid))
         new["full_name"] = new["full_name"] or u["full_name"]
         new["status"] = new["status"] if new["status"] in STATUSES else u["status"]
         if new["phone"]:
@@ -3127,14 +3190,17 @@ def admin_employee_new():
         if phone_taken(conn, phone):
             flash(f"Номер {format_phone(phone)} уже зареєстровано")
             return redirect(url_for("admin", tab="employees"))
-        rate = f.get("hourly_rate") or setting("default_hourly_rate", conn)
+        rate = parse_amount(f.get("hourly_rate") or setting("default_hourly_rate", conn))
+        hire = parse_day(f.get("hire_date"))
+        if rate is None or (f.get("hire_date") and not hire):
+            flash("Перевірте ставку (число від 0) і дату початку роботи")
+            return redirect(url_for("admin", tab="employees"))
         try:
             role = f.get("role") if f.get("role") in ROLES and current_user()["role"] == "admin" else "employee"
             cur = conn.execute("insert into users(username, password_hash, full_name, job_title, hourly_rate, hire_date, location_id,"
                                " phone, role) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                (phone, hash_password(f["password"]), f["full_name"].strip(), f.get("job_title") or None,
-                                float(str(rate).replace(",", ".")), f.get("hire_date") or None,
-                                int(f["location_id"]) if f.get("location_id") else None, phone, role))
+                                rate, hire.isoformat() if hire else None, parse_int(f.get("location_id")), phone, role))
         except sqlite3.IntegrityError:
             flash("Цей номер уже зареєстровано")
             return redirect(url_for("admin", tab="employees"))
@@ -3192,8 +3258,11 @@ def admin_registration(uid, decision):
         u = conn.execute("select * from users where id = ? and status = 'pending'", (uid,)).fetchone() or abort(404)
         if decision == "approve":
             f = request.form
-            rate = float((f.get("hourly_rate") or setting("default_hourly_rate", conn)).replace(",", "."))
-            loc = int(f["location_id"]) if f.get("location_id") else None
+            rate = parse_amount(f.get("hourly_rate") or setting("default_hourly_rate", conn))
+            if rate is None:
+                flash("Ставка має бути числом від 0")
+                return redirect(request.referrer or url_for("admin", tab="requests"))
+            loc = parse_int(f.get("location_id"))
             role = f.get("role") if f.get("role") in ROLES and actor["role"] == "admin" else "employee"
             conn.execute("update users set status = 'active', hourly_rate = ?, location_id = ?, job_title = ?, hire_date = ?, role = ?"
                          " where id = ?", (rate, loc, f.get("job_title") or None, date.today().isoformat(), role, uid))
@@ -3306,7 +3375,7 @@ def admin_shift_save():
     """Ручне редагування або додавання зміни модератором (з аудитом)."""
     actor = current_user()
     f = request.form
-    uid = int(f["user_id"])
+    uid = parse_int(f.get("user_id")) or abort(400)
     start, end = parse_dtinput(f.get("started_at")), parse_dtinput(f.get("ended_at"))
     if not start or not end or end < start:
         flash("Перевірте початок і кінець зміни")
@@ -3317,7 +3386,10 @@ def admin_shift_save():
     with _lock:
         conn = db()
         user = conn.execute("select * from users where id = ?", (uid,)).fetchone() or abort(404)
-        rate = float(f["hourly_rate"].replace(",", ".")) if f.get("hourly_rate") else user["hourly_rate"]
+        rate = parse_amount(f["hourly_rate"]) if f.get("hourly_rate") else user["hourly_rate"]
+        if rate is None:
+            flash("Ставка має бути числом від 0")
+            return redirect(url_for("admin_employee", uid=uid))
         if f.get("shift_id"):
             s = conn.execute("select * from shifts where id = ? and user_id = ?", (f["shift_id"], uid)).fetchone() or abort(404)
             new = {"started_at": start, "ended_at": end, "hourly_rate": rate, "note": f.get("note") or s["note"]}
@@ -3341,12 +3413,11 @@ def admin_shift_save():
 @login_required(staff=True)
 def admin_adjustment():
     f = request.form
-    uid = int(f["user_id"])
-    day = f.get("day") or date.today().isoformat()
+    uid = parse_int(f.get("user_id")) or abort(400)
+    day = (parse_day(f.get("day")) or date.today()).isoformat()
     reason = f.get("reason", "").strip()
-    try:
-        value = abs(float((f.get("amount") or "0").replace(",", ".")))
-    except ValueError:
+    value = abs(_number(f.get("amount") or "0") or 0)
+    if value > (1000 if f.get("unit") == "pct" else 10_000_000):
         value = 0
     if not value or not reason:
         flash("Вкажіть суму і причину")
@@ -3359,10 +3430,7 @@ def admin_adjustment():
         conn.execute("select 1 from users where id = ?", (uid,)).fetchone() or abort(404)
         # Відсоток рахується від заробітку людини за той місяць, у якому стоїть бонус (години + дей-офи, без інших бонусів/штрафів).
         if f.get("unit") == "pct":
-            try:
-                md = date.fromisoformat(day)
-            except ValueError:
-                md = date.today()
+            md = parse_day(day) or date.today()
             m_end = (md.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
             row = payroll(conn, md.replace(day=1), m_end, uid)
             base = round((row[0]["earned"] + row[0]["dayoff"]) if row else 0, 2)
@@ -3444,8 +3512,11 @@ def admin_request(rid, decision):
                 conn.commit()
                 return redirect(request.referrer or url_for("admin", tab="requests"))
             else:
-                if r["type"] == "day_off" and (err := dayoff_limit_error(conn, r["user_id"], date.fromisoformat(r["starts_on"]),
-                                                                        date.fromisoformat(r["ends_on"]), except_rid=r["id"])):
+                a, b = parse_day(r["starts_on"]), parse_day(r["ends_on"])
+                if not a or not b:
+                    flash("У запиті неправильні дати: відхиліть його, людина подасть новий")
+                    return redirect(url_for("admin", tab="requests"))
+                if r["type"] == "day_off" and (err := dayoff_limit_error(conn, r["user_id"], a, b, except_rid=r["id"])):
                     flash(err)
                     return redirect(url_for("admin", tab="requests"))
                 apply_absence(conn, r)
@@ -3476,11 +3547,11 @@ def admin_absence():
             audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"status": [r["status"], "cancelled"]})
             notify(conn, r["user_id"], "Відсутність знято", f"{REQUEST_TYPES[r['type']]}: {r['starts_on']} – {r['ends_on']}")
         else:
-            s, e = f.get("starts_on"), f.get("ends_on") or f.get("starts_on")
-            if f.get("type") not in ABSENCE_TYPES or not s or e < s:
-                flash("Вкажіть тип і правильні дати")
+            s, e = absence_dates(f)
+            uid = parse_int(f.get("user_id"))
+            if f.get("type") not in ABSENCE_TYPES or not s or not uid:
+                flash("Вкажіть тип і правильні дати (не довше року)")
                 return redirect(url_for("admin", **back))
-            uid = int(f["user_id"])
             if own_record_blocked(actor, uid):
                 flash(OWN_RECORD_MSG)
                 return redirect(url_for("admin", **back))
@@ -3504,7 +3575,11 @@ def admin_schedule():
         conn = db()
         if f.get("action") == "copy_week":
             # Копіює графік попереднього тижня на поточний (без дублікатів)
-            monday = date.fromisoformat(f["week"])
+            monday = parse_day(f.get("week"))
+            if not monday:
+                flash("Невірний тиждень")
+                return redirect(url_for("admin", tab="schedule"))
+            monday -= timedelta(days=monday.weekday())
             start, end = day_bounds(monday - timedelta(days=7), monday - timedelta(days=1))
             copied = 0
             for sc in conn.execute("select * from schedule where starts_at >= ? and starts_at < ?", (start, end)).fetchall():
@@ -3525,12 +3600,15 @@ def admin_schedule():
                       {"starts_at": [old["starts_at"], None], "ends_at": [old["ends_at"], None]})
         else:
             start, end = parse_dtinput(f.get("starts_at")), parse_dtinput(f.get("ends_at"))
-            if not start or not end or end <= start:
-                flash("Перевірте час зміни")
+            uid, loc = parse_int(f.get("user_id")), parse_int(f.get("location_id"))
+            if not start or not end or end <= start or end - start > 24 * 3600 or not uid:
+                flash("Перевірте людину і час зміни (до 24 год)")
                 return redirect(url_for("admin", tab="schedule", week=f.get("week")))
+            if not conn.execute("select 1 from users where id = ?", (uid,)).fetchone():
+                abort(404)
             cur = conn.execute("insert into schedule(user_id, location_id, starts_at, ends_at, note) values (?, ?, ?, ?, ?)",
-                               (int(f["user_id"]), int(f["location_id"]), start, end, f.get("note") or None))
-            audit(conn, current_user()["id"], "INSERT", "schedule", cur.lastrowid, int(f["user_id"]),
+                               (uid, loc, start, end, f.get("note") or None))
+            audit(conn, current_user()["id"], "INSERT", "schedule", cur.lastrowid, uid,
                   {"starts_at": [None, start], "ends_at": [None, end]})
         conn.commit()
     return redirect(url_for("admin", tab="schedule", week=f.get("week")))
@@ -3553,8 +3631,8 @@ def admin_zones():
                 except sqlite3.IntegrityError:
                     flash("Така точка вже є")
         elif f.get("action") == "toggle":
-            conn.execute("update locations set is_active = 1 - is_active where id = ?", (f["location_id"],))
-            audit(conn, actor["id"], "UPDATE", "locations", int(f["location_id"]), None, {"is_active": ["перемкнено", ""]})
+            conn.execute("update locations set is_active = 1 - is_active where id = ?", (parse_int(f.get("location_id")),))
+            audit(conn, actor["id"], "UPDATE", "locations", parse_int(f.get("location_id")), None, {"is_active": ["перемкнено", ""]})
         else:
             # Wi-Fi зони змінює лише адмін
             if actor["role"] != "admin":
@@ -3571,7 +3649,7 @@ def admin_zones():
                 cidr = str(net)
                 try:
                     cur = conn.execute("insert into networks(location_id, cidr, label) values (?, ?, ?)",
-                                       (int(f["location_id"]), cidr, f.get("label")))
+                                       (parse_int(f.get("location_id")) or abort(400), cidr, f.get("label")))
                     audit(conn, actor["id"], "INSERT", "networks", cur.lastrowid, None, {"cidr": [None, cidr]})
                 except sqlite3.IntegrityError:
                     flash("Ця мережа вже додана")
@@ -3584,7 +3662,7 @@ def admin_zones():
                     return redirect(url_for("admin", tab="zones"))
                 try:
                     cur = conn.execute("insert into networks(location_id, cidr, label) values (?, ?, ?)",
-                                       (int(f["location_id"]), cidr, f.get("label") or "Прив'язано з пристрою адміна"))
+                                       (parse_int(f.get("location_id")) or abort(400), cidr, f.get("label") or "Прив'язано з пристрою адміна"))
                     audit(conn, actor["id"], "INSERT", "networks", cur.lastrowid, None, {"cidr": [None, cidr]})
                     flash(f"Мережу {cidr} прив'язано. Тепер з неї можна вмикати таймер")
                 except sqlite3.IntegrityError:
@@ -3687,9 +3765,8 @@ def admin_backup_download():
 @app.route("/admin/payroll.csv")
 @login_required(staff=True)
 def admin_payroll_csv():
-    month = request.args.get("month") or date.today().strftime("%Y-%m")
-    d_from = date.fromisoformat(month + "-01")
-    d_to = (d_from.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    d_from, d_to = month_range(request.args.get("month"))
+    month = d_from.strftime("%Y-%m")
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
     w.writerow(["ПІБ", "Посада", "Ставка", "Змін", "Годин", "За години", "У т.ч. надбавки (вихідні, ніч)", "Дей-офф", "Бонуси", "Штрафи", "До виплати"])

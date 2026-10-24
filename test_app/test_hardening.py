@@ -290,6 +290,61 @@ class HardeningTest(CrewHubBase):
             self.assertEqual(core.pay_rules(c)["weekend"], 2.0)
         self.assertEqual(self.sql("select status from shifts")[0][0], "paused")  # max_shift_hours=0 не закрив зміну
 
+    # --- 🟠 2. Сміття у формах не дає помилки 500 ----------------------------------------------
+    FIELDS = ("user_id", "day", "starts_on", "ends_on", "type", "hourly_rate", "location_id", "hire_date", "started_at", "ended_at",
+              "amount", "unit", "kind", "reason", "week", "starts_at", "ends_at", "cidr", "network_id", "rid", "month", "phone",
+              "password", "password2", "full_name", "rate", "scope", "role", "comment", "proposed_start", "proposed_end", "shift_id",
+              "schedule_id", "swap_with_id", "back", "cancel_id", "delete_id", "label", "name", "wifi_ssid", "wifi_password",
+              "telegram", "whatsapp", "current", "new", "status", "job_title", "department", "note", "address")
+    ACTIONS = ("location", "toggle", "network", "bind_current", "wifi", "delete_network", "copy_week", "approve", "reject",
+               "grant", "move", "cancel", "open", "close")
+    TYPES = ("time_edit", "shift_add", "shift_swap", "day_off", "vacation", "sick_leave")
+    GARBAGE = ("zz", "", "9999-99-99", "0001-01-01", "nan", "1e309", "-1", "2026-13", "99999999999999999999")
+
+    def test_garbage_input_never_gives_500(self):
+        core.app.config["PROPAGATE_EXCEPTIONS"] = False
+        self.addCleanup(core.app.config.pop, "PROPAGATE_EXCEPTIONS", None)
+        ivan_id = self.sql("select id from users where username = 'ivan'")[0][0]
+        ivan = self.login("ivan")
+        ivan.post("/me/request", data={"type": "vacation", "starts_on": "2026-12-01", "ends_on": "2026-12-03"})
+        ivan.post("/me/request", data={"type": "day_off"})
+        self.clock("start", client=ivan)
+        self.clock("stop", client=ivan)
+        # «Зіпсовані» дані зі старої бази теж не мають валити сторінки
+        self.sql("insert into requests(user_id, type, status, starts_on, ends_on, created_at) values (?, 'sick_leave', 'pending', 'zz', 'zz', 1)", ivan_id)
+        self.sql("update users set hire_date = '01.05.2025' where id = ?", ivan_id)
+        rid = self.sql("select max(id) from requests")[0][0]
+        sid = self.sql("select id from shifts")[0][0]
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        skip = {"/admin/backup_mirror", "/logout", "/login", "/register", "/password", "/admin/employee/<int:uid>/delete"}
+        bad = []
+        for rule in core.app.url_map.iter_rules():
+            if "POST" not in rule.methods or rule.rule in skip:
+                continue
+            url = rule.rule
+            for arg, val in (("<int:uid>", ivan_id), ("<int:rid>", rid), ("<int:aid>", 1), ("<int:did>", 1), ("<action>", "cancel"),
+                             ("<decision>", "approve"), ("<int:uid2>", ivan_id)):
+                url = url.replace(arg, str(val))
+            for v in self.GARBAGE:
+                base = {f: v for f in self.FIELDS}
+                tries = [(c, kw) for c in (admin, ivan) for kw in ({"data": base}, {"json": base})]
+                if v in ("zz", "9999-99-99", "nan", "99999999999999999999"):  # дії й типи запитів — з найзлішим сміттям
+                    tries += [(admin, {"data": dict(base, action=a)}) for a in self.ACTIONS]
+                    tries += [(ivan, {"data": dict(base, type=t)}) for t in self.TYPES]
+                for c, kw in tries:
+                    r = c.post(url, headers={"X-Forwarded-For": WORK_IP}, **kw)
+                    if r.status_code >= 500:
+                        data = kw.get("data") or kw.get("json")
+                        bad.append((url, v, data.get("action"), data.get("type"), "json" in kw))
+        for url in ("/me?tab=schedule&week=0001-01-01", "/me?tab=timesheet&month=2026-13", "/admin?tab=payroll&month=0001-01",
+                    "/admin?tab=schedule&week=zz&view=month&month=9999-99", "/admin/payroll.csv?month=2026-13",
+                    f"/admin/employee/{ivan_id}?month=zz", f"/admin/employee/{ivan_id}/timesheet.csv?month=-1", "/admin?tab=requests",
+                    "/me?tab=schedule&view=month&month=0000-00", "/admin?tab=live", "/admin?tab=employees"):
+            for c in (admin, ivan):
+                if c.get(url).status_code >= 500:
+                    bad.append((url, "GET"))
+        self.assertEqual(sorted(set(bad))[:40], [], f"{len(bad)} запитів дали 500")
+
 
 if __name__ == "__main__":
     unittest.main()
