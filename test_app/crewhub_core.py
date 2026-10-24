@@ -1843,6 +1843,18 @@ def login_required(staff=False, admin=False):
     return deco
 
 
+def own_record_blocked(actor, uid):
+    """Розділення обов'язків: модератор не змінює власні зміни, ставку, бонуси й не погоджує свої запити —
+    це робить адміністратор (або інший модератор щодо нього)."""
+    try:
+        return actor["role"] != "admin" and int(uid) == actor["id"]
+    except (TypeError, ValueError):
+        return False
+
+
+OWN_RECORD_MSG = "Свої зміни, ставку, бонуси й запити погоджує адміністратор"
+
+
 @app.template_filter("walink")
 def wa_link(v):
     """Номер WhatsApp → посилання wa.me (лише цифри). Український 0XX… перетворюємо на 380XX…."""
@@ -2382,6 +2394,8 @@ def schedule_dayoff():
     with _lock:
         conn = db()
         conn.execute("select id from users where id = ?", (uid,)).fetchone() or abort(404)
+        if own_record_blocked(actor, uid):
+            return jsonify(ok=False, error="Свій дей-офф попросіть через «Мій графік»: погоджує інша людина")
         iso = day.isoformat()
         existing = conn.execute("select * from requests where user_id = ? and type = 'day_off'"
                                 " and status in ('approved', 'pending', 'granted') and starts_on = ? and ends_on = ?",
@@ -2842,6 +2856,9 @@ def admin_employee_save(uid):
         u = conn.execute("select * from users where id = ?", (uid,)).fetchone() or abort(404)
         if u["role"] == "admin" and actor["role"] != "admin" and u["id"] != actor["id"]:
             abort(403)
+        if own_record_blocked(actor, uid):
+            flash(OWN_RECORD_MSG + ". Свої контакти змініть у «Профілі»")
+            return redirect(url_for("admin_employee", uid=uid))
         new = {k: (f.get(k, "").strip() or None) for k in EDITABLE_USER_FIELDS}
         new["hourly_rate"] = float((new["hourly_rate"] or "0").replace(",", "."))
         new["location_id"] = int(new["location_id"]) if new["location_id"] else None
@@ -3075,6 +3092,9 @@ def admin_shift_save():
     if not start or not end or end < start:
         flash("Перевірте початок і кінець зміни")
         return redirect(url_for("admin_employee", uid=uid))
+    if own_record_blocked(actor, uid):
+        flash(OWN_RECORD_MSG)
+        return redirect(url_for("admin_employee", uid=uid))
     with _lock:
         conn = db()
         user = conn.execute("select * from users where id = ?", (uid,)).fetchone() or abort(404)
@@ -3112,6 +3132,9 @@ def admin_adjustment():
     if not value or not reason:
         flash("Вкажіть суму і причину")
         return redirect(url_for("admin_employee", uid=uid))
+    if own_record_blocked(current_user(), uid):
+        flash(OWN_RECORD_MSG)
+        return redirect(url_for("admin_employee", uid=uid))
     with _lock:
         conn = db()
         conn.execute("select 1 from users where id = ?", (uid,)).fetchone() or abort(404)
@@ -3148,6 +3171,9 @@ def admin_adjustment_delete(aid):
     with _lock:
         conn = db()
         a = conn.execute("select * from adjustments where id = ?", (aid,)).fetchone() or abort(404)
+        if own_record_blocked(current_user(), a["user_id"]):
+            flash(OWN_RECORD_MSG)
+            return redirect(url_for("admin_employee", uid=a["user_id"]))
         conn.execute("delete from adjustments where id = ?", (aid,))
         audit(conn, current_user()["id"], "DELETE", "adjustments", aid, a["user_id"],
               {"amount": [a["amount"], None], "reason": [a["reason"], None]})
@@ -3164,6 +3190,9 @@ def admin_request(rid, decision):
     with _lock:
         conn = db()
         r = conn.execute("select * from requests where id = ? and status = 'pending'", (rid,)).fetchone() or abort(404)
+        if own_record_blocked(actor, r["user_id"]):
+            flash(OWN_RECORD_MSG)
+            return redirect(url_for("admin", tab="requests"))
         if approve:
             if r["type"] == "time_edit":
                 s = conn.execute("select * from shifts where id = ?", (r["shift_id"],)).fetchone()
@@ -3221,6 +3250,9 @@ def admin_absence():
         conn = db()
         if f.get("cancel_id"):
             r = conn.execute(f"select * from requests where id = ? and type in {ABSENCE_TYPES}", (f["cancel_id"],)).fetchone() or abort(404)
+            if own_record_blocked(actor, r["user_id"]):
+                flash(OWN_RECORD_MSG)
+                return redirect(url_for("admin", **back))
             conn.execute("update requests set status = 'cancelled', reviewer_id = ? where id = ?", (actor["id"], r["id"]))
             audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"status": [r["status"], "cancelled"]})
             notify(conn, r["user_id"], "Відсутність знято", f"{REQUEST_TYPES[r['type']]}: {r['starts_on']} – {r['ends_on']}")
@@ -3230,6 +3262,9 @@ def admin_absence():
                 flash("Вкажіть тип і правильні дати")
                 return redirect(url_for("admin", **back))
             uid = int(f["user_id"])
+            if own_record_blocked(actor, uid):
+                flash(OWN_RECORD_MSG)
+                return redirect(url_for("admin", **back))
             if f["type"] == "day_off" and (err := dayoff_limit_error(conn, uid, date.fromisoformat(s), date.fromisoformat(e))):
                 flash(err)
                 return redirect(url_for("admin", **back))

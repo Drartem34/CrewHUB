@@ -127,11 +127,15 @@
     {% else %}<b>{{ r.starts_on }} – {{ r.ends_on }}</b> <span class="muted">(зміни в графіку на ці дні буде знято)</span>{% endif %}
     {% if r.comment %}<div class="muted" style="margin-top:6px">«{{ r.comment }}»</div>{% endif %}
   </div>
+  {% if r.user_id == me.id and me.role != 'admin' %}
+  <div class="muted small">Ваш запит: його погоджує адміністратор.</div>
+  {% else %}
   <form method="post" action="{{ url_for('admin_request', rid=r.id, decision='approve') }}" class="row">
     <input name="comment" placeholder="Коментар працівнику (необов'язково)" class="grow" style="flex:1 1 220px">
     <button formaction="{{ url_for('admin_request', rid=r.id, decision='reject') }}">{{ icon('x', 'sm') }}Відхилити</button>
     <button class="ok" {{ 'disabled' if r.type == 'shift_swap' and r.swap_accepted != 1 }}>{{ icon('check', 'sm') }}Схвалити</button>
   </form>
+  {% endif %}
 </div>
 {% else %}<div class="card">{{ empty('Усі запити розглянуто', 'check') }}</div>{% endfor %}
 {% if done %}

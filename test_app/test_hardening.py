@@ -92,6 +92,33 @@ class HardeningTest(CrewHubBase):
         core.init_db()
         self.assertEqual(self.sql("select value from settings where key = 'silence_forgive_minutes'")[0][0], "45")
 
+    # --- 🔴 3. Модератор і власні записи -------------------------------------------------------
+    def test_moderator_cannot_touch_own_money_or_time(self):
+        mod = self.login("moder", "moder123")
+        mid = self.sql("select id from users where username = 'moder'")[0][0]
+        rate = self.sql("select hourly_rate from users where id = ?", mid)[0][0]
+        mod.post(f"/admin/employee/{mid}", data={"full_name": "Марія", "hourly_rate": "5000", "status": "active"})
+        self.assertEqual(self.sql("select hourly_rate from users where id = ?", mid)[0][0], rate)
+        mod.post("/admin/adjustment", data={"user_id": mid, "amount": "99999", "reason": "собі", "kind": "bonus"})
+        self.assertFalse(self.sql("select 1 from adjustments where user_id = ?", mid))
+        mod.post("/admin/shift/save", data={"user_id": mid, "started_at": "2026-10-01T00:00", "ended_at": "2026-10-01T23:00"})
+        self.assertFalse(self.sql("select 1 from shifts where user_id = ?", mid))
+        mod.post("/me/request", data={"type": "vacation", "starts_on": "2026-12-01", "ends_on": "2026-12-20", "comment": "x"})
+        rid = self.sql("select id from requests where user_id = ?", mid)[0][0]
+        mod.post(f"/admin/request/{rid}/approve")
+        self.assertEqual(self.sql("select status from requests where id = ?", rid)[0][0], "pending")
+        mod.post("/admin/absence", data={"user_id": mid, "type": "day_off", "starts_on": "2026-12-24"})
+        self.assertEqual(self.sql("select count(*) from requests where user_id = ?", mid)[0][0], 1)
+        r = mod.post("/schedule/dayoff", json={"user_id": mid, "day": "2026-12-25"}).get_json()
+        self.assertFalse(r["ok"])
+        # а щодо інших модератор працює як раніше, і адмін може погодити запит модератора
+        ivan = self.sql("select id from users where username = 'ivan'")[0][0]
+        mod.post("/admin/adjustment", data={"user_id": ivan, "amount": "100", "reason": "молодець", "kind": "bonus"})
+        self.assertTrue(self.sql("select 1 from adjustments where user_id = ?", ivan))
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        admin.post(f"/admin/request/{rid}/approve")
+        self.assertEqual(self.sql("select status from requests where id = ?", rid)[0][0], "approved")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,9 @@
   <a class="btn sm" href="{{ url_for('admin', tab='employees') }}">{{ icon('left', 'sm') }}<span class="hide-mobile">Усі працівники</span></a>
 {% endblock %}
 {% block body %}
+{% if me.id == u.id and me.role != 'admin' %}
+<div class="banner info">{{ icon('shield') }}<div>Це ваша картка. Свої зміни, ставку, бонуси й запити погоджує адміністратор.</div></div>
+{% endif %}
 {% if temp_pw %}
 <div class="banner warn">{{ icon('shield') }}<div class="grow">Тимчасовий пароль для {{ u.full_name }}: <b class="mono" style="font-size:18px">{{ temp_pw }}</b>
   <div class="small">Покажеться лише зараз. Передайте його працівнику: при вході він одразу задасть свій пароль.</div></div>
