@@ -234,6 +234,9 @@ if __name__ == "__main__":
     print_status("Особові папки працівників", True, profiles.core.PEOPLE_DIR)
     start_backups()
     print_status("Автобекап бази (щодня)", True)
+    import lan
+    lan.start()
+    print_status("Пошук пристроїв у мережі (фон)", True, "раз на 5 хв, вимикається в «Правилах»")
     try:
         import waitress
     except ImportError:

@@ -446,7 +446,7 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         // CrewHubDevice — постійний id цього телефона: сервер запам'ятовує його при реєстрації і вмикає автозміну лише з нього
         s.setUserAgentString(s.getUserAgentString() + " CrewHubApp/1.9 CrewHubDevice/" + WatchService.deviceId(this)
-                + (weakPhone() ? " CrewHubLite" : ""));
+                + WatchService.deviceInfo(this) + (weakPhone() ? " CrewHubLite" : ""));
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 

@@ -61,6 +61,29 @@ public class WatchService extends Service {
         return c.getSharedPreferences("crewhub", Context.MODE_PRIVATE);
     }
 
+    /** Модель і назва телефона для сервера (блок «Пристрої в мережі» і список телефонів людини):
+     *  « CrewHubModel/samsung%20SM-S911B CrewHubName/Galaxy%20S23%20Артема». URL-кодовано, бо в заголовку лише ASCII. */
+    static String deviceInfo(Context c) {
+        StringBuilder b = new StringBuilder(" CrewHubModel/").append(enc((Build.MANUFACTURER + " " + Build.MODEL).trim()));
+        String name = null;
+        try {
+            name = android.provider.Settings.Global.getString(c.getContentResolver(), "device_name");  // «Ім'я пристрою» з налаштувань
+            if (name == null || name.trim().isEmpty())
+                name = android.provider.Settings.System.getString(c.getContentResolver(), "device_name");  // старі Samsung
+        } catch (Exception ignored) {
+        }
+        if (name != null && !name.trim().isEmpty()) b.append(" CrewHubName/").append(enc(name.trim()));
+        return b.toString();
+    }
+
+    static String enc(String s) {
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return "";
+        }
+    }
+
     /** Постійний id телефона (випадковий, зберігається в налаштуваннях застосунку; не IMEI і не номер). */
     static String deviceId(Context c) {
         SharedPreferences p = prefs(c);
@@ -242,7 +265,7 @@ public class WatchService extends Service {
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json");
         c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL
-                + ") CrewHubApp/1.9 background CrewHubDevice/" + deviceId(this));
+                + ") CrewHubApp/1.9 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
         String cookie = prefs(this).getString("cookie", null);
         if (cookie != null) c.setRequestProperty("Cookie", cookie);
         return c;

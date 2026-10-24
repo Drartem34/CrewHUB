@@ -125,6 +125,7 @@ DEFAULT_SETTINGS = {
     "dayoff_per_month": "1",         # скільки дей-оффів на людину за місяць (0 = без обмеження)
     "dayoff_paid": "1",              # дей-офф оплачується як повний робочий день за ставкою людини
     "registration_open": "1",        # чи можна зареєструватися самому (акаунт чекає підтвердження)
+    "lan_scan": "1",                 # шукати всі пристрої в мережі сервера (блок «Пристрої в мережі» в «Огляді»)
 }
 
 # Правила для кожного налаштування: (тип, межі, назва для повідомлень). Неприпустиме значення не зберігається,
@@ -164,6 +165,7 @@ SETTING_RULES = {
     "dayoff_per_month": ("int", 0, 31, "Дей-оффів на місяць"),
     "dayoff_paid": ("bool", "Оплачуваний дей-офф"),
     "registration_open": ("bool", "Відкрита реєстрація"),
+    "lan_scan": ("bool", "Пошук пристроїв у мережі"),
 }
 
 
@@ -285,6 +287,9 @@ create table if not exists avatars (user_id integer primary key references users
 -- Чия особова папка застаріла. Тригери нижче ловлять будь-яку зміну даних людини,
 -- фоновий потік profiles.py переписує її папку (пінги last_seen_at не рахуються)
 create table if not exists dirty_users (user_id integer primary key);
+-- Усі пристрої в мережі сервера (і незареєстровані): заповнює lan.py. Ключ — MAC
+create table if not exists lan_devices (mac text primary key, ip text not null, name text, model text, vendor text,
+  user_id integer references users(id) on delete set null, first_seen integer not null, last_seen integer not null);
 create trigger if not exists dirty_users_ins after insert on users begin insert or ignore into dirty_users values (new.id); end;
 create trigger if not exists dirty_users_upd after update on users begin insert or ignore into dirty_users values (new.id); end;
 create trigger if not exists dirty_shifts_ins after insert on shifts begin insert or ignore into dirty_users values (new.user_id); end;
@@ -804,14 +809,13 @@ def device_key(sent=None):
 
 
 def device_name():
-    ua = request.headers.get("User-Agent") or ""
-    m = re.search(r"Android [\d.]+;(?: [a-z]{2}[-_][A-Z]{2};)? ([^;)]+?)(?: Build/[^;)]*)?[;)]", ua)
-    if m and m.group(1).strip() not in ("K", "wv"):
-        return m.group(1).strip()
-    for k, v in (("iPhone", "iPhone"), ("Android", "Android"), ("Windows", "Windows ПК"), ("Mac OS", "Mac")):
-        if k in ua:
-            return v
-    return "Пристрій"
+    """Назва телефона для списку пристроїв людини: «Galaxy S23 Артема (samsung SM-S911B)» від застосунку,
+    модель з User-Agent браузера або просто тип пристрою."""
+    import lan
+    model, name = lan.ua_info(request.headers.get("User-Agent"))
+    if name:
+        return f"{name} ({model})" if model and model != name else name
+    return model or "Пристрій"
 
 
 def remember_device(conn, user_id, key, ip, bind=True):
@@ -2512,6 +2516,23 @@ def _security_headers(resp):
     return resp
 
 
+# Хто з якого IP відкривав CrewHub (User-Agent і акаунт): так «Пристрої в мережі» показують модель телефона
+# і чий він. Лише в пам'яті, не більше кількох сотень записів.
+_visits = {}
+VISITS_MAX = 500
+
+
+@app.before_request
+def _note_visit():
+    if request.endpoint == "static":
+        return
+    ip = client_ip()
+    _visits[ip] = {"t": now(), "ua": (request.headers.get("User-Agent") or "")[:400], "uid": session.get("uid")}
+    if len(_visits) > VISITS_MAX:
+        for k, _v in sorted(_visits.items(), key=lambda kv: kv[1]["t"])[:VISITS_MAX // 5]:
+            _visits.pop(k, None)
+
+
 @app.before_request
 def _remember_login():
     # Немає активної сесії, але є cookie «запам'ятати мене» → входимо автоматично (не за IP).
@@ -3387,6 +3408,9 @@ def admin():
                          for k in LIVE_STATES}
         ctx["stats"] = dashboard_stats(conn)
         ctx["week"] = hours_by_day(conn)
+        if setting("lan_scan") == "1":
+            import lan
+            ctx["lan"] = lan.summary(conn)
     elif tab == "employees":
         archive = request.args.get("archive") == "1"
         ctx["archive"] = archive
@@ -4004,6 +4028,16 @@ def admin_schedule():
     return redirect(url_for("admin", tab="schedule", week=f.get("week")))
 
 
+@app.post("/admin/lan/scan")
+@login_required(staff=True)
+def admin_lan_scan():
+    """«Сканувати зараз» у блоці «Пристрої в мережі» (інакше сканування — раз на 5 хв у фоні)."""
+    import lan
+    found = lan.scan()
+    flash(f"У мережі зараз пристроїв: {found}" if not lan._state["error"] else f"Пошук пристроїв: {lan._state['error']}")
+    return redirect(url_for("admin", tab="live") + "#lan")
+
+
 @app.post("/admin/zones")
 @login_required(staff=True)
 def admin_zones():
@@ -4082,7 +4116,7 @@ def admin_zones():
 
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
-                     "offline_keeps_counting", "dayoff_paid")
+                     "offline_keeps_counting", "dayoff_paid", "lan_scan")
 
 
 @app.post("/admin/backup_mirror")

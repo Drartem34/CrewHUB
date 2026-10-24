@@ -52,8 +52,78 @@
       location.reload();
     };
   }
-  window.bindChrome = bindChrome;
+  // Широкі таблиці: видно, що вони гортаються вбік. Тінь біля краю, де є ще колонки, кнопки ‹ ›
+  // і (поки людина жодного разу не гортала таблицю) підказка «Гортайте вбік» з легким «підглядом».
+  let swiped = false;
+  try { swiped = localStorage.getItem("crewhub_swiped") === "1"; } catch (e) {}
+  function markSwiped() {
+    if (swiped) return;
+    swiped = true;
+    try { localStorage.setItem("crewhub_swiped", "1"); } catch (e) {}
+    document.querySelectorAll(".scroll-hint").forEach((h) => { h.classList.add("out"); setTimeout(() => h.remove(), 300); });
+  }
+  function bindScrollers() {
+    let hinted = false;
+    document.querySelectorAll(".table-wrap").forEach((wrap) => {
+      if (wrap.parentElement.classList.contains("scroll-host")) return;
+      const host = document.createElement("div");
+      host.className = "scroll-host" + (wrap.querySelector("table.month, table.week") ? " has-head" : "");
+      const keep = wrap.scrollLeft;  // перенесення в DOM скидає прокрутку (місяць уже стоїть на «сьогодні»)
+      wrap.parentNode.insertBefore(host, wrap);
+      host.appendChild(wrap);
+      wrap.scrollLeft = keep;
+      const sticky = () => { const c = wrap.querySelector("th.who, .week th:first-child"); return c && getComputedStyle(c).position === "sticky" ? c.offsetWidth : 0; };
+      let programmatic = false, queued = false;
+      const born = performance.now();  // сторінка сама прокрутила місяць до «сьогодні» — це не гортання людиною
+      const update = () => {
+        queued = false;
+        const max = wrap.scrollWidth - wrap.clientWidth;
+        host.style.setProperty("--stick", sticky() + "px");
+        host.classList.toggle("can-left", wrap.scrollLeft > 4);
+        host.classList.toggle("can-right", wrap.scrollLeft < max - 4);
+      };
+      const btn = (cls, dir, label) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "scroll-btn " + cls; b.setAttribute("aria-label", label); b.title = label;
+        b.innerHTML = '<svg class="icon" data-fb="' + dir + '" aria-hidden="true"><use href="#i-' + dir + '"/></svg>';
+        b.onclick = () => { markSwiped(); wrap.scrollBy({ left: (dir === "right" ? 1 : -1) * Math.max(120, (wrap.clientWidth - sticky()) * 0.8), behavior: "smooth" }); };
+        host.appendChild(b);
+      };
+      btn("prev", "left", "Гортати назад");
+      btn("next", "right", "Гортати вперед");
+      wrap.addEventListener("scroll", () => {
+        if (!programmatic && performance.now() - born > 500) markSwiped();
+        if (!queued) { queued = true; requestAnimationFrame(update); }
+      }, { passive: true });
+      if (window.ResizeObserver) new ResizeObserver(() => update()).observe(wrap);
+      update();
+      if (!swiped && !hinted && host.classList.contains("can-right")) {
+        hinted = true;  // одна підказка на сторінку — над першою широкою таблицею
+        const h = document.createElement("div");
+        h.className = "scroll-hint";
+        h.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-right"/></svg>' +
+          (wrap.querySelector("table.month") ? "Гортайте вбік — тут увесь місяць" : "Гортайте вбік — тут ще колонки");
+        host.appendChild(h);
+        setTimeout(() => { h.classList.add("out"); setTimeout(() => h.remove(), 300); }, 6000);  // цього разу досить
+        const calm = root.classList.contains("motion-off") || matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!calm) setTimeout(() => {  // «підгляд»: таблиця сама трохи від'їжджає і повертається
+          programmatic = true;
+          const from = wrap.scrollLeft;
+          wrap.scrollTo({ left: from + 56, behavior: "smooth" });
+          setTimeout(() => { wrap.scrollTo({ left: from, behavior: "smooth" }); setTimeout(() => { programmatic = false; }, 500); }, 650);
+        }, 700);
+      }
+    });
+  }
+  // Місяць на телефоні: дотик до клітинки показує, що в ній (на ПК те саме видно при наведенні)
+  document.addEventListener("click", (e) => {
+    const c = e.target.closest("table.month:not(.editable) .mcell");
+    if (c && c.title && window.toast) window.toast(c.title);
+  });
+
+  window.bindChrome = function () { bindChrome(); bindScrollers(); };
   bindChrome();
+  bindScrollers();
   document.addEventListener("click", (e) => {
     const panel = document.getElementById("notifPanel");
     if (panel && !panel.contains(e.target)) panel.classList.remove("open");

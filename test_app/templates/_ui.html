@@ -76,14 +76,14 @@
 </div>
 {% endif %}
 <div class="table-wrap month-wrap"><table class="month mode-shift{{ ' editable' if editable }}">
-  <thead><tr><th class="who">Працівник</th>{% for d in mg.days %}<th class="{{ 'today' if d.today }}{{ ' weekend' if d.weekend }}">{{ d.n }}<small>{{ d.label }}</small></th>{% endfor %}</tr></thead>
+  <thead><tr><th class="who">Працівник</th>{% for d in mg.days %}<th class="{{ 'today' if d.today }}{{ ' weekend' if d.weekend }}{{ ' wk' if d.date.weekday() == 0 and not loop.first }}">{{ d.n }}<small>{{ d.label }}</small></th>{% endfor %}</tr></thead>
   <tbody>
   {% for u in mg.users %}
   <tr class="{{ 'mine' if u.id == me_id }}">
     <td class="who"><b>{{ u.full_name }}</b><small>{{ mg.count[u.id] }} дн.</small></td>
     {% for d in mg.days %}
     {% set ab = mg.absences.get((u.id, d.iso)) %}{% set sc = mg.cells.get((u.id, d.iso)) %}
-    <td class="mcell{{ ' weekend' if d.weekend }}{{ ' on' if sc }}{{ ' ab a-' ~ ab.type if ab }}{{ ' pending' if ab and ab.status == 'pending' }}"
+    <td class="mcell{{ ' weekend' if d.weekend }}{{ ' wk' if d.date.weekday() == 0 and not loop.first }}{{ ' on' if sc }}{{ ' ab a-' ~ ab.type if ab }}{{ ' pending' if ab and ab.status == 'pending' }}"
         {% if editable %}data-uid="{{ u.id }}" data-day="{{ d.iso }}" data-ab="{{ ab.type if ab else '' }}" tabindex="0"{% endif %}
         title="{{ u.full_name }} · {{ d.date.strftime('%d.%m') }}{{ ' · ' ~ sc if sc }}{{ ' · ' ~ REQUEST_TYPES[ab.type] if ab }}">{% if ab %}{{ ABBR[ab.type] }}{% elif sc %}{{ sc.split('–')[0].split(':')[0] }}{% endif %}</td>
     {% endfor %}

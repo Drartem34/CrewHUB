@@ -315,3 +315,52 @@ table.month.editable.mode-shift .mcell[data-day].ab { cursor: default; }
 .connect-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; width: 220px; text-align: center; }
 .connect-card .qr { background: #fff; padding: 6px; border-radius: 10px; width: 190px; height: 190px; }
 .connect-card .qr svg { width: 100%; height: 100%; display: block; }
+
+/* Пристрої в мережі («Огляд») */
+.lan-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0 24px; }
+.lan-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.lan-item.off { opacity: .55; }
+.lan-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.lan-main b, .lan-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lan-main small { color: var(--muted); font-size: 12.5px; }
+.lan-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.lan-dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.lan-item .pill { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lan-main .mono { font-size: 12px; } .lan-main small:last-child { white-space: normal; } .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--line); color: var(--muted); }
+
+/* ── Широкі таблиці (місяць, тиждень, табель, зарплата) на вузькому екрані ──
+   Видно, що таблиця гортається: тінь біля краю, де є ще колонки, кнопки ‹ › і один раз підказка «Гортайте вбік».
+   Колонка з іменами в місяці й тижні закріплена: вона не їде разом з днями. */
+.scroll-host { position: relative; --bleed: 18px; }
+.scroll-host::before, .scroll-host::after { content: ""; position: absolute; top: 0; bottom: 0; width: 34px; pointer-events: none; z-index: 3;
+  opacity: 0; transition: opacity .25s; }
+.scroll-host::after { right: calc(-1 * var(--bleed)); background: linear-gradient(to left, var(--surface), transparent); }
+.scroll-host::before { left: calc(var(--stick, 0px) - var(--bleed)); background: linear-gradient(to right, var(--surface), transparent); }
+.scroll-host.can-right::after, .scroll-host.can-left::before { opacity: 1; }
+.scroll-btn { position: absolute; z-index: 4; top: min(50%, 120px); width: 36px; height: 36px; margin-top: -18px; padding: 0; border-radius: 50%;
+  display: none; place-items: center; background: var(--surface); color: var(--text); border: 1px solid var(--line);
+  box-shadow: 0 2px 8px rgba(16, 24, 40, .16); }
+.scroll-btn .icon { width: 18px; height: 18px; }
+.scroll-btn.prev { left: calc(var(--stick, 0px) - var(--bleed) + 6px); } .scroll-btn.next { right: calc(-1 * var(--bleed) + 6px); }
+.scroll-host.can-left .scroll-btn.prev, .scroll-host.can-right .scroll-btn.next { display: grid; }
+.scroll-host.has-head .scroll-btn { top: 6px; margin-top: 0; }
+.scroll-hint { position: absolute; z-index: 5; right: calc(-1 * var(--bleed) + 50px); top: min(50%, 120px); transform: translateY(-50%);
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: var(--text); color: var(--surface);
+  font-size: 13px; font-weight: 600; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); pointer-events: none; animation: hintIn .5s var(--spring-soft, ease-out); }
+.scroll-hint .icon { width: 18px; height: 18px; animation: hintSwipe 1.4s ease-in-out infinite; }
+.scroll-host.has-head .scroll-hint { top: 70px; }
+.scroll-hint.out { opacity: 0; transition: opacity .3s; }
+@keyframes hintIn { from { opacity: 0; transform: translateY(-50%) scale(.85); } }
+@keyframes hintSwipe { 0%, 100% { transform: translateX(-4px); } 50% { transform: translateX(6px); } }
+.month-wrap { padding: 0 !important; }
+table.month .who { padding-left: 18px; }
+table.month tbody tr:first-child td.who, table.month th.who { box-shadow: 2px 0 0 var(--line); }
+.scroll-host.can-left table.month .who, .scroll-host.can-left .week .who { box-shadow: 6px 0 10px -6px rgba(16, 24, 40, .25); }
+table.month th.wk, table.month td.wk { border-left: 2px solid var(--line); }
+.week th:first-child, .week td.who { position: sticky; left: 0; z-index: 2; background: var(--surface); }
+@media (max-width: 600px) {
+  .scroll-host { --bleed: 16px; }
+  table.month .who { padding-left: 16px; }
+  .week td.who { min-width: 132px; max-width: 150px; } .week td.who .avatar { display: none; }
+  .week.week-5 { min-width: 640px; }
+}

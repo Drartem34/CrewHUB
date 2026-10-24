@@ -62,6 +62,36 @@
     </div>
   </div>
 </div>
+{% if lan %}
+<div class="card" id="lan">
+  <div class="card-head"><h3>{{ icon('wifi') }} Пристрої в мережі</h3>
+    <span class="muted small">{% if lan.scan_at %}зараз {{ lan.online }}{% if lan.unknown %}, з них незареєстрованих {{ lan.unknown }}{% endif %} · перевірено {{ lan.scan_at|dt }}{% else %}перший пошук іде у фоні{% endif %}</span>
+    <span class="spacer"></span>
+    <form method="post" action="{{ url_for('admin_lan_scan') }}"><button class="sm">{{ icon('refresh', 'sm') }}Сканувати зараз</button></form>
+  </div>
+  {% if lan.error %}<div class="banner warn">{{ icon('alert') }}<span>{{ lan.error }}</span></div>{% endif %}
+  {% if lan.rows %}
+  <div class="lan-list">
+    {% for d in lan.rows %}
+    <div class="lan-item{{ ' off' if not d.online }}">
+      <span class="lan-dot{{ ' on' if d.online }}" title="{{ 'у мережі зараз' if d.online else 'не видно з ' ~ (d.last_seen|dt) }}"></span>
+      <div class="lan-main">
+        <b>{{ d.label }}</b>
+        {% set sub = [d.model if d.model != d.label else None, d.vendor if d.vendor != d.label else None]|select|join(' · ') %}
+        {% if sub %}<small>{{ sub }}</small>{% endif %}
+        <small><span class="mono">{{ d.ip or 'IP змінився' }} · {{ d.mac }}</span>{% if d.private %} <span class="tag" title="Телефон ховає справжній MAC: виробника за ним не визначити">приватний</span>{% endif %}</small>
+      </div>
+      {% if d.user_id %}<a class="pill ok" href="{{ url_for('admin_employee', uid=d.user_id) }}">{{ d.full_name }}</a>
+      {% else %}<span class="pill warn">не в CrewHub</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif lan.scan_at %}{{ empty('Нікого не знайдено. Сервер бачить лише свою мережу: ' ~ (lan.nets|join(', ') or 'немає'), 'wifi') }}{% endif %}
+  <p class="muted small" style="margin:10px 0 0">Список — усі, хто в одній мережі із сервером ({{ lan.nets|join(', ') or 'мережу не знайдено' }}), не лише працівники.
+    Назву показують роутер, Windows, iPhone чи застосунок CrewHub; модель — якщо пристрій відкривав CrewHub.
+    «Приватний MAC» — телефон ховає справжню адресу, тож виробника за нею не визначити. Вимкнути пошук — у «Правилах».</p>
+</div>
+{% endif %}
 
 {% elif tab == 'employees' %}
 {{ registrations() }}
@@ -417,6 +447,7 @@
   <div class="card">
     <div class="card-head"><h3>{{ icon('shield') }} Дисципліна і доступ</h3></div>
     <label class="check"><input type="checkbox" name="registration_open" {{ 'checked' if settings.registration_open == '1' }}>Дозволити самостійну реєстрацію (з підтвердженням)</label>
+    <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_scan" {{ 'checked' if settings.lan_scan == '1' }}><span><b>Шукати всі пристрої в мережі сервера.</b> Раз на 5 хв: IP, назва, модель, чий телефон — блок унизу «Огляду»</span></label>
     <div class="form-grid" style="margin-top:10px">
       <div><label>Спізнення після, хв</label><input name="late_threshold_minutes" type="number" min="0" value="{{ settings.late_threshold_minutes }}"></div>
       <div><label>Максимальна зміна, год</label><input name="max_shift_hours" type="number" min="1" value="{{ settings.max_shift_hours }}"></div>

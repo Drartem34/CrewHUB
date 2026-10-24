@@ -14,7 +14,7 @@
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
   <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=11">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=12">
   <link rel="stylesheet" href="{{ url_for('static', filename='motion.css') }}?v=3">
   <script>try { var t = localStorage.getItem('crewhub_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); document.documentElement.dataset.theme = t; } catch (e) {}
   try { var m = localStorage.getItem('crewhub_motion') || 'auto', c = document.documentElement.classList, n = navigator;
@@ -91,7 +91,7 @@
 {% endif %}
 
 <div class="toasts" id="toasts">{% for m in get_flashed_messages() %}<div class="toast">{{ m }}</div>{% endfor %}</div>
-<script src="{{ url_for('static', filename='app.js') }}?v=10"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=11"></script>
 <script src="{{ url_for('static', filename='motion.js') }}?v=3"></script>
 <script src="{{ url_for('static', filename='nav.js') }}?v=1"></script>
 {% block scripts %}{% endblock %}
