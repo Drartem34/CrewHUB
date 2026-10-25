@@ -9,8 +9,11 @@
     <form method="post" class="stack" id="loginForm">
       <div><label>Номер телефону</label><input name="username" type="tel" inputmode="tel" autocomplete="username" placeholder="067 123 45 67" autofocus required></div>
       <div><label>Пароль</label><input name="password" type="password" autocomplete="current-password" required></div>
+      <input type="hidden" name="device_id">
       <button class="primary xl">Увійти</button>
     </form>
+    <script>// Той самий id браузера, що й у реєстрації та на сторінці зміни: сервер звіряє, чи це телефон власника акаунта
+    try { let id = localStorage.getItem("crewhub_device"); if (!id) { id = "web-" + Math.random().toString(16).slice(2, 10); localStorage.setItem("crewhub_device", id); } loginForm.device_id.value = id; } catch (e) {}</script>
     {% if registration_open %}
     <p class="center" style="margin:16px 0 0">Вперше тут? <a href="{{ url_for('register') }}"><b>Зареєструватися</b></a></p>
     {% endif %}

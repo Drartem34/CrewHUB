@@ -58,7 +58,11 @@
     <div class="card">
       <div class="card-head"><h3>Безпека сьогодні</h3><a class="small" href="{{ url_for('admin', tab='logs') }}">Журнал</a></div>
       <div class="kpi"><span class="ic {{ 'bad' if stats.denied_today else 'ok' }}">{{ icon('shield') }}</span>
-        <div><small>Відмов і підключень з чужих мереж</small><b id="k-denied">{{ stats.denied_today }}</b></div></div>
+        <div><small>Відмов, чужих мереж і підозрілих входів</small><b id="k-denied">{{ stats.denied_today }}</b></div></div>
+      {% for x in stats.suspicious %}
+      <div class="banner bad" style="margin:10px 0 0">{{ icon('alert') }}<div><b>{{ x.full_name or '—' }}</b> · {{ EVENTS.get(x.event, x.event) }}, {{ x.created_at|tm }}
+        <div class="small">{{ x.details|logdetails }}</div></div></div>
+      {% endfor %}
     </div>
   </div>
 </div>
@@ -335,7 +339,7 @@
     {% for c in logs if request.args.get('only') != 'bad' or not c.allowed %}
     <tr>
       <td class="nowrap small">{{ c.created_at|dt }}</td><td>{{ c.full_name or '—' }}</td>
-      <td><span class="pill {{ 'ok' if c.allowed else 'bad' }}">{{ EVENTS.get(c.event, c.event) }}</span>{% if c.details %}<div class="muted small">{{ c.details }}</div>{% endif %}</td>
+      <td><span class="pill {{ 'ok' if c.allowed else 'bad' }}">{{ EVENTS.get(c.event, c.event) }}</span>{% if c.details %}<div class="muted small">{{ c.details|logdetails }}</div>{% endif %}</td>
       <td class="mono">{{ c.ip or '' }}</td><td class="hide-mobile">{{ c.location or '' }}</td><td class="hide-mobile muted small">{{ c.device or '' }}</td>
     </tr>
     {% endfor %}

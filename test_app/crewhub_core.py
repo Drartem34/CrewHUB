@@ -232,7 +232,10 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "break_end": "Завершив перерву", "heartbeat_foreign_ip": "Пінг з чужої мережі",
           "wifi_lost": "Втрата Wi-Fi", "wifi_restored": "Wi-Fi відновлено", "denied": "Відмова",
           "server_downtime": "Сервер не працював", "auto_start": "Зміна почалась автоматично",
-          "auto_close": "Зміна закрилась автоматично"}
+          "auto_close": "Зміна закрилась автоматично", "login_other_device": "Вхід у чужий акаунт",
+          "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна з чужого телефона"}
+# Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні»
+SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device")
 
 SCHEMA = """
 create table if not exists settings (key text primary key, value text not null);
@@ -825,6 +828,53 @@ def device_name():
     if name:
         return f"{name} ({model})" if model and model != name else name
     return model or "Пристрій"
+
+
+def foreign_device(conn, user_id, key):
+    """Чи це пристрій не цієї людини. ('other', власник) — телефон прив'язаний до іншої людини або нещодавно
+    входив в інший акаунт (хтось відкрив чужий акаунт на своєму телефоні); ('new', None) — у людини є свій
+    телефон, а цей сервер бачить уперше; None — свій або порівнювати нема з чим."""
+    if not key:
+        return None
+    mine = [r[0] for r in conn.execute("select device_key from devices where user_id = ?", (user_id,))]
+    if key in mine:
+        return None
+    owner = conn.execute("select u.id, u.full_name from devices d join users u on u.id = d.user_id"
+                         " where d.device_key = ? and d.user_id != ? order by d.last_seen_at desc limit 1", (key, user_id)).fetchone()
+    if not owner:  # пристрій не прив'язаний, але з нього вже входили в інший акаунт («запам'ятати мене»)
+        owner = conn.execute("select u.id, u.full_name from remember_tokens t join users u on u.id = t.user_id"
+                             " where t.device = ? and t.user_id != ? order by t.last_used_at desc limit 1", (key, user_id)).fetchone()
+    if owner:
+        return "other", owner
+    if mine and not (key.startswith("app-") and all(k.startswith("web-") for k in mine)):
+        return "new", None  # (зареєструвався в браузері, а тепер увійшов у застосунку — це той самий телефон)
+    return None
+
+
+def flag_foreign(conn, user, key, ip, event, what):
+    """Пише підозрілий вхід чи зміну в журнал і повідомляє: власнику акаунта — завжди, керівникам — якщо
+    акаунт відкрили на телефоні іншої людини. what = foreign_device(...). Сповіщення — не частіше раз на 30 хв."""
+    kind, owner = what
+    dev = device_name() if has_request_context() else (key or "")
+    details = {"пристрій": dev}
+    if owner:
+        details["чий телефон"] = owner["full_name"]
+    loc = match_location(conn, ip)
+    recent = conn.execute("select 1 from conn_log where user_id = ? and event = ? and device = ? and created_at > ?",
+                          (user["id"], event, key, now() - 1800)).fetchone()
+    log_clock(conn, user["id"], None, event, ip, loc["id"] if loc else None, False, key, details)
+    if recent:
+        return
+    where = f"{dev}, IP {ip}"
+    if kind == "other":
+        what_text = "зміну почали" if event == "shift_other_device" else "увійшли"
+        notify(conn, user["id"], "Ваш акаунт відкрили на чужому телефоні",
+               f"У ваш акаунт {what_text} з телефона {owner['full_name']} ({where}). Якщо це не ви — змініть пароль і скажіть керівнику")
+        notify_staff(conn, "Підозріло: чужий телефон",
+                     f"{user['full_name']}: {what_text} з телефона {owner['full_name']} ({where})")
+    else:
+        notify(conn, user["id"], "Вхід з нового пристрою",
+               f"У ваш акаунт увійшли з нового пристрою ({where}). Якщо це не ви — змініть пароль і скажіть керівнику")
 
 
 def remember_device(conn, user_id, key, ip, bind=True):
@@ -1486,6 +1536,8 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
         except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
             return state({"already": True})
         log_clock(conn, user["id"], cur.lastrowid, "start", ip, loc["id"], True, device)
+        if (what := foreign_device(conn, user["id"], device)) and what[0] == "other":
+            flag_foreign(conn, user, device, ip, "shift_other_device", what)  # відмітив колегу на своєму телефоні
         return state()
 
     keep = setting("offline_keeps_counting", conn) == "1"  # втрата зв'язку не зупиняє зміну
@@ -2418,6 +2470,32 @@ OWN_RECORD_MSG = "Свої зміни, ставку, бонуси й запит�
 PHOTO_URL_RE = re.compile(r"/avatar/\d+(\?v=\d+)?")
 
 
+LOG_WORDS = {"reason": "причина", "not_on_work_network": "не з робочої мережі", "other_device": "інший телефон",
+             "status": "статус не дозволяє", "action": "дія", "kind": "вид", "lunch": "обід", "rest": "пауза",
+             "since": "з", "away_since": "вийшов о", "back": "повернувся о", "ended_at": "кінець",
+             "ended_at_last_seen": "кінець за останнім пінгом", "slept_seconds": "спав, с", "seconds": "секунд",
+             "shifts": "змін", "pause": "пауза", "close": "закрито", "silence": "тиша", "left": "вийшов з Wi-Fi",
+             "break_end": "завершити перерву", "offline_keeps_counting": "рахувати без зв'язку"}
+
+
+@app.template_filter("logdetails")
+def log_details(v):
+    """Деталі події журналу людською мовою: {"reason": "other_device"} → «причина: інший телефон»."""
+    try:
+        d = json.loads(v) if v else None
+    except (TypeError, ValueError):
+        return v or ""
+    if not isinstance(d, dict):
+        return v or ""
+    def word(x):
+        if isinstance(x, bool):
+            return "так" if x else "ні"
+        if isinstance(x, int) and x > 1_000_000_000:
+            return fmt_dt(x)
+        return LOG_WORDS.get(x, x) if isinstance(x, str) else x
+    return " · ".join(f"{LOG_WORDS.get(k, k)}: {word(x)}" for k, x in d.items())
+
+
 @app.template_filter("photo")
 def safe_photo(v):
     """Аватарка лише з нашого /avatar/<id>; будь-що інше в старих базах (чужий сайт, /logout) — без фото."""
@@ -2599,9 +2677,13 @@ def login():
                 session.permanent = True
                 resp = redirect(url_for("index"))
                 # «Запам'ятати мене»: один раз увійшов — далі входить сам, навіть якщо IP зміниться
+                key = device_key(request.form.get("device_id"))
                 with _lock:
                     conn = db()
-                    val = issue_remember(conn, u["id"], device_key(), device_name(), client_ip())
+                    # Пристрій не власника (телефон колеги чи невідомий) — підозріло: у журнал і сповіщення
+                    if what := foreign_device(conn, u["id"], key):
+                        flag_foreign(conn, u, key, ip, "login_other_device" if what[0] == "other" else "login_new_device", what)
+                    val = issue_remember(conn, u["id"], key, device_name(), client_ip())
                     conn.commit()
                 return set_remember_cookie(resp, val)
         else:
@@ -3275,6 +3357,10 @@ def dashboard_stats(conn):
         # лічильники для значків — завжди свіжі (вони дешеві)
         "pending": conn.execute("select count(*) from requests where status = 'pending'").fetchone()[0],
         "denied_today": conn.execute("select count(*) from conn_log where allowed = 0 and created_at >= ?", (start,)).fetchone()[0],
+        "suspicious": [dict(r) for r in conn.execute(
+            f"select c.event, c.details, c.created_at, u.full_name from conn_log c left join users u on u.id = c.user_id"
+            f" where c.event in ({','.join('?' * len(SUSPICIOUS_EVENTS))}) and c.created_at >= ? order by c.id desc limit 5",
+            (*SUSPICIOUS_EVENTS, start)).fetchall()],
     }
 
 
@@ -3459,7 +3545,8 @@ def admin():
         # Телефони, які пробували почати зміну або пінгували з мереж, яких немає в жодній точці
         unknown = {}
         for c in conn.execute("select c.ip, c.created_at, u.full_name from conn_log c left join users u on u.id = c.user_id"
-                              " where c.allowed = 0 and c.ip is not null and c.created_at > ? order by c.id desc",
+                              " where c.allowed = 0 and c.event in ('denied', 'heartbeat_foreign_ip') and c.ip is not null"
+                              " and c.created_at > ? order by c.id desc",
                               (now() - 3 * 86400,)):
             if match_location(conn, c["ip"]):
                 continue

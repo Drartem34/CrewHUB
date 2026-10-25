@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from test_crewhub import CrewHubBase, core, settings_file  # noqa: F401 — test_crewhub налаштовує оточення
+from test_crewhub import WORK_IP, CrewHubBase, core, settings_file  # noqa: F401 — test_crewhub налаштовує оточення
 
 
 def read(path):
@@ -390,6 +390,93 @@ class MaintenanceTest(CrewHubBase):
             core.maintenance()  # без винятку
         finally:
             core.connect = real
+
+
+class ForeignDeviceTest(CrewHubBase):
+    """Хтось входить у чужий акаунт не з телефона власника — сервер позначає це підозрілим."""
+    IVAN_PHONE = "Mozilla/5.0 (Linux; Android 14; wv) CrewHubApp/2.0 CrewHubDevice/ivanphone001 CrewHubModel/samsung%20SM-A525F"
+
+    def bind(self, username, key):
+        with core.connect() as c:
+            uid = c.execute("select id from users where username = ?", (username,)).fetchone()[0]
+            core.remember_device(c, uid, key, WORK_IP)
+            c.commit()
+        return uid
+
+    def login_as(self, phone, password="1234", ua=None, device_id=None):
+        c = core.app.test_client()
+        data = {"username": phone, "password": password}
+        if device_id:
+            data["device_id"] = device_id
+        r = c.post("/login", data=data, headers={"User-Agent": ua} if ua else {})
+        self.assertEqual(r.status_code, 302)
+        return c
+
+    def events(self, username):
+        return [tuple(r) for r in self.sql("select c.event, c.allowed from conn_log c join users u on u.id = c.user_id"
+                                           " where u.username = ?", username)]
+
+    def notes(self, who):
+        return [r[0] for r in self.sql("select n.title from notifications n join users u on u.id = n.user_id where u.username = ?", who)]
+
+    def test_login_from_colleagues_phone_is_suspicious(self):
+        self.bind("ivan", "app-ivanphone001")
+        self.bind("olha", "web-0aa11bb2")
+        self.login_as("0937654321", ua=self.IVAN_PHONE)  # Ольгин акаунт на Івановому телефоні
+        self.assertIn(("login_other_device", 0), self.events("olha"))
+        self.assertIn("Ваш акаунт відкрили на чужому телефоні", self.notes("olha"))
+        self.assertIn("Підозріло: чужий телефон", self.notes("moder"))
+        details = self.sql("select details from conn_log where event = 'login_other_device'")[0][0]
+        self.assertIn("Іван Петренко", details)
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        page = admin.get("/admin?tab=logs&only=bad").get_data(as_text=True)
+        self.assertIn("Вхід у чужий акаунт", page)
+        self.assertIn("чий телефон: Іван Петренко", page)
+        live = admin.get("/admin?tab=live").get_data(as_text=True)
+        self.assertIn("Вхід у чужий акаунт", live.split("Безпека сьогодні")[1])
+        self.assertEqual(admin.get("/api/live").status_code, 200)
+
+    def test_device_that_logged_into_another_account_counts_as_its(self):
+        self.bind("olha", "web-0aa11bb2")
+        self.login_as("0671234567", device_id="web-5555aaaa")    # Іван зі свого браузера (не прив'язаний)
+        self.login_as("0937654321", device_id="web-5555aaaa")    # той самий браузер — в акаунт Ольги
+        self.assertIn(("login_other_device", 0), self.events("olha"))
+
+    def test_new_device_flagged_but_only_owner_told(self):
+        self.bind("olha", "web-0aa11bb2")
+        self.login_as("0937654321", device_id="web-77778888")
+        self.assertIn(("login_new_device", 0), self.events("olha"))
+        self.assertIn("Вхід з нового пристрою", self.notes("olha"))
+        self.assertNotIn("Підозріло: чужий телефон", self.notes("moder"))
+
+    def test_own_device_and_app_after_browser_are_fine(self):
+        self.bind("olha", "web-0aa11bb2")
+        self.login_as("0937654321", device_id="web-0aa11bb2")
+        self.login_as("0937654321", ua="Mozilla/5.0 (Linux; Android 14) CrewHubApp/2.0 CrewHubDevice/olhaphone0001")
+        self.login_as("0671234567", device_id="web-12121212")    # у Івана ще немає свого телефона — нема з чим звіряти
+        self.assertEqual(self.sql("select count(*) from conn_log where allowed = 0")[0][0], 0)
+
+    def test_repeated_login_notifies_once(self):
+        self.bind("ivan", "app-ivanphone001")
+        self.bind("olha", "web-0aa11bb2")
+        for _ in range(3):
+            self.login_as("0937654321", ua=self.IVAN_PHONE)
+        self.assertEqual(self.sql("select count(*) from conn_log where event = 'login_other_device'")[0][0], 3)
+        self.assertEqual(self.notes("olha").count("Ваш акаунт відкрили на чужому телефоні"), 1)
+
+    def test_shift_started_from_colleagues_phone(self):
+        self.bind("ivan", "app-ivanphone001")
+        self.bind("olha", "web-0aa11bb2")
+        olha = self.login_as("0937654321", device_id="web-0aa11bb2")
+        r = olha.post("/api/clock/start", json={}, headers={"X-Forwarded-For": WORK_IP, "User-Agent": self.IVAN_PHONE})
+        self.assertTrue(r.get_json()["ok"])  # зміну не блокуємо (могла позичити телефон), але позначаємо
+        self.assertIn(("shift_other_device", 0), self.events("olha"))
+        self.assertIn("Підозріло: чужий телефон", self.notes("admin"))
+
+    def test_log_details_readable(self):
+        self.assertEqual(core.log_details('{"reason": "other_device"}'), "причина: інший телефон")
+        self.assertEqual(core.log_details("не json"), "не json")
+        self.assertEqual(core.log_details(None), "")
 
 
 if __name__ == "__main__":
