@@ -10,6 +10,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
@@ -26,7 +28,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
@@ -56,6 +70,7 @@ public class WatchService extends Service {
     private volatile boolean onShift;   // остання відповідь сервера: зміна відкрита
     private volatile Network verified;  // мережа, в якій сервер уже підтвердив свій server_id
     private int failures;               // скільки разів поспіль сервер не відповів (пауза росте)
+    private long searchedAt;            // коли востаннє шукали сервер у мережі (не частіше раз на 10 хв)
 
     static SharedPreferences prefs(Context c) {
         return c.getSharedPreferences("crewhub", Context.MODE_PRIVATE);
@@ -265,7 +280,7 @@ public class WatchService extends Service {
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json");
         c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL
-                + ") CrewHubApp/2.0 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
+                + ") CrewHubApp/2.1 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
         String cookie = prefs(this).getString("cookie", null);
         if (cookie != null) c.setRequestProperty("Cookie", cookie);
         return c;
@@ -313,6 +328,18 @@ public class WatchService extends Service {
         if (server == null) return PERIOD_MS * 5;
         if (!n.equals(verified)) {
             int check = checkServer(this, n, server);
+            // Роутер видав серверу інший IP: за старою адресою тиша або чужий пристрій. Шукаємо сервер у своїй
+            // підмережі (не з першої ж невдачі — сервер міг просто перезапускатися) і переходимо на нову адресу.
+            if (check != SERVER_OK && (check == SERVER_OTHER || failures >= 1)
+                    && SystemClock.elapsedRealtime() - searchedAt > 10 * 60_000L) {
+                searchedAt = SystemClock.elapsedRealtime();
+                String found = discover(this, n, server);
+                if (found != null) {
+                    moveServer(this, found);
+                    server = found;
+                    check = SERVER_OK;
+                }
+            }
             if (check == SERVER_OTHER) {
                 if (waitLock.isHeld()) waitLock.release();
                 update("Цей Wi-Fi не робочий. Стежу далі");
@@ -398,8 +425,127 @@ public class WatchService extends Service {
                 String name = pair.substring(0, eq);
                 if (!name.equals("session") && !name.equals("crewhub_remember")) continue;
                 p.edit().putString("cookie", mergeCookie(p.getString("cookie", ""), name, pair)).apply();
+                if (name.equals("crewhub_remember")) keepRemember(p, rememberFrom(pair));
             }
         }
+    }
+
+    // ── Сервер змінив IP: вхід без пароля ────────────────────────────────────────────────────────────
+    // Cookie браузера прив'язані до адреси, тож на новому IP сервера WebView «забуває» вхід. Застосунок тримає
+    // токен «запам'ятати мене» окремо, разом з server_id сервера, що його видав, і віддає його лише серверу,
+    // який довів, що знає цей токен (proof у /api/hello). Тоді на новій адресі людина входить сама.
+
+    /** Токен «запам'ятати мене» з рядка cookie («a=b; crewhub_remember=selector:validator») або null. */
+    static String rememberFrom(String cookies) {
+        if (cookies == null) return null;
+        for (String part : cookies.split(";")) {
+            String t = part.trim();
+            if (!t.startsWith("crewhub_remember=")) continue;
+            String v = t.substring("crewhub_remember=".length()).replace("\"", "");
+            return v.matches("[\\w-]{8,64}:[\\w-]{16,128}") ? v : null;
+        }
+        return null;
+    }
+
+    /** Запам'ятовує токен входу разом з id сервера, який його видав (id вже перевірено checkServer). */
+    static void keepRemember(SharedPreferences p, String token) {
+        String sid = p.getString("server_id", null);
+        if (token == null || sid == null) return;
+        if (token.equals(p.getString("remember", null)) && sid.equals(p.getString("remember_sid", null))) return;
+        p.edit().putString("remember", token).putString("remember_sid", sid).apply();
+    }
+
+    /** Чи за адресою той самий сервер, що видав наш токен: server_id збігається і proof = HMAC-SHA256(sha256(validator), «n:server_id»).
+     *  Підставний пристрій з тим самим server_id (його видно в QR) proof не порахує: хеш токена є лише в базі сервера. */
+    static boolean proven(Context ctx, Network n, String server, int timeoutMs) {
+        SharedPreferences p = prefs(ctx);
+        String token = p.getString("remember", null), sid = p.getString("remember_sid", null);
+        if (token == null || sid == null || server == null) return false;
+        HttpURLConnection c = null;
+        try {
+            byte[] r = new byte[16];
+            new SecureRandom().nextBytes(r);
+            String nonce = hex(r);
+            int colon = token.indexOf(':');
+            URL url = new URL(server + "api/hello?n=" + nonce + "&s=" + token.substring(0, colon));
+            c = (HttpURLConnection) (n != null ? n.openConnection(url) : url.openConnection());
+            c.setConnectTimeout(timeoutMs);
+            c.setReadTimeout(timeoutMs * 2);
+            c.setUseCaches(false);
+            if (c.getResponseCode() != 200) return false;
+            JSONObject o = new JSONObject(read(c.getInputStream()));
+            if (!sid.equals(o.optString("server_id"))) return false;
+            String key = hex(MessageDigest.getInstance("SHA-256").digest(token.substring(colon + 1).getBytes("UTF-8")));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key.getBytes("UTF-8"), "HmacSHA256"));
+            String want = hex(mac.doFinal((nonce + ":" + sid).getBytes("UTF-8")));
+            return MessageDigest.isEqual(want.getBytes("UTF-8"), o.optString("proof", "").getBytes("UTF-8"));
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /**
+     * Сервер не відповідає за старою адресою: шукаємо його в підмережі телефона (/24, той самий порт) за доказом proof.
+     * Лише якщо стара адреса — IP у тій самій /24, що й телефон (ми в мережі роботи, а не вдома) і є токен входу.
+     * До 254 запитів по 48 паралельно, ~3–6 с. Повертає нову адресу сервера або null. Не з UI-потоку.
+     */
+    static String discover(final Context ctx, final Network n, String server) {
+        SharedPreferences p = prefs(ctx);
+        if (server == null || p.getString("remember", null) == null) return null;
+        final URL old;
+        try {
+            old = new URL(server);
+        } catch (Exception e) {
+            return null;
+        }
+        if (!old.getHost().matches("\\d{1,3}(\\.\\d{1,3}){3}")) return null;  // тунель чи доменне ім'я: там IP не «стрибає»
+        ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(CONNECTIVITY_SERVICE);
+        Network net = n != null ? n : cm.getActiveNetwork();
+        LinkProperties lp = net == null ? null : cm.getLinkProperties(net);
+        if (lp == null) return null;
+        String mine = null;
+        for (LinkAddress a : lp.getLinkAddresses()) {
+            InetAddress ia = a.getAddress();
+            if (ia instanceof Inet4Address && ia.isSiteLocalAddress()) mine = ia.getHostAddress();
+        }
+        if (mine == null) return null;
+        final String prefix = mine.substring(0, mine.lastIndexOf('.') + 1);
+        if (!old.getHost().startsWith(prefix)) return null;  // інша мережа (вдома): нічого не скануємо
+        List<Callable<String>> jobs = new ArrayList<>();
+        for (int i = 1; i < 255; i++) {
+            final String cand = old.getProtocol() + "://" + prefix + i + (old.getPort() > 0 ? ":" + old.getPort() : "") + old.getPath();
+            if (cand.equals(server) || (prefix + i).equals(mine)) continue;
+            jobs.add(new Callable<String>() {
+                public String call() throws Exception {
+                    if (proven(ctx, n, cand, 800)) return cand;
+                    throw new Exception("not here");
+                }
+            });
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(48);
+        try {
+            return pool.invokeAny(jobs, 20, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            return null;  // ніхто не довів, що він наш сервер
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** Знайшли сервер на новій адресі: запам'ятовуємо її, а для фонових пінгів — вхід токеном. */
+    static void moveServer(Context ctx, String found) {
+        SharedPreferences p = prefs(ctx);
+        p.edit().putString("server", found).putString("server_id", p.getString("remember_sid", null))
+                .putString("cookie", "crewhub_remember=" + p.getString("remember", "")).apply();
+    }
+
+    static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format(Locale.ROOT, "%02x", x));
+        return sb.toString();
     }
 
     /** Замінює cookie з іменем name у рядку cur на pair (або додає, якщо такого ще немає). */

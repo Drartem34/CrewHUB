@@ -53,6 +53,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
     private static final String PREFS = "crewhub";
     private static final String KEY_SERVER = "server";
+    private volatile long searchedAt;  // коли востаннє шукали сервер у мережі (verifyThenLoad)
     private static final int PICK_FILE = 1;
     private static final int SCAN = 4;
     private static final int ADD_WIFI = 5;
@@ -445,7 +446,7 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         // CrewHubDevice — постійний id цього телефона: сервер запам'ятовує його при реєстрації і вмикає автозміну лише з нього
-        s.setUserAgentString(s.getUserAgentString() + " CrewHubApp/2.0 CrewHubDevice/" + WatchService.deviceId(this)
+        s.setUserAgentString(s.getUserAgentString() + " CrewHubApp/2.1 CrewHubDevice/" + WatchService.deviceId(this)
                 + WatchService.deviceInfo(this) + (weakPhone() ? " CrewHubLite" : ""));
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
@@ -492,6 +493,8 @@ public class MainActivity extends Activity {
                 // і session, і crewhub_remember (постійний вхід), щоб пінги не «протухали».
                 String all = CookieManager.getInstance().getCookie(server);
                 if (all != null && all.contains("session=")) prefs().edit().putString("cookie", all.trim()).apply();
+                // Токен входу — ще й окремо, з id сервера: переживе зміну адреси сервера (див. WatchService.discover)
+                WatchService.keepRemember(prefs(), WatchService.rememberFrom(all));
                 // Назва компанії з сторінки сервера: її застосунок показує замість IP
                 view.evaluateJavascript("(function(){var m=document.querySelector('meta[name=crewhub-company]');return m?m.content:''})()",
                         new ValueCallback<String>() {
@@ -505,7 +508,8 @@ public class MainActivity extends Activity {
                                 }
                             }
                         });
-                if (url.contains("/login")) prefs().edit().remove("cookie").apply();
+                // Сторінка входу: сервер не прийняв токен (вийшли, змінили пароль, «Вийти на всіх») — забуваємо його
+                if (url.contains("/login")) prefs().edit().remove("cookie").remove("remember").remove("remember_sid").apply();
                 else if (!askedPermissions && url.startsWith(server.replaceFirst("/$", ""))) {
                     askedPermissions = true;
                     setupBackground();
@@ -580,15 +584,46 @@ public class MainActivity extends Activity {
         } else verifyThenLoad(server);
     }
 
-    /** Спершу переконуємось, що за адресою саме наш сервер (server_id), і лише тоді відкриваємо сторінку з cookie входу. */
+    /**
+     * Спершу переконуємось, що за адресою саме наш сервер (server_id), і лише тоді відкриваємо сторінку з cookie входу.
+     * Сервер не відповідає (роутер видав йому інший IP) — шукаємо його в мережі і переходимо на нову адресу.
+     * На новій адресі WebView не має cookie входу: підкладаємо збережений токен, але лише після доказу (proof),
+     * що це той самий сервер, — і людина входить без пароля.
+     */
     private void verifyThenLoad(final String server) {
         final WebView target = web;
+        final boolean maySearch = android.os.SystemClock.elapsedRealtime() - searchedAt > 60_000L;  // без циклу пошуків
         new Thread(new Runnable() {
             public void run() {
                 final int check = WatchService.checkServer(MainActivity.this, null, server);
+                String moved = null;
+                if (check != WatchService.SERVER_OK && maySearch) {
+                    searchedAt = android.os.SystemClock.elapsedRealtime();
+                    runOnUiThread(new Runnable() {
+                        public void run() { if (web == target) web.removeCallbacks(loadTimeout); }  // пошук — ще кілька секунд
+                    });
+                    moved = WatchService.discover(MainActivity.this, null, server);
+                    if (moved != null) WatchService.moveServer(MainActivity.this, moved);
+                }
+                final String found = moved;
+                final String token = prefs().getString("remember", null);
+                final boolean inject = check == WatchService.SERVER_OK && token != null
+                        && WatchService.rememberFrom(CookieManager.getInstance().getCookie(server)) == null
+                        && WatchService.proven(MainActivity.this, null, server, 5_000);
                 runOnUiThread(new Runnable() {
                     public void run() {
                         if (web != target || isFinishing()) return;  // за цей час відкрили інший екран
+                        if (found != null) {
+                            Toast.makeText(MainActivity.this, "Сервер змінив адресу — знайшов його в мережі", Toast.LENGTH_SHORT).show();
+                            showWeb(found, null);
+                            return;
+                        }
+                        web.removeCallbacks(loadTimeout);
+                        web.postDelayed(loadTimeout, 15000);
+                        if (inject) {
+                            CookieManager.getInstance().setCookie(server, "crewhub_remember=" + token + "; Max-Age=31536000; Path=/; HttpOnly");
+                            CookieManager.getInstance().flush();
+                        }
                         if (check == WatchService.SERVER_OTHER) {
                             showSetup(server, label(server) + ": за цією адресою відповідає інший пристрій, а не сервер компанії."
                                     + "\nПеревірте, що телефон у робочому Wi-Fi. Якщо сервер перевстановлювали, "

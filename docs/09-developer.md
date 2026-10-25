@@ -73,8 +73,8 @@ python -m unittest test_features.LanTest -v                       # окреми
 | `locations` | точки: назва, адреса, `is_active`, `wifi_ssid`, `wifi_password` |
 | `networks` | робочі мережі точок (`cidr`, підпис) |
 | `users` | люди: логін, хеш пароля, ПІБ, роль, посада, відділ, точка, телефон, контакти, ставка, статус, `folder`, `must_change_password` |
-| `devices` | телефони людей (`device_key`: `app-…` застосунок, `web-…` браузер), перший і останній IP |
-| `remember_tokens` | «запам'ятати мене»: selector + хеш validator, термін |
+| `devices` | телефони людей (`device_key`: `app-…` застосунок, `web-…` браузер), перший і останній IP, `mac`, `fingerprint` (відбиток зі сторінки) |
+| `remember_tokens` | «запам'ятати мене»: selector + хеш validator, термін, пристрій, `mac`, `fingerprint` |
 | `shifts` | зміни: початок, кінець, статус (`active`/`paused`/`closed`), причина закриття, ставка на момент старту, останній пінг і IP, пристрій, `is_edited`, `bg_ok` |
 | `breaks` | перерви: `lunch`/`rest`/`wifi_loss`, оплачувана, % ставки, причина (`left`/`silence`), `notified` |
 | `schedule` | графік: заплановані зміни |
@@ -113,7 +113,7 @@ API застосунку й сторінки «Зміна»: `POST /api/clock/<a
 `check` (стан і автостарт), `auto` (фоновий пінг застосунку), `heartbeat`, `start`, `stop`, `break_start`
 (`kind`: `lunch`/`rest`), `break_end`, `left` (вийшов з Wi-Fi, `away_since`). Відповідь — стан зміни
 (`on_work_network`, `shift`, `why`, `next_check`, …). `GET /api/live` — дані «Огляду».
-`GET /api/hello` — `server_id` і назва компанії (без входу). `GET /health` — стан сервера (без входу).
+`GET /api/hello` — `server_id` і назва компанії (без входу); з `?n=<hex>&s=<selector>` ще й `proof` — доказ, що сервер знає токен «запам'ятати мене» (застосунок шукає сервер на новому IP, див. [07-android.md](07-android.md#доказ-сервера)). `GET /health` — стан сервера (без входу).
 
 Дії (POST, форми з CSRF-токеном): `/me/request`, `/me/request/<id>/<cancel|accept|decline>`, `/me/dayoff/<id>`,
 `/me/profile`, `/me/password`, `/photo/<uid>`, `/notifications/read`; тімлід — `/team/dayoff`, `/team/swap`,

@@ -7,6 +7,7 @@ import base64
 import csv
 import functools
 import hashlib
+import hmac
 import io
 import ipaddress
 import json
@@ -233,7 +234,8 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "wifi_lost": "Втрата Wi-Fi", "wifi_restored": "Wi-Fi відновлено", "denied": "Відмова",
           "server_downtime": "Сервер не працював", "auto_start": "Зміна почалась автоматично",
           "auto_close": "Зміна закрилась автоматично", "login_other_device": "Вхід у чужий акаунт",
-          "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна з чужого телефона"}
+          "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна з чужого телефона",
+          "device_recognised": "Свій телефон упізнано"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні»
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device")
 
@@ -548,6 +550,12 @@ def init_db(seed=True):
     if "bg_ok" not in [r[1] for r in conn.execute("pragma table_info(shifts)")]:
         # 1 = застосунок працює без обмежень батареї і пінгує щохвилини навіть у сні: тиша = справжня втрата Wi-Fi
         conn.execute("alter table shifts add column bg_ok integer not null default 0")
+    # Відбиток пристрою і MAC (версія 17): сервер упізнає «свій» телефон людини, навіть якщо браузер очистили
+    for table in ("devices", "remember_tokens"):
+        tcols = [r[1] for r in conn.execute(f"pragma table_info({table})")]
+        for c in ("fingerprint", "mac"):
+            if c not in tcols:
+                conn.execute(f"alter table {table} add column {c} text")
     lcols = [r[1] for r in conn.execute("pragma table_info(locations)")]
     for c in ("wifi_ssid", "wifi_password"):  # Wi-Fi, прикріплений до точки (назва й пароль для QR підключення)
         if c not in lcols:
@@ -820,6 +828,60 @@ def device_key(sent=None):
     return sent[:80] if re.fullmatch(r"[\w .:-]{4,80}", sent) else None
 
 
+FP_RE = re.compile(r"[0-9a-f]{8,32}")
+
+
+def clean_fp(v):
+    """Відбиток пристрою, який рахує сторінка (app.js crewFingerprint): 16 шістнадцяткових символів, або None."""
+    v = (v or "").strip().lower()
+    return v if FP_RE.fullmatch(v) else None
+
+
+_mac_cache = {"at": 0.0, "table": {}}
+
+
+def client_mac(ip, cached_only=False):
+    """MAC пристрою з таблиці сусідів (ARP) сервера. Лише в локальній мережі: через роутер чи тунель MAC не видно.
+    Таблицю перечитуємо не частіше раз на хвилину (новий IP — не частіше раз на 5 с). Читання таблиці на Windows —
+    окрема програма `arp`, тож під _lock кличемо з cached_only=True, а свіжу таблицю беремо до блокування.
+    Телефони у Wi-Fi показують «приватний» MAC — випадковий, але сталий для однієї мережі, тож у мережі точки
+    він однозначно вказує на телефон."""
+    try:
+        if not ip or not ipaddress.ip_address(ip).is_private or ipaddress.ip_address(ip).is_loopback:
+            return None
+    except ValueError:
+        return None
+    t = time.time()
+    if not cached_only and (t - _mac_cache["at"] > 60 or (ip not in _mac_cache["table"] and t - _mac_cache["at"] > 5)):
+        import lan
+        _mac_cache.update(at=t, table=lan.neighbours())
+    return _mac_cache["table"].get(ip)
+
+
+def note_device(conn, user_id, key, fp=None, mac=None):
+    """Запам'ятовує відбиток і MAC пристрою людини (лише якщо цей пристрій уже її)."""
+    if key and (fp or mac):
+        conn.execute("update devices set fingerprint = coalesce(?, fingerprint), mac = coalesce(?, mac)"
+                     " where user_id = ? and device_key = ? and (fingerprint is not coalesce(?, fingerprint) or mac is not coalesce(?, mac))",
+                     (fp, mac, user_id, key, fp, mac))
+
+
+def adopt_device(conn, user_id, key, fp, mac, ip=None):
+    """Свій телефон з новим кодом (очистили браузер, перевстановили застосунок): MAC і відбиток збіглися з
+    прив'язаним телефоном людини — переносимо прив'язку на новий код, щоб автозміна впізнавала телефон і далі.
+    Лише після входу з паролем і лише в межах одного виду (застосунок → застосунок, браузер → браузер)."""
+    if not (key and fp and mac) or conn.execute("select 1 from devices where device_key = ?", (key,)).fetchone():
+        return False
+    row = conn.execute("select id, device_key from devices where user_id = ? and fingerprint = ? and mac = ?"
+                       " order by last_seen_at desc limit 1", (user_id, fp, mac)).fetchone()
+    if not row or row["device_key"][:4] != key[:4]:
+        return False
+    conn.execute("update devices set device_key = ?, last_ip = coalesce(?, last_ip), last_seen_at = ? where id = ?",
+                 (key, ip, now(), row["id"]))
+    log_clock(conn, user_id, None, "device_recognised", ip, None, True, key, {"був код": row["device_key"], "MAC": mac})
+    return True
+
+
 def device_name():
     """Назва телефона для списку пристроїв людини: «Galaxy S23 Артема (samsung SM-S911B)» від застосунку,
     модель з User-Agent браузера або просто тип пристрою."""
@@ -830,28 +892,41 @@ def device_name():
     return model or "Пристрій"
 
 
-def foreign_device(conn, user_id, key):
-    """Чи це пристрій не цієї людини. ('other', власник) — телефон прив'язаний до іншої людини або нещодавно
-    входив в інший акаунт (хтось відкрив чужий акаунт на своєму телефоні); ('new', None) — у людини є свій
-    телефон, а цей сервер бачить уперше; None — свій або порівнювати нема з чим."""
-    if not key:
+def foreign_device(conn, user_id, key, fp=None, mac=None):
+    """Чи це пристрій не цієї людини. Звіряємо код пристрою (застосунок / браузер), MAC у мережі точки і відбиток.
+    ('other', власник) — телефон прив'язаний до іншої людини або з нього вже входили в інший акаунт (за кодом чи MAC);
+    ('new', None) — у людини є свій телефон, а цей сервер бачить уперше; None — свій або порівнювати нема з чим.
+    Відбиток сам нічого не вирішує: у двох однакових телефонів він однаковий. Лише разом з MAC він упізнає
+    свій телефон, на якому очистили браузер чи перевстановили застосунок (код пристрою тоді новий)."""
+    if not key and not mac:
         return None
-    mine = [r[0] for r in conn.execute("select device_key from devices where user_id = ?", (user_id,))]
-    if key in mine:
+    rows = conn.execute("select device_key, fingerprint, mac from devices where user_id = ?", (user_id,)).fetchall()
+    mine = [r["device_key"] for r in rows]
+    if key and key in mine:
         return None
-    owner = conn.execute("select u.id, u.full_name from devices d join users u on u.id = d.user_id"
-                         " where d.device_key = ? and d.user_id != ? order by d.last_seen_at desc limit 1", (key, user_id)).fetchone()
-    if not owner:  # пристрій не прив'язаний, але з нього вже входили в інший акаунт («запам'ятати мене»)
-        owner = conn.execute("select u.id, u.full_name from remember_tokens t join users u on u.id = t.user_id"
-                             " where t.device = ? and t.user_id != ? order by t.last_used_at desc limit 1", (key, user_id)).fetchone()
+    if mac and fp and any(r["mac"] == mac and r["fingerprint"] == fp for r in rows):
+        return None
+    owner = None
+    # За кодом — однозначно; за MAC — лише коли відбиток не суперечить: Wi-Fi-підсилювач буває підставляє
+    # свій MAC за всі телефони за ним, і тоді в різних людей той самий MAC, але різні відбитки
+    for col, val, extra in (("device_key", key, ""), ("mac", mac, " and (? is null or x.fingerprint is null or x.fingerprint = ?)")):
+        if owner or not val:
+            continue
+        args = (val, user_id) + ((fp, fp) if extra else ())
+        owner = conn.execute(f"select u.id, u.full_name from devices x join users u on u.id = x.user_id"
+                             f" where x.{col} = ? and x.user_id != ?{extra} order by x.last_seen_at desc limit 1", args).fetchone()
+        if not owner:  # не прив'язаний, але з нього вже входили в інший акаунт («запам'ятати мене»)
+            owner = conn.execute(f"select u.id, u.full_name from remember_tokens x join users u on u.id = x.user_id"
+                                 f" where x.{'device' if col == 'device_key' else 'mac'} = ? and x.user_id != ?{extra}"
+                                 " order by x.last_used_at desc limit 1", args).fetchone()
     if owner:
         return "other", owner
-    if mine and not (key.startswith("app-") and all(k.startswith("web-") for k in mine)):
+    if mine and key and not (key.startswith("app-") and all(k.startswith("web-") for k in mine)):
         return "new", None  # (зареєструвався в браузері, а тепер увійшов у застосунку — це той самий телефон)
     return None
 
 
-def flag_foreign(conn, user, key, ip, event, what):
+def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None):
     """Пише підозрілий вхід чи зміну в журнал і повідомляє: власнику акаунта — завжди, керівникам — якщо
     акаунт відкрили на телефоні іншої людини. what = foreign_device(...). Сповіщення — не частіше раз на 30 хв."""
     kind, owner = what
@@ -859,6 +934,13 @@ def flag_foreign(conn, user, key, ip, event, what):
     details = {"пристрій": dev}
     if owner:
         details["чий телефон"] = owner["full_name"]
+    if mac:
+        details["MAC"] = mac
+    if fp and not owner:  # однаковий відбиток буває в однакових телефонів — лише підказка, не доказ
+        alike = conn.execute("select u.full_name from devices d join users u on u.id = d.user_id"
+                             " where d.fingerprint = ? and d.user_id != ? limit 1", (fp, user["id"])).fetchone()
+        if alike:
+            details["схожий відбиток"] = alike["full_name"]
     loc = match_location(conn, ip)
     recent = conn.execute("select 1 from conn_log where user_id = ? and event = ? and device = ? and created_at > ?",
                           (user["id"], event, key, now() - 1800)).fetchone()
@@ -914,15 +996,15 @@ def _remember_hash(validator):
     return hashlib.sha256(validator.encode()).hexdigest()
 
 
-def issue_remember(conn, user_id, device=None, name=None, ip=None):
+def issue_remember(conn, user_id, device=None, name=None, ip=None, fp=None, mac=None):
     """Створює довгоживучий токен входу і повертає значення для cookie (selector:validator).
     Токен не прив'язаний до IP: IP у Wi-Fi і в мобільній мережі змінюється, тож людина лишається
     в системі, навіть якщо роутер дав інший IP телефону чи серверу."""
     selector, validator = secrets.token_urlsafe(12), secrets.token_urlsafe(32)
     t = now()
-    conn.execute("insert into remember_tokens(user_id, selector, validator_hash, name, device, created_at, last_used_at, last_ip, expires_at)"
-                 " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 (user_id, selector, _remember_hash(validator), name, device, t, t, ip, t + REMEMBER_DAYS * 86400))
+    conn.execute("insert into remember_tokens(user_id, selector, validator_hash, name, device, created_at, last_used_at, last_ip, expires_at,"
+                 " fingerprint, mac) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (user_id, selector, _remember_hash(validator), name, device, t, t, ip, t + REMEMBER_DAYS * 86400, fp, mac))
     return f"{selector}:{validator}"
 
 
@@ -1536,8 +1618,9 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
         except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
             return state({"already": True})
         log_clock(conn, user["id"], cur.lastrowid, "start", ip, loc["id"], True, device)
-        if (what := foreign_device(conn, user["id"], device)) and what[0] == "other":
-            flag_foreign(conn, user, device, ip, "shift_other_device", what)  # відмітив колегу на своєму телефоні
+        fp, mac = clean_fp((extra or {}).get("fp")), client_mac(ip, cached_only=True)
+        if (what := foreign_device(conn, user["id"], device, fp, mac)) and what[0] == "other":
+            flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac)  # відмітив колегу на своєму телефоні
         return state()
 
     keep = setting("offline_keeps_counting", conn) == "1"  # втрата зв'язку не зупиняє зміну
@@ -2677,13 +2760,16 @@ def login():
                 session.permanent = True
                 resp = redirect(url_for("index"))
                 # «Запам'ятати мене»: один раз увійшов — далі входить сам, навіть якщо IP зміниться
-                key = device_key(request.form.get("device_id"))
+                key, fp, mac = device_key(request.form.get("device_id")), clean_fp(request.form.get("fp")), client_mac(ip)
                 with _lock:
                     conn = db()
                     # Пристрій не власника (телефон колеги чи невідомий) — підозріло: у журнал і сповіщення
-                    if what := foreign_device(conn, u["id"], key):
-                        flag_foreign(conn, u, key, ip, "login_other_device" if what[0] == "other" else "login_new_device", what)
-                    val = issue_remember(conn, u["id"], key, device_name(), client_ip())
+                    if what := foreign_device(conn, u["id"], key, fp, mac):
+                        flag_foreign(conn, u, key, ip, "login_other_device" if what[0] == "other" else "login_new_device", what, fp, mac)
+                    else:
+                        adopt_device(conn, u["id"], key, fp, mac, ip)
+                    note_device(conn, u["id"], key, fp, mac)
+                    val = issue_remember(conn, u["id"], key, device_name(), client_ip(), fp, mac)
                     conn.commit()
                 return set_remember_cookie(resp, val)
         else:
@@ -2715,6 +2801,7 @@ def register():
             error = "Пароль має бути не коротший за 6 символів"
         elif pw != form.get("password2"):
             error = "Паролі не збігаються"
+        reg_mac = client_mac(client_ip())  # до блокування: читання ARP може тривати
         with _lock:
             conn = db()
             if not error and phone_taken(conn, phone):
@@ -2731,7 +2818,9 @@ def register():
                     audit(conn, None, "INSERT", "users", cur.lastrowid, cur.lastrowid,
                           {"registration": [None, f"{name} {format_phone(phone)}"], "ip": [None, client_ip()]})
                     # Телефон, з якого зареєструвались, стає телефоном людини: з нього вмикається автозміна
-                    remember_device(conn, cur.lastrowid, device_key(form.get("device_id")), client_ip())
+                    reg_key = device_key(form.get("device_id"))
+                    remember_device(conn, cur.lastrowid, reg_key, client_ip())
+                    note_device(conn, cur.lastrowid, reg_key, clean_fp(form.get("fp")), reg_mac)
                     notify_staff(conn, "Нова реєстрація", f"{name}, {format_phone(phone)} чекає підтвердження")
                     conn.commit()
                     return render_template("register.html", done=True, name=name)
@@ -2822,9 +2911,12 @@ def notifications_read():
 @login_required()
 def api_clock(action):
     body = request.get_json(silent=True) or {}
+    mac = client_mac(client_ip())  # до блокування: читання ARP може тривати
     with _lock:
         conn = db()
-        res = clock_action(conn, current_user(), action, client_ip(), device_key(body.get("device_id")), body.get("kind"), body)
+        key = device_key(body.get("device_id"))
+        res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
+        note_device(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
         conn.commit()
     return jsonify(res)
 
@@ -3370,9 +3462,20 @@ _live_lock = threading.Lock()
 
 @app.route("/api/hello")
 def hello():
-    """Хто тут: застосунок звіряє server_id, перш ніж надіслати cookie входу. Без входу і без сесії."""
+    """Хто тут: застосунок звіряє server_id, перш ніж надіслати cookie входу. Без входу і без сесії.
+    З n (випадкове число від застосунку) і s (selector його токена «запам'ятати мене») сервер ще й доводить,
+    що він справжній: proof = HMAC-SHA256(ключ — хеш токена з бази, «n:server_id»). Хеш знає лише справжній
+    сервер і сам застосунок (він рахує його з токена), тож пристрій, який лише назвався тим самим server_id
+    (його видно в QR), токен не отримає. Так застосунок знаходить сервер на новому IP і входить без пароля."""
     conn = db()
-    return jsonify({"app": "crewhub", "server_id": meta_get(conn, "server_id"), "company": setting("company_name", conn)})
+    sid = meta_get(conn, "server_id")
+    out = {"app": "crewhub", "server_id": sid, "company": setting("company_name", conn)}
+    n, sel = request.args.get("n", ""), request.args.get("s", "")
+    if re.fullmatch(r"[0-9a-f]{16,64}", n) and re.fullmatch(r"[\w-]{8,64}", sel):
+        row = conn.execute("select validator_hash from remember_tokens where selector = ? and expires_at > ?", (sel, now())).fetchone()
+        if row:
+            out["proof"] = hmac.new(row["validator_hash"].encode(), f"{n}:{sid}".encode(), hashlib.sha256).hexdigest()
+    return jsonify(out)
 
 
 @app.route("/health")

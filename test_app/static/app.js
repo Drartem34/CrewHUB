@@ -225,4 +225,55 @@
 
   window.iconFallback = function () {};  // сумісність: іконки тепер завжди вбудовані
 
+  // Відбиток пристрою: 16 hex-символів з того, що браузер каже про залізо (екран, ядра, відеокарта, як малює текст).
+  // Не залежить від сховища сайту, тож переживає очищення браузера й перевстановлення застосунку. Сервер звіряє
+  // його разом з MAC: так упізнає свій телефон людини з новим кодом пристрою. Сам по собі не логінить нікого —
+  // у двох однакових телефонів він однаковий.
+  let fpCache = null;
+  window.crewFingerprint = function () {
+    if (fpCache) return fpCache;
+    const parts = [];
+    const add = (f) => { try { parts.push(String(f())); } catch (e) { parts.push("-"); } };
+    const n = navigator, s = screen;
+    // Без версій браузера (оновлення не змінює відбиток) і без міток застосунку (у них код пристрою)
+    add(() => n.userAgent.replace(/CrewHub\S*/g, "").replace(/\d+(\.\d+)+/g, ""));
+    add(() => n.platform);
+    add(() => (n.languages || [n.language]).join(","));
+    add(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+    add(() => [s.width, s.height].sort((a, b) => a - b).join("x"));  // поворот екрана не змінює
+    add(() => Math.round((window.devicePixelRatio || 1) * 100));
+    add(() => s.colorDepth);
+    add(() => n.hardwareConcurrency);
+    add(() => n.deviceMemory);
+    add(() => n.maxTouchPoints);
+    add(() => {
+      const c = document.createElement("canvas"); c.width = 220; c.height = 40;
+      const x = c.getContext("2d");
+      x.textBaseline = "top"; x.font = "16px sans-serif"; x.fillStyle = "#f60"; x.fillRect(110, 1, 62, 20);
+      x.fillStyle = "#069"; x.fillText("CrewHub Зміна ✓ 0,9", 2, 15);
+      x.fillStyle = "rgba(102,204,0,.7)"; x.fillText("CrewHub Зміна ✓ 0,9", 4, 17);
+      return c.toDataURL();
+    });
+    add(() => {
+      const gl = document.createElement("canvas").getContext("webgl");
+      const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+      return ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) + "|" + gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl ? gl.getParameter(gl.RENDERER) : "";
+    });
+    const str = parts.join("\u241e");
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;  // cyrb53: швидкий 64-бітний хеш рядка
+    for (let i = 0; i < str.length; i++) {
+      const ch = str.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    fpCache = (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+    return fpCache;
+  };
+  // Форми входу й реєстрації несуть відбиток (поле fp): заповнюємо перед відправкою
+  document.addEventListener("submit", (e) => {
+    const i = e.target && e.target.querySelector && e.target.querySelector('input[name="fp"]');
+    if (i && !i.value) i.value = window.crewFingerprint();
+  }, true);
+
 })();

@@ -12,7 +12,7 @@
     {% else %}
       <p class="muted" style="margin:0 0 20px">Реєстрація працівника. Номер телефону буде вашим логіном.</p>
       <form method="post" class="stack" id="regForm">
-        <input type="hidden" name="device_id" id="regDevice">
+        <input type="hidden" name="device_id" id="regDevice"><input type="hidden" name="fp">
         <div><label>Ім'я та прізвище</label><input name="full_name" value="{{ form.full_name or '' }}" autocomplete="name" required></div>
         <div><label>Номер телефону</label><input name="phone" type="tel" inputmode="tel" value="{{ form.phone or '' }}" autocomplete="tel" placeholder="067 123 45 67" required>
           <small class="muted" id="phoneHint"></small></div>

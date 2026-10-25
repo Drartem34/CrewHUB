@@ -20,7 +20,7 @@
     const t = setTimeout(() => ctl.abort(), 15000);
     return fetch("/api/clock/" + action, {
       method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
-      body: JSON.stringify(Object.assign({ device_id: deviceId }, extra || {})),
+      body: JSON.stringify(Object.assign({ device_id: deviceId, fp: window.crewFingerprint ? window.crewFingerprint() : undefined }, extra || {})),
     }).finally(() => clearTimeout(t));
   }
 

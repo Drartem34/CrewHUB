@@ -45,7 +45,8 @@
       <div class="card-head"><h3>{{ icon('phone') }} Телефон людини</h3><span class="muted small">з нього вмикається автозміна</span></div>
       {% for d in devices %}
       <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">
-        <div class="grow"><b>{{ d.name or 'Пристрій' }}</b><div class="muted small">прив'язано {{ d.created_at|dt }} · IP тоді {{ d.first_ip or '?' }}{% if d.last_seen_at %} · востаннє {{ d.last_seen_at|dt }}, IP {{ d.last_ip }}{% endif %}</div></div>
+        <div class="grow"><b>{{ d.name or 'Пристрій' }}</b><div class="muted small">прив'язано {{ d.created_at|dt }} · IP тоді {{ d.first_ip or '?' }}{% if d.last_seen_at %} · востаннє {{ d.last_seen_at|dt }}, IP {{ d.last_ip }}{% endif %}</div>
+          <div class="muted small mono">код {{ d.device_key }}{% if d.mac %} · MAC {{ d.mac }}{% endif %}{% if d.fingerprint %} · відбиток {{ d.fingerprint }}{% endif %}</div></div>
         <form method="post" action="{{ url_for('admin_device_delete', uid=u.id, did=d.id) }}" data-confirm="Відв'язати {{ d.name or 'пристрій' }}? Наступний телефон, з якого прийде автопінг, прив'яжеться сам."><button class="sm">{{ icon('x', 'sm') }}Відв'язати</button></form>
       </div>
       {% else %}<div class="muted small">Ще не прив'язано. Телефон запам'ятається під час реєстрації або з першого автопінгу з робочого Wi-Fi.</div>{% endfor %}

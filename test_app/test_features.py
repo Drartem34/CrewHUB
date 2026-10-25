@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from test_crewhub import WORK_IP, CrewHubBase, core, settings_file  # noqa: F401 — test_crewhub налаштовує оточення
 
@@ -472,6 +473,122 @@ class ForeignDeviceTest(CrewHubBase):
         self.assertTrue(r.get_json()["ok"])  # зміну не блокуємо (могла позичити телефон), але позначаємо
         self.assertIn(("shift_other_device", 0), self.events("olha"))
         self.assertIn("Підозріло: чужий телефон", self.notes("admin"))
+
+    # ── Відбиток пристрою і MAC ──
+    FP_OLHA, FP_IVAN = "0123456789abcdef", "fedcba9876543210"
+    MAC_OLHA, MAC_IVAN = "a2:11:22:33:44:55", "5e:66:77:88:99:00"
+
+    def login_mac(self, phone, mac, **kw):
+        with mock.patch.object(core, "client_mac", lambda ip, cached_only=False: mac):
+            fp = kw.pop("fp", None)
+            c = core.app.test_client()
+            data = {"username": phone, "password": "1234", "device_id": kw.get("device_id", ""), "fp": fp or ""}
+            self.assertEqual(c.post("/login", data=data).status_code, 302)
+            return c
+
+    def mark(self, username, key, fp, mac):
+        uid = self.bind(username, key)
+        with core.connect() as c:
+            core.note_device(c, uid, key, fp, mac)
+            c.commit()
+
+    def test_fingerprint_and_mac_saved_for_own_device(self):
+        self.bind("olha", "web-0aa11bb2")
+        self.login_mac("0937654321", self.MAC_OLHA, device_id="web-0aa11bb2", fp=self.FP_OLHA)
+        self.assertEqual(tuple(self.sql("select fingerprint, mac from devices where device_key = 'web-0aa11bb2'")[0]),
+                         (self.FP_OLHA, self.MAC_OLHA))
+        self.assertEqual(tuple(self.sql("select fingerprint, mac from remember_tokens order by id desc limit 1")[0]),
+                         (self.FP_OLHA, self.MAC_OLHA))
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        uid = self.sql("select id from users where username = 'olha'")[0][0]
+        page = admin.get(f"/admin/employee/{uid}").get_data(as_text=True)
+        self.assertIn("MAC " + self.MAC_OLHA, page)
+        self.assertIn("відбиток " + self.FP_OLHA, page)
+
+    def test_same_phone_with_cleared_browser_is_recognised(self):
+        # Ольга очистила браузер: код пристрою новий, але MAC і відбиток ті самі — це її телефон
+        self.mark("olha", "web-0aa11bb2", self.FP_OLHA, self.MAC_OLHA)
+        self.login_mac("0937654321", self.MAC_OLHA, device_id="web-99990000", fp=self.FP_OLHA)
+        self.assertEqual(self.sql("select count(*) from conn_log where allowed = 0")[0][0], 0)
+        # прив'язка переїхала на новий код — автозміна впізнає телефон і далі
+        self.assertEqual([r[0] for r in self.sql("select d.device_key from devices d join users u on u.id = d.user_id"
+                                                  " where u.username = 'olha'")], ["web-99990000"])
+        self.assertIn(("device_recognised", 1), self.events("olha"))
+        # застосунок на тому самому телефоні не забирає прив'язку браузера (інший вид пристрою)
+        self.login_mac("0937654321", self.MAC_OLHA, device_id="app-x", fp=self.FP_OLHA)
+        self.assertEqual(self.sql("select count(*) from devices where device_key like 'app-%'")[0][0], 0)
+
+    def test_colleagues_mac_means_colleagues_phone(self):
+        # Іванів телефон з новим кодом (очистили браузер) — MAC видає, чий це телефон
+        self.mark("ivan", "app-ivanphone001", self.FP_IVAN, self.MAC_IVAN)
+        self.bind("olha", "web-0aa11bb2")
+        self.login_mac("0937654321", self.MAC_IVAN, device_id="web-31313131")
+        self.assertIn(("login_other_device", 0), self.events("olha"))
+        details = self.sql("select details from conn_log where event = 'login_other_device'")[0][0]
+        self.assertIn("Іван Петренко", details)
+        self.assertIn(self.MAC_IVAN, details)
+
+    def test_shared_mac_behind_extender_is_not_an_accusation(self):
+        # Підсилювач Wi-Fi підставляє свій MAC за всіх: MAC той самий, відбитки різні — це не Іванів телефон
+        self.mark("ivan", "app-ivanphone001", self.FP_IVAN, self.MAC_IVAN)
+        self.bind("olha", "web-0aa11bb2")
+        self.login_mac("0937654321", self.MAC_IVAN, device_id="web-31313131", fp=self.FP_OLHA)
+        self.assertNotIn(("login_other_device", 0), self.events("olha"))
+        self.assertIn(("login_new_device", 0), self.events("olha"))
+
+    def test_fingerprint_alone_is_only_a_hint(self):
+        # Однакові телефони мають однаковий відбиток: без MAC це не «чужий телефон», а лише новий пристрій з підказкою
+        self.mark("ivan", "app-ivanphone001", self.FP_IVAN, self.MAC_IVAN)
+        self.mark("olha", "web-0aa11bb2", self.FP_OLHA, self.MAC_OLHA)
+        self.login_mac("0937654321", None, device_id="web-42424242", fp=self.FP_IVAN)
+        self.assertIn(("login_new_device", 0), self.events("olha"))
+        self.assertNotIn(("login_other_device", 0), self.events("olha"))
+        self.assertIn("схожий відбиток", self.sql("select details from conn_log where event = 'login_new_device'")[0][0])
+        # той самий відбиток, але інший MAC — теж не впізнаємо як свій
+        self.login_mac("0937654321", "02:00:00:00:00:01", device_id="web-42424243", fp=self.FP_OLHA)
+        self.assertEqual(self.events("olha").count(("login_new_device", 0)), 2)
+
+    def test_clock_ping_carries_fingerprint(self):
+        self.bind("olha", "web-0aa11bb2")
+        olha = self.login_as("0937654321", device_id="web-0aa11bb2")
+        with mock.patch.object(core, "client_mac", lambda ip, cached_only=False: self.MAC_OLHA):
+            olha.post("/api/clock/heartbeat", json={"device_id": "web-0aa11bb2", "fp": self.FP_OLHA.upper()},
+                      headers={"X-Forwarded-For": WORK_IP})
+        self.assertEqual(tuple(self.sql("select fingerprint, mac from devices where device_key = 'web-0aa11bb2'")[0]),
+                         (self.FP_OLHA, self.MAC_OLHA))
+
+    def test_clean_fp_and_client_mac(self):
+        self.assertEqual(core.clean_fp(" ABCDEF0123456789 "), "abcdef0123456789")
+        for bad in (None, "", "xyz", "12'; drop", "a" * 40):
+            self.assertIsNone(core.clean_fp(bad))
+        self.assertIsNone(core.client_mac("8.8.8.8"))      # через інтернет MAC не видно
+        self.assertIsNone(core.client_mac("127.0.0.1"))
+        self.assertIsNone(core.client_mac("не ip"))
+        core._mac_cache.update(at=0.0, table={})
+        with mock.patch("lan.neighbours", return_value={"192.168.1.23": self.MAC_OLHA}):
+            self.assertEqual(core.client_mac("192.168.1.23"), self.MAC_OLHA)
+        self.assertEqual(core.client_mac("192.168.1.23", cached_only=True), self.MAC_OLHA)
+        core._mac_cache.update(at=0.0, table={})
+
+    def test_hello_proves_server_knows_the_token(self):
+        # Застосунок шукає сервер на новому IP і віддає токен лише тому, хто доведе, що знає його хеш
+        import hashlib
+        import hmac
+        c = self.login_as("0937654321", device_id="web-0aa11bb2")
+        token = c.get_cookie("crewhub_remember").value
+        sel, validator = token.split(":", 1)
+        nonce = "0123456789abcdef0123456789abcdef"
+        hello = core.app.test_client().get(f"/api/hello?n={nonce}&s={sel}").get_json()
+        key = hashlib.sha256(validator.encode()).hexdigest().encode()
+        self.assertEqual(hello["proof"], hmac.new(key, f"{nonce}:{hello['server_id']}".encode(), hashlib.sha256).hexdigest())
+        self.assertNotIn("proof", core.app.test_client().get(f"/api/hello?n={nonce}&s=unknownselector").get_json())
+        self.assertNotIn("proof", core.app.test_client().get(f"/api/hello?n=xyz&s={sel}").get_json())
+        self.assertNotIn("proof", core.app.test_client().get("/api/hello").get_json())
+        # з токеном, виданим для старої адреси, сервер на новій адресі впускає без пароля
+        other = core.app.test_client()
+        other.set_cookie("crewhub_remember", token, domain="192.168.0.77")
+        r = other.get("/me", base_url="http://192.168.0.77:5000")
+        self.assertEqual(r.status_code, 200)
 
     def test_log_details_readable(self):
         self.assertEqual(core.log_details('{"reason": "other_device"}'), "причина: інший телефон")
