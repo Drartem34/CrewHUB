@@ -845,5 +845,152 @@ class BatteryTest(CrewHubBase):
         self.assertEqual(self.shift()["status"], "paused")
 
 
+class OutageTest(CrewHubBase):
+    """Зникло світло: сервер і роутер вимкнулись. Коли світло з'явилось, сервер рахує, скільки його не було,
+    і зараховує цей час людям, а не ставить їх на паузу."""
+    WED = datetime(2026, 10, 21)  # середа, робочий час 09:00–18:00
+
+    def at(self, hh, mm=0):
+        return int(self.WED.replace(hour=hh, minute=mm).timestamp())
+
+    def setUp(self):
+        super().setUp()
+        real = core.now
+        self.addCleanup(setattr, core, "now", real)
+
+    def tick(self, hh, mm=0):
+        core.now = lambda: self.at(hh, mm)
+
+    def sweep(self):
+        with core.connect() as c:
+            n = core.sweep(c)
+            c.commit()
+        return n
+
+    def alive(self, hh, mm=0):
+        """Сервер працював до цієї миті (останній запис alive_at перед тим, як зникло світло), браузер пінгував."""
+        self.tick(hh, mm)
+        if self.sql("select 1 from shifts where status = 'active' and coalesce(device, '') not like 'app-%'"):
+            self.clock("heartbeat")
+        self.sweep()
+
+    def wait_until(self, hh, mm=0):
+        """Сервер працює: фонова перевірка щохвилини від поточної миті до hh:mm (без пінгів телефонів)."""
+        t = core.now()
+        while t < self.at(hh, mm):
+            t = min(t + 60, self.at(hh, mm))
+            core.now = (lambda x: lambda: x)(t)
+            self.sweep()
+
+    def shift(self):
+        return self.sql("select * from shifts")[0]
+
+    def worked(self):
+        with core.connect() as c:
+            return core.shift_stats(c, c.execute("select * from shifts").fetchone())["worked_seconds"]
+
+    def test_outage_hours_are_credited_and_shift_continues(self):
+        self.tick(10)
+        self.login("ivan")
+        self.assertTrue(self.clock("start")["ok"])
+        self.alive(11)               # об 11:00 зникло світло
+        self.tick(12, 30)            # о 12:30 з'явилось, сервер запустився
+        self.sweep()
+        self.assertEqual(self.shift()["status"], "active")
+        self.assertEqual(self.shift()["last_seen_at"], self.at(12, 30))
+        self.assertEqual(tuple(self.sql("select started_at, ended_at from outages")[0]), (self.at(11), self.at(12, 30)))
+        details = self.sql("select details from conn_log where event = 'server_downtime'")[0][0]
+        self.assertIn('"seconds": 5400', details)
+        self.assertIn("outage_credit", [r[0] for r in self.sql("select event from conn_log")])
+        self.assertTrue(any("Сервер не працював 11:00–12:30" in r[0] for r in self.sql("select title from notifications")))
+        self.wait_until(12, 37)      # роутер ще вантажиться — не ставимо на паузу
+        self.assertEqual(self.shift()["status"], "active")
+        self.assertTrue(self.clock("heartbeat")["ok"])  # телефон знову в Wi-Fi
+        self.assertEqual(self.worked(), 2 * 3600 + 37 * 60)  # 10:00–12:37 без жодної паузи
+        self.assertEqual(self.sql("select count(*) from breaks")[0][0], 0)
+
+    def test_nobody_returned_after_outage(self):
+        self.tick(10)
+        self.login("ivan")
+        self.clock("start")
+        self.alive(11)
+        self.tick(12)
+        self.sweep()
+        self.wait_until(12, 11)      # за 10 хв після відновлення телефон так і не озвався
+        self.assertEqual(self.shift()["status"], "paused")
+        self.assertEqual(self.sql("select started_at from breaks")[0][0], self.at(12))  # зараховано до відновлення
+
+    def test_work_ended_during_outage(self):
+        self.tick(15)
+        self.login("ivan")
+        self.clock("start")
+        self.alive(17)
+        self.tick(20)                # світло з'явилось о 20:00, робочий час скінчився о 18:00
+        self.sweep()
+        self.assertEqual(self.shift()["last_seen_at"], self.at(18))
+        self.wait_until(21, 41)
+        s = self.shift()
+        self.assertEqual((s["status"], s["ended_at"]), ("closed", self.at(18)))
+
+    def test_app_wifi_loss_during_outage_is_not_a_break(self):
+        app = {"User-Agent": "Mozilla/5.0 (Linux; Android 14) CrewHubApp/2.3 CrewHubDevice/ivanphone001"}
+        self.tick(10)
+        self.login("ivan")
+        self.client.post("/api/clock/start", json={}, headers={"X-Forwarded-For": WORK_IP, **app})
+        self.tick(10, 50)
+        self.client.post("/api/clock/auto", json={}, headers={"X-Forwarded-For": WORK_IP, **app})
+        self.alive(10, 59)           # застосунок у сні пінгував о 10:50; о 11:00 зникло світло
+        self.tick(12)
+        self.sweep()
+        self.tick(12, 3)             # роутер піднявся, застосунок каже: «Wi-Fi зник об 11:00»
+        r = self.client.post("/api/clock/auto", json={"away_since": self.at(11)}, headers={"X-Forwarded-For": WORK_IP, **app})
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(self.sql("select count(*) from breaks")[0][0], 0)
+        self.assertEqual(self.worked(), 2 * 3600 + 3 * 60)
+
+    def test_arrived_while_there_was_no_power(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '1' where key = 'auto_start'")
+            c.commit()
+        self.alive(8)                # світла немає з 08:00 до 09:40, робочий час з 09:00
+        self.tick(9, 40)
+        self.sweep()
+        self.tick(9, 44)
+        self.login("ivan")
+        res = self.clock("auto")     # телефон Івана в Wi-Fi одразу після появи світла
+        self.assertTrue(res["shift"], res)
+        self.assertEqual(self.shift()["started_at"], self.at(9))
+        self.assertIn("час без світла зараховано", self.shift()["note"])
+
+    def test_late_after_power_returned_is_not_credited(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '1' where key = 'auto_start'")
+            c.commit()
+        self.alive(8)
+        self.tick(9, 40)
+        self.sweep()
+        self.tick(10, 10)            # прийшов через пів години після появи світла
+        self.login("ivan")
+        self.clock("auto")
+        self.assertEqual(self.shift()["started_at"], self.at(10, 10))
+
+    def test_credit_off_pauses_from_outage_start(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '0' where key = 'outage_credit'")
+            c.commit()
+        self.tick(10)
+        self.login("ivan")
+        self.clock("start")
+        self.alive(11)
+        self.tick(12)
+        self.sweep()
+        self.assertEqual(self.shift()["status"], "paused")
+        self.assertEqual(self.sql("select started_at, reason from breaks")[0][0], self.at(11))
+        self.wait_until(12, 25)      # з початку відключення минуло понад 30 хв, але рахуємо від появи світла — не закрито
+        self.assertEqual(self.shift()["status"], "paused")
+        self.clock("heartbeat")
+        self.assertEqual(self.worked(), 3600)  # 10:00–11:00, далі неоплачувана пауза до 12:25
+
+
 if __name__ == "__main__":
     unittest.main()

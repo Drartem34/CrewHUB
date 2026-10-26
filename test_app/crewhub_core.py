@@ -130,6 +130,7 @@ DEFAULT_SETTINGS = {
     "lan_presence": "1",             # зміна йде, поки телефон у робочому Wi-Fi, навіть якщо браузер заснув (за MAC)
     "battery_dead_pct": "5",         # телефон замовк із зарядом ≤ стільки % і не на зарядці — вважаємо, що розрядився
     "battery_keep_minutes": "240",   # розряджений телефон: зміна рахується до кінця робочого часу, але не довше (0 — вимкнено)
+    "outage_credit": "1",            # сервер не працював (немає світла): зміни тривають, цей час зараховується
 }
 
 # Правила для кожного налаштування: (тип, межі, назва для повідомлень). Неприпустиме значення не зберігається,
@@ -173,6 +174,7 @@ SETTING_RULES = {
     "lan_presence": ("bool", "Бачити телефон у Wi-Fi без застосунку"),
     "battery_dead_pct": ("int", 0, 50, "Телефон розрядився, якщо заряд не більше, %"),
     "battery_keep_minutes": ("int", 0, 1440, "Розряджений телефон: зміна рахується ще"),
+    "outage_credit": ("bool", "Зараховувати час, коли сервер не працював (немає світла)"),
 }
 
 
@@ -241,7 +243,8 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "server_downtime": "Сервер не працював", "auto_start": "Зміна почалась автоматично",
           "auto_close": "Зміна закрилась автоматично", "login_other_device": "Вхід у чужий акаунт",
           "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна з чужого телефона",
-          "device_recognised": "Свій телефон упізнано", "battery_dead": "Телефон розрядився"}
+          "device_recognised": "Свій телефон упізнано", "battery_dead": "Телефон розрядився",
+          "outage_credit": "Сервер не працював: час зараховано"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні»
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device")
 
@@ -299,6 +302,8 @@ create table if not exists avatars (user_id integer primary key references users
 -- фоновий потік profiles.py переписує її папку (пінги last_seen_at не рахуються)
 create table if not exists dirty_users (user_id integer primary key);
 -- Усі пристрої в мережі сервера (і незареєстровані): заповнює lan.py. Ключ — MAC
+-- Коли сервер не працював (вимкнули світло, перезапуск, сон комп'ютера): з точністю до 15 с (alive_at)
+create table if not exists outages (id integer primary key, started_at integer not null, ended_at integer not null);
 create table if not exists lan_devices (mac text primary key, ip text not null, name text, model text, vendor text,
   user_id integer references users(id) on delete set null, first_seen integer not null, last_seen integer not null);
 create trigger if not exists dirty_users_ins after insert on users begin insert or ignore into dirty_users values (new.id); end;
@@ -1564,10 +1569,19 @@ def try_auto_start(conn, user, loc, ip, device, t):
     seen = _early_seen.pop(user["id"], 0)
     grace = max(setting_int("wifi_grace_minutes", conn) * 60, 180)
     began = start if seen >= start - early and t - start <= grace else t
+    note = "Автостарт по Wi-Fi"
+    if began == t and setting("outage_credit", conn) == "1":
+        # Світло з'явилось щойно, а робочий час почався, поки його не було: людина могла прийти раніше, але
+        # ні роутер, ні сервер не працювали — відлік з початку робочого часу (або з початку відключення)
+        o = conn.execute("select started_at, ended_at from outages where ended_at >= ? and ended_at > ?"
+                         " order by ended_at desc limit 1", (t - OUTAGE_GRACE, start)).fetchone()
+        if o and max(start, o["started_at"]) < t:
+            began = max(start, o["started_at"])
+            note += " · час без світла зараховано"
     try:
         cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device, note)"
                            " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (user["id"], loc["id"], began, user["hourly_rate"], t, ip, ip, device, "Автостарт по Wi-Fi"))
+                           (user["id"], loc["id"], began, user["hourly_rate"], t, ip, ip, device, note))
     except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
         return None
     log_clock(conn, user["id"], cur.lastrowid, "auto_start", ip, loc["id"], True, device)
@@ -1587,6 +1601,9 @@ def _away(conn, shift, t, extra):
         return None
     if not since or since > t or since < shift["started_at"]:
         return None
+    if setting("outage_credit", conn) == "1" and conn.execute(
+            "select 1 from outages where ? between started_at - 120 and ended_at", (since,)).fetchone():
+        return None  # Wi-Fi зник, бо зникло світло (роутер згас разом із сервером), — людина нікуди не йшла
     return since
 
 
@@ -1759,6 +1776,47 @@ def sleepy_shift(shift):
     return (shift["device"] or "").startswith("app-")
 
 
+OUTAGE_GRACE = 600  # с після відновлення світла: поки завантажиться роутер і телефони знову підключаться
+
+
+def restore_after_outage(conn, start, end):
+    """Сервер не працював з start до end (вимкнули світло, перезапуск, сон комп'ютера) — це знаємо з alive_at,
+    який фонова перевірка пише кожні 15 с. Телефони весь цей час не могли пінгувати, тож людей не караємо.
+    outage_credit = 1 (типово): зміни, що йшли до відключення, тривають, а час без світла зараховується —
+    до відновлення, але не далі кінця робочого часу (якщо він скінчився, поки світла не було). Потім сервер
+    чекає OUTAGE_GRACE, поки телефони знову в Wi-Fi; хто не озвався — пауза з моменту відновлення.
+    outage_credit = 0: пауза з початку відключення (неоплачувана). Повертає кількість змін."""
+    conn.execute("insert into outages(started_at, ended_at) values (?, ?)", (start, end))
+    meta_set(conn, "outage_end", end)
+    credit = setting("outage_credit", conn) == "1"
+    # Активна зміна = фонова перевірка вважала телефон на зв'язку (застосунок у сні пінгує раз на 5–15 хв)
+    quiet = max(setting_int("sleep_grace_minutes", conn), setting_int("wifi_grace_minutes", conn)) * 60
+    rows = conn.execute("select s.*, u.full_name from shifts s join users u on u.id = s.user_id where s.status = 'active'"
+                        " and s.power_lost_at is null and s.last_seen_at >= ?", (start - quiet,)).fetchall()
+    hm = lambda x: f"{datetime.fromtimestamp(x):%H:%M}"  # noqa: E731
+    span = f"{hm(start)}–{hm(end)} ({fmt_dur(end - start)})"
+    for s in rows:
+        if not credit:
+            start_wifi_pause(conn, s, max(s["last_seen_at"], start), "outage", log=False)
+            log_clock(conn, s["user_id"], s["id"], "wifi_lost", None, s["location_id"], False, None, {"reason": "outage", "since": start})
+            continue
+        until = end
+        w = work_window(conn, s["user_id"], s["started_at"])
+        if w and w[1] < end:
+            until = max(w[1], s["last_seen_at"])  # робочий час скінчився, поки не було світла
+        conn.execute("update shifts set last_seen_at = ? where id = ?", (until, s["id"]))
+        log_clock(conn, s["user_id"], s["id"], "outage_credit", None, s["location_id"], True, None,
+                  {"from": max(start, s["last_seen_at"]), "to": until})
+        notify(conn, s["user_id"], "Сервер не працював " + span,
+               "Зміну продовжено, цей час зараховано" if until == end else f"Зміну зараховано до кінця робочого часу ({hm(until)})")
+    log_clock(conn, None, None, "server_downtime", None, None, True, None,
+              {"from": start, "to": end, "seconds": end - start, "shifts": len(rows)})
+    if rows or end - start >= 300:
+        notify_staff(conn, "Сервер не працював", f"{span}. " + (
+            (f"Змін, що тривали: {len(rows)} — час зараховано" if credit else f"Змін на паузі: {len(rows)}") if rows else "Відкритих змін не було"))
+    return len(rows)
+
+
 # Сповіщати про втрату Wi-Fi лише якщо пауза триває стільки: короткі збої роутера чи перехід між точками
 # доступу не засипають людину й кожного модератора парою «втрачено / відновлено»
 WIFI_NOTIFY_AFTER = 180
@@ -1780,21 +1838,20 @@ def sweep(conn):
     grace = setting_int("wifi_grace_minutes", conn) * 60
     action = setting("wifi_loss_action", conn)
     changed = 0
-    # Якщо сервер не працював (перезапуск, збій, сон комп'ютера), телефони не могли пінгувати.
-    # Не карає людей паузою: хто був на зв'язку до простою, отримує новий відлік з цієї миті.
+    # Якщо сервер не працював (немає світла, перезапуск, сон комп'ютера), телефони не могли пінгувати.
     alive = int(meta_get(conn, "alive_at", 0))
     if alive and t - alive > grace:
-        n = conn.execute("update shifts set last_seen_at = ? where status = 'active' and last_seen_at >= ?",
-                         (t, alive - grace)).rowcount
-        if n:
-            log_clock(conn, None, None, "server_downtime", None, None, True, None, {"seconds": t - alive, "shifts": n})
+        restore_after_outage(conn, alive, t)
     meta_set(conn, "alive_at", t)
+    outage_end = int(meta_get(conn, "outage_end", 0))
     sleep = max(setting_int("sleep_grace_minutes", conn) * 60, grace)
     pause_limit = setting_int("wifi_pause_close_minutes", conn) * 60
     after_end = setting_int("auto_close_minutes", conn) * 60
     keep = setting("offline_keeps_counting", conn) == "1"
     for s in conn.execute("select s.*, u.full_name from shifts s join users u on u.id = s.user_id"
                           " where s.status = 'active' and s.last_seen_at < ?", (t - grace,)).fetchall():
+        if outage_end and t - outage_end < OUTAGE_GRACE and s["last_seen_at"] >= outage_end:
+            continue  # світло щойно з'явилось: роутер вантажиться, телефони ще не в Wi-Fi — чекаємо
         if sleepy_shift(s) and s["last_seen_at"] >= t - sleep:
             # застосунок: телефон міг просто заснути, у сні Android будить службу раз на 5–15 хв.
             # Вихід з Wi-Fi служба повідомляє сама (away_since), тож тут чекаємо лише на випадок, що телефон вимкнули
@@ -1861,7 +1918,10 @@ def sweep(conn):
         ended = w is not None and b["started_at"] >= w[1] - 15 * 60
         # Телефон лише замовк (міг заснути) — чекаємо довше: озветься з точки, і час зарахується
         limit = after_end if ended else (max(pause_limit, forgive) if b["reason"] == "silence" and sleepy_shift(b) else pause_limit)
-        if t - b["started_at"] < limit:
+        # Пауза через відключення світла: чекаємо від появи світла, а не від початку відключення —
+        # інакше довге відключення одразу закрило б зміну людині, яка нікуди не йшла
+        since = max(b["started_at"], outage_end) if b["reason"] == "outage" else b["started_at"]
+        if t - since < limit:
             continue
         changed += 1
         conn.execute("delete from breaks where id = ?", (b["id"],))
@@ -2705,7 +2765,8 @@ LOG_WORDS = {"reason": "причина", "not_on_work_network": "не з роб�
              "since": "з", "away_since": "вийшов о", "back": "повернувся о", "ended_at": "кінець",
              "ended_at_last_seen": "кінець за останнім пінгом", "slept_seconds": "спав, с", "seconds": "секунд",
              "shifts": "змін", "pause": "пауза", "close": "закрито", "silence": "тиша", "left": "вийшов з Wi-Fi",
-             "break_end": "завершити перерву", "offline_keeps_counting": "рахувати без зв'язку"}
+             "break_end": "завершити перерву", "offline_keeps_counting": "рахувати без зв'язку",
+             "from": "з", "to": "до", "outage": "сервер не працював", "battery_dead": "телефон розрядився"}
 
 
 @app.template_filter("logdetails")
@@ -4472,7 +4533,7 @@ def admin_zones():
 
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
-                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence")
+                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence", "outage_credit")
 
 
 @app.post("/admin/backup_mirror")

@@ -440,6 +440,7 @@
       <div><label>Інтервал пінгу, сек</label><input name="heartbeat_seconds" type="number" min="5" value="{{ settings.heartbeat_seconds }}"></div>
     </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" name="offline_keeps_counting" {{ 'checked' if settings.offline_keeps_counting == '1' }}><span><b>Зміна рахується далі, якщо зв'язок втрачено.</b> Без паузи: зміна йде до кінця робочого часу і закривається сама. Вихід з Wi-Fi тоді теж не зупиняє лічильник</span></label>
+    <label class="check" style="margin-top:10px"><input type="checkbox" name="outage_credit" {{ 'checked' if settings.outage_credit == '1' }}><span><b>Зараховувати час, коли сервер не працював (немає світла).</b> Зміни, що йшли до відключення, тривають, а час без світла зараховується — до відновлення, але не далі кінця робочого часу. Хто прийшов, поки світла не було, і з'явився в Wi-Fi одразу після, — з початку робочого часу. Вимкнено — пауза з початку відключення</span></label>
   </div>
   <div class="card">
     <div class="card-head"><h3>{{ icon('calendar') }} Дей-оффи</h3></div>
