@@ -1,25 +1,27 @@
 # Хронологія версій CrewHub
 
-Усі версії від найстаріших до найновіших. Кожна версія — **тег** у git: на GitHub її можна відкрити як папку
-(посилання «код») або завантажити архівом (посилання «zip» — GitHub збирає його сам з тегу).
+Усі версії від найстаріших до найновіших. Кожна версія — коміт у git: на GitHub її можна відкрити як папку
+(посилання «код» — уся програма саме такою, якою була в цій версії) або завантажити архівом (посилання «zip» —
+GitHub збирає його сам). Локально кожна версія ще й позначена тегом (`git checkout v17.3`); на GitHub теги не
+відправились — сесії дозволено пушити лише свою гілку (з власного комп'ютера: `git push origin --tags`).
 Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_9_full.zip`),
-звірено з git файл у файл: кожен архів — рівно цей тег (у «повних» архівах ще лежала копія історії `.git` і зібрані
+звірено з git файл у файл: кожен архів — рівно цей коміт (у «повних» архівах ще лежала копія історії `.git` і зібрані
 APK). APK усіх версій — у [`releases/`](../releases/README.md). Що змінювалось докладно — [CHANGELOG.md](CHANGELOG.md).
 
 | Версія | Дата | Застосунок | Архів | Коротко | Код |
 |---|---|---|---|---|---|
-| **v15** | 2026-10-24 | 1.9 | — (вихідний архів, з якого почався репозиторій) | Вихідний стан: Flask + SQLite, Wi-Fi-контроль, табель, зарплата, графік, дей-оффи, тімліди, QR-підключення застосунку. | [код](https://github.com/Drartem34/CrewHUB/tree/v15) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v15.zip) |
-| **v16** | 2026-10-24 | 1.9 | CrewHub_v16.zip, CrewHub_full.zip | Безпека й надійність («Nokia 3310»): підробка IP, гроші, доступи, ліміти входу, стійкість, швидкість, батарея Android. | [код](https://github.com/Drartem34/CrewHUB/tree/v16) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v16.zip) |
-| **v17.0** | 2026-10-25 | 2.0 | CrewHub_v17_full.zip | Папка даних і settings.ini окремо від програми, «Пристрої в мережі», повна документація docs/, Android 2.0 і демо-застосунок, вхід у чужий акаунт позначається. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.0) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.0.zip) |
-| **v17.1** | 2026-10-26 | 2.1 | CrewHub_v17_1_full.zip | Відбиток пристрою і MAC; застосунок входить сам після зміни IP сервера; Windows: arp -a не падає на кирилиці. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.1) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.1.zip) |
-| **v17.2** | 2026-10-26 | 2.2 | CrewHub_v17_2_full.zip | Застосунок попереджає, що телефон вийшов з робочого Wi-Fi; зміна в браузері не засинає — сервер бачить телефон за MAC. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.2) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.2.zip) |
-| **v17.3** | 2026-10-26 | 2.3 | CrewHub_v17_3_full.zip | Зміна починається й закінчується за телефоном у мережі без застосунку; розряджений телефон не закриває зміну. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.3) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.3.zip) |
-| **v17.4** | 2026-10-26 | 2.3 | CrewHub_v17_4_full.zip | Відключення світла: сервер рахує простій і зараховує людям час. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.4) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.4.zip) |
-| **v17.5** | 2026-10-26 | 2.3 | CrewHub_v17_5_full.zip | Перевірка «що працювало — не зламалось» (тести всіх версій), відновлена повна документація, «чужий телефон» знову як у v17, плашка дей-оффу лише з дозволу, карта коду. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.5) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.5.zip) |
-| **v17.6** | 2026-10-26 | 2.3 | CrewHub_v17_6_full.zip | «Ви в чужому акаунті», з якого пристрою розпочато зміну, за бажанням — заборона зміни чи входу. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.6) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.6.zip) |
-| **v17.7** | 2026-10-26 | 2.3 | CrewHub_v17_7_full.zip | Червона плашка «Чужий акаунт на зміні», «Перезаписати код пристрою», чужий телефон не стає «своїм». | [код](https://github.com/Drartem34/CrewHUB/tree/v17.7) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.7.zip) |
-| **v17.8** | 2026-10-26 | 2.3 | CrewHub_v17_8_full.zip | Новий IP після DHCP не «сліпить» автостарт, iPhone у кишені — без фантомних пауз. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.8) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.8.zip) |
-| **v17.9** | 2026-10-26 | 2.3 | CrewHub_v17_9_full.zip | М'який облік (перевірки у випадковий момент), HTTPS у локальній мережі через Caddy. | [код](https://github.com/Drartem34/CrewHUB/tree/v17.9) · [zip](https://github.com/Drartem34/CrewHUB/archive/refs/tags/v17.9.zip) |
+| **v15** | 2026-10-24 | 1.9 | — (вихідний архів, з якого почався репозиторій) | Вихідний стан: Flask + SQLite, Wi-Fi-контроль, табель, зарплата, графік, дей-оффи, тімліди, QR-підключення застосунку. | [код](https://github.com/Drartem34/CrewHUB/tree/3fd86518c90043067ac39001d80af95375bc1359) · [zip](https://github.com/Drartem34/CrewHUB/archive/3fd86518c90043067ac39001d80af95375bc1359.zip) |
+| **v16** | 2026-10-24 | 1.9 | CrewHub_v16.zip, CrewHub_full.zip | Безпека й надійність («Nokia 3310»): підробка IP, гроші, доступи, ліміти входу, стійкість, швидкість, батарея Android. | [код](https://github.com/Drartem34/CrewHUB/tree/5ae15da580318687bb50b20e8b0f0689b70b326a) · [zip](https://github.com/Drartem34/CrewHUB/archive/5ae15da580318687bb50b20e8b0f0689b70b326a.zip) |
+| **v17.0** | 2026-10-25 | 2.0 | CrewHub_v17_full.zip | Папка даних і settings.ini окремо від програми, «Пристрої в мережі», повна документація docs/, Android 2.0 і демо-застосунок, вхід у чужий акаунт позначається. | [код](https://github.com/Drartem34/CrewHUB/tree/0ebd1554384da15b6eace3b54fb7f5a5a3edc698) · [zip](https://github.com/Drartem34/CrewHUB/archive/0ebd1554384da15b6eace3b54fb7f5a5a3edc698.zip) |
+| **v17.1** | 2026-10-26 | 2.1 | CrewHub_v17_1_full.zip | Відбиток пристрою і MAC; застосунок входить сам після зміни IP сервера; Windows: arp -a не падає на кирилиці. | [код](https://github.com/Drartem34/CrewHUB/tree/248ae552950c0a52e6da70f5be3b4dbe5f85263a) · [zip](https://github.com/Drartem34/CrewHUB/archive/248ae552950c0a52e6da70f5be3b4dbe5f85263a.zip) |
+| **v17.2** | 2026-10-26 | 2.2 | CrewHub_v17_2_full.zip | Застосунок попереджає, що телефон вийшов з робочого Wi-Fi; зміна в браузері не засинає — сервер бачить телефон за MAC. | [код](https://github.com/Drartem34/CrewHUB/tree/da5b3bcb6123e2b0ea52c944f662bc50aa436035) · [zip](https://github.com/Drartem34/CrewHUB/archive/da5b3bcb6123e2b0ea52c944f662bc50aa436035.zip) |
+| **v17.3** | 2026-10-26 | 2.3 | CrewHub_v17_3_full.zip | Зміна починається й закінчується за телефоном у мережі без застосунку; розряджений телефон не закриває зміну. | [код](https://github.com/Drartem34/CrewHUB/tree/6d8bede45ae68d19d9c7736aa6836eb1fc34a80d) · [zip](https://github.com/Drartem34/CrewHUB/archive/6d8bede45ae68d19d9c7736aa6836eb1fc34a80d.zip) |
+| **v17.4** | 2026-10-26 | 2.3 | CrewHub_v17_4_full.zip | Відключення світла: сервер рахує простій і зараховує людям час. | [код](https://github.com/Drartem34/CrewHUB/tree/c467fcb8fb0bfc277596b18a4a7879f79d253645) · [zip](https://github.com/Drartem34/CrewHUB/archive/c467fcb8fb0bfc277596b18a4a7879f79d253645.zip) |
+| **v17.5** | 2026-10-26 | 2.3 | CrewHub_v17_5_full.zip | Перевірка «що працювало — не зламалось» (тести всіх версій), відновлена повна документація, «чужий телефон» знову як у v17, плашка дей-оффу лише з дозволу, карта коду. | [код](https://github.com/Drartem34/CrewHUB/tree/296f6cad8ddabf5eba1a733acbc4c23f9c92c419) · [zip](https://github.com/Drartem34/CrewHUB/archive/296f6cad8ddabf5eba1a733acbc4c23f9c92c419.zip) |
+| **v17.6** | 2026-10-26 | 2.3 | CrewHub_v17_6_full.zip | «Ви в чужому акаунті», з якого пристрою розпочато зміну, за бажанням — заборона зміни чи входу. | [код](https://github.com/Drartem34/CrewHUB/tree/9b9fbce63b32021ea776e7ee1a787823057270c3) · [zip](https://github.com/Drartem34/CrewHUB/archive/9b9fbce63b32021ea776e7ee1a787823057270c3.zip) |
+| **v17.7** | 2026-10-26 | 2.3 | CrewHub_v17_7_full.zip | Червона плашка «Чужий акаунт на зміні», «Перезаписати код пристрою», чужий телефон не стає «своїм». | [код](https://github.com/Drartem34/CrewHUB/tree/ae84d034fa7fef31ee73fe5abc7d933207e934ff) · [zip](https://github.com/Drartem34/CrewHUB/archive/ae84d034fa7fef31ee73fe5abc7d933207e934ff.zip) |
+| **v17.8** | 2026-10-26 | 2.3 | CrewHub_v17_8_full.zip | Новий IP після DHCP не «сліпить» автостарт, iPhone у кишені — без фантомних пауз. | [код](https://github.com/Drartem34/CrewHUB/tree/187a2f49042106223b8ad7cb53de2f5d40cfc7df) · [zip](https://github.com/Drartem34/CrewHUB/archive/187a2f49042106223b8ad7cb53de2f5d40cfc7df.zip) |
+| **v17.9** | 2026-10-26 | 2.3 | CrewHub_v17_9_full.zip | М'який облік (перевірки у випадковий момент), HTTPS у локальній мережі через Caddy. | [код](https://github.com/Drartem34/CrewHUB/tree/d6c115c4c9213e120d5298ce45aa9e9e71b1f5a4) · [zip](https://github.com/Drartem34/CrewHUB/archive/d6c115c4c9213e120d5298ce45aa9e9e71b1f5a4.zip) |
 
 Застосунок — версія Android-застосунку в цій версії (`android/AndroidManifest.xml`). Ключ підпису в git
 не потрапляв ніколи (`android/crewhub.keystore` і `android/keystore.pass` — у `.gitignore`).
@@ -28,13 +30,13 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 
 ### v15 — Вихідний стан: Flask + SQLite, Wi-Fi-контроль, табель, зарплата, графік, дей-оффи, тімліди, QR-підключення застосунку.
 
-Тег `v15` → коміт [`3fd8651`](https://github.com/Drartem34/CrewHUB/commit/3fd8651) · архів: — (вихідний архів, з якого почався репозиторій) · застосунок 1.9
+Коміт [`3fd8651`](https://github.com/Drartem34/CrewHUB/commit/3fd8651) (локальний тег `v15`) · [код](https://github.com/Drartem34/CrewHUB/tree/3fd86518c90043067ac39001d80af95375bc1359) · архів: — (вихідний архів, з якого почався репозиторій) · застосунок 1.9
 
 - `3fd8651` 2026-10-24 — Імпорт CrewHub з архіву (вихідний стан)
 
 ### v16 — Безпека й надійність («Nokia 3310»): підробка IP, гроші, доступи, ліміти входу, стійкість, швидкість, батарея Android.
 
-Тег `v16` → коміт [`5ae15da`](https://github.com/Drartem34/CrewHUB/commit/5ae15da) · архів: CrewHub_v16.zip, CrewHub_full.zip · застосунок 1.9
+Коміт [`5ae15da`](https://github.com/Drartem34/CrewHUB/commit/5ae15da) (локальний тег `v16`) · [код](https://github.com/Drartem34/CrewHUB/tree/5ae15da580318687bb50b20e8b0f0689b70b326a) · архів: CrewHub_v16.zip, CrewHub_full.zip · застосунок 1.9
 
 - `d18075a` 2026-10-24 — Безпека: IP клієнта не можна підробити через X-Forwarded-For
 - `4d8e865` 2026-10-24 — Тести: перевірка завантаження APK не залежить від наявності файлу
@@ -74,7 +76,7 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 
 ### v17.0 — Папка даних і settings.ini окремо від програми, «Пристрої в мережі», повна документація docs/, Android 2.0 і демо-застосунок, вхід у чужий акаунт позначається.
 
-Тег `v17.0` → коміт [`0ebd155`](https://github.com/Drartem34/CrewHUB/commit/0ebd155) · архів: CrewHub_v17_full.zip · застосунок 2.0
+Коміт [`0ebd155`](https://github.com/Drartem34/CrewHUB/commit/0ebd155) (локальний тег `v17.0`) · [код](https://github.com/Drartem34/CrewHUB/tree/0ebd1554384da15b6eace3b54fb7f5a5a3edc698) · архів: CrewHub_v17_full.zip · застосунок 2.0
 
 - `3a812f0` 2026-10-24 — Дані й налаштування окремо від програми: папка даних і settings.ini
 - `9a2f411` 2026-10-24 — Пристрої в мережі в «Огляді»; широкі таблиці на телефоні видно, що гортаються
@@ -87,61 +89,61 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 
 ### v17.1 — Відбиток пристрою і MAC; застосунок входить сам після зміни IP сервера; Windows: arp -a не падає на кирилиці.
 
-Тег `v17.1` → коміт [`248ae55`](https://github.com/Drartem34/CrewHUB/commit/248ae55) · архів: CrewHub_v17_1_full.zip · застосунок 2.1
+Коміт [`248ae55`](https://github.com/Drartem34/CrewHUB/commit/248ae55) (локальний тег `v17.1`) · [код](https://github.com/Drartem34/CrewHUB/tree/248ae552950c0a52e6da70f5be3b4dbe5f85263a) · архів: CrewHub_v17_1_full.zip · застосунок 2.1
 
 - `a45c67e` 2026-10-25 — Відбиток пристрою і MAC; застосунок входить сам після зміни IP сервера
 - `248ae55` 2026-10-26 — Windows: таблиця сусідів (arp -a) не падає на кириличному виводі
 
 ### v17.2 — Застосунок попереджає, що телефон вийшов з робочого Wi-Fi; зміна в браузері не засинає — сервер бачить телефон за MAC.
 
-Тег `v17.2` → коміт [`da5b3bc`](https://github.com/Drartem34/CrewHUB/commit/da5b3bc) · архів: CrewHub_v17_2_full.zip · застосунок 2.2
+Коміт [`da5b3bc`](https://github.com/Drartem34/CrewHUB/commit/da5b3bc) (локальний тег `v17.2`) · [код](https://github.com/Drartem34/CrewHUB/tree/da5b3bcb6123e2b0ea52c944f662bc50aa436035) · архів: CrewHub_v17_2_full.zip · застосунок 2.2
 
 - `5d17b0a` 2026-10-26 — Застосунок 2.2: попередження, що телефон відключився від робочого Wi-Fi
 - `da5b3bc` 2026-10-26 — Зміна в браузері не засинає: сервер сам бачить телефон у Wi-Fi
 
 ### v17.3 — Зміна починається й закінчується за телефоном у мережі без застосунку; розряджений телефон не закриває зміну.
 
-Тег `v17.3` → коміт [`6d8bede`](https://github.com/Drartem34/CrewHUB/commit/6d8bede) · архів: CrewHub_v17_3_full.zip · застосунок 2.3
+Коміт [`6d8bede`](https://github.com/Drartem34/CrewHUB/commit/6d8bede) (локальний тег `v17.3`) · [код](https://github.com/Drartem34/CrewHUB/tree/6d8bede45ae68d19d9c7736aa6836eb1fc34a80d) · архів: CrewHub_v17_3_full.zip · застосунок 2.3
 
 - `6d8bede` 2026-10-26 — Зміна без застосунку за телефоном у мережі; розряджений телефон не закриває зміну
 
 ### v17.4 — Відключення світла: сервер рахує простій і зараховує людям час.
 
-Тег `v17.4` → коміт [`c467fcb`](https://github.com/Drartem34/CrewHUB/commit/c467fcb) · архів: CrewHub_v17_4_full.zip · застосунок 2.3
+Коміт [`c467fcb`](https://github.com/Drartem34/CrewHUB/commit/c467fcb) (локальний тег `v17.4`) · [код](https://github.com/Drartem34/CrewHUB/tree/c467fcb8fb0bfc277596b18a4a7879f79d253645) · архів: CrewHub_v17_4_full.zip · застосунок 2.3
 
 - `c467fcb` 2026-10-26 — Відключення світла: сервер рахує простій і зараховує людям час
 
 ### v17.5 — Перевірка «що працювало — не зламалось» (тести всіх версій), відновлена повна документація, «чужий телефон» знову як у v17, плашка дей-оффу лише з дозволу, карта коду.
 
-Тег `v17.5` → коміт [`296f6ca`](https://github.com/Drartem34/CrewHUB/commit/296f6ca) · архів: CrewHub_v17_5_full.zip · застосунок 2.3
+Коміт [`296f6ca`](https://github.com/Drartem34/CrewHUB/commit/296f6ca) (локальний тег `v17.5`) · [код](https://github.com/Drartem34/CrewHUB/tree/296f6cad8ddabf5eba1a733acbc4c23f9c92c419) · архів: CrewHub_v17_5_full.zip · застосунок 2.3
 
 - `4730757` 2026-10-26 — Відновлено документацію й видалений файл; «чужий телефон» знову як у v17; плашка дей-оффу з дозволу
 - `296f6ca` 2026-10-26 — Карта коду: шапка з поточним комітом
 
 ### v17.6 — «Ви в чужому акаунті», з якого пристрою розпочато зміну, за бажанням — заборона зміни чи входу.
 
-Тег `v17.6` → коміт [`9b9fbce`](https://github.com/Drartem34/CrewHUB/commit/9b9fbce) · архів: CrewHub_v17_6_full.zip · застосунок 2.3
+Коміт [`9b9fbce`](https://github.com/Drartem34/CrewHUB/commit/9b9fbce) (локальний тег `v17.6`) · [код](https://github.com/Drartem34/CrewHUB/tree/9b9fbce63b32021ea776e7ee1a787823057270c3) · архів: CrewHub_v17_6_full.zip · застосунок 2.3
 
 - `9b9fbce` 2026-10-26 — 17.6: «Ви в чужому акаунті», з якого пристрою розпочато зміну, за бажанням — заборона
 
 ### v17.7 — Червона плашка «Чужий акаунт на зміні», «Перезаписати код пристрою», чужий телефон не стає «своїм».
 
-Тег `v17.7` → коміт [`ae84d03`](https://github.com/Drartem34/CrewHUB/commit/ae84d03) · архів: CrewHub_v17_7_full.zip · застосунок 2.3
+Коміт [`ae84d03`](https://github.com/Drartem34/CrewHUB/commit/ae84d03) (локальний тег `v17.7`) · [код](https://github.com/Drartem34/CrewHUB/tree/ae84d034fa7fef31ee73fe5abc7d933207e934ff) · архів: CrewHub_v17_7_full.zip · застосунок 2.3
 
 - `ae84d03` 2026-10-26 — 17.7: плашка «Чужий акаунт на зміні», «Перезаписати код пристрою», чужий телефон не стає «своїм»
 
 ### v17.8 — Новий IP після DHCP не «сліпить» автостарт, iPhone у кишені — без фантомних пауз.
 
-Тег `v17.8` → коміт [`187a2f4`](https://github.com/Drartem34/CrewHUB/commit/187a2f4) · архів: CrewHub_v17_8_full.zip · застосунок 2.3
+Коміт [`187a2f4`](https://github.com/Drartem34/CrewHUB/commit/187a2f4) (локальний тег `v17.8`) · [код](https://github.com/Drartem34/CrewHUB/tree/187a2f49042106223b8ad7cb53de2f5d40cfc7df) · архів: CrewHub_v17_8_full.zip · застосунок 2.3
 
 - `187a2f4` 2026-10-26 — 17.8: новий IP після DHCP не «сліпить» автостарт, iPhone у кишені — без фантомних пауз
 
 ### v17.9 — М'який облік (перевірки у випадковий момент), HTTPS у локальній мережі через Caddy.
 
-Тег `v17.9` → коміт [`d6c115c`](https://github.com/Drartem34/CrewHUB/commit/d6c115c) · архів: CrewHub_v17_9_full.zip · застосунок 2.3
+Коміт [`d6c115c`](https://github.com/Drartem34/CrewHUB/commit/d6c115c) (локальний тег `v17.9`) · [код](https://github.com/Drartem34/CrewHUB/tree/d6c115c4c9213e120d5298ce45aa9e9e71b1f5a4) · архів: CrewHub_v17_9_full.zip · застосунок 2.3
 
 - `d6c115c` 2026-10-26 — 17.9: м'який облік (перевірки у випадковий момент), HTTPS через Caddy
 
 ## Після 17.9
 
-Коміти після тегу `v17.9` — хронологія, `releases/` з APK усіх версій і подальші зміни.
+Коміти після `d6c115c` (v17.9) — ця хронологія, `releases/` з APK усіх версій і подальші зміни.
