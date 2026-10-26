@@ -127,6 +127,7 @@ DEFAULT_SETTINGS = {
     "dayoff_paid": "1",              # дей-офф оплачується як повний робочий день за ставкою людини
     "registration_open": "1",        # чи можна зареєструватися самому (акаунт чекає підтвердження)
     "lan_scan": "1",                 # шукати всі пристрої в мережі сервера (блок «Пристрої в мережі» в «Огляді»)
+    "lan_presence": "1",             # зміна йде, поки телефон у робочому Wi-Fi, навіть якщо браузер заснув (за MAC)
 }
 
 # Правила для кожного налаштування: (тип, межі, назва для повідомлень). Неприпустиме значення не зберігається,
@@ -167,6 +168,7 @@ SETTING_RULES = {
     "dayoff_paid": ("bool", "Оплачуваний дей-офф"),
     "registration_open": ("bool", "Відкрита реєстрація"),
     "lan_scan": ("bool", "Пошук пристроїв у мережі"),
+    "lan_presence": ("bool", "Бачити телефон у Wi-Fi, коли браузер спить"),
 }
 
 
@@ -547,6 +549,9 @@ def init_db(seed=True):
         conn.execute("alter table breaks add column reason text")
     if "notified" not in bcols:  # для wifi_loss: 1 — людині й модераторам уже повідомили (пауза не коротка)
         conn.execute("alter table breaks add column notified integer not null default 0")
+    if "mac" not in [r[1] for r in conn.execute("pragma table_info(shifts)")]:
+        # MAC телефона в робочому Wi-Fi (версія 17.2): за ним сервер бачить, що телефон на точці, коли браузер спить
+        conn.execute("alter table shifts add column mac text")
     if "bg_ok" not in [r[1] for r in conn.execute("pragma table_info(shifts)")]:
         # 1 = застосунок працює без обмежень батареї і пінгує щохвилини навіть у сні: тиша = справжня втрата Wi-Fi
         conn.execute("alter table shifts add column bg_ok integer not null default 0")
@@ -2024,7 +2029,7 @@ def list_backups():
 # /health і банер в адмінці показують, якщо котрийсь замовк чи падає (раніше помилка лише друкувалась у консоль).
 WORKERS = {}
 WORKER_NAMES = {"sweep": "Контроль Wi-Fi", "backup": "Автобекап", "people": "Особові папки", "config": "Файл settings.ini",
-                "lan": "Пристрої в мережі"}
+                "lan": "Пристрої в мережі", "presence": "Телефони в Wi-Fi"}
 
 
 def config_changed(conn):
@@ -2074,6 +2079,56 @@ def backup_step():
         with _people_lock:
             backup_db()
         maintenance()
+
+
+# Присутність без пінгу. Браузер на телефоні з вимкненим екраном засинає і не пінгує (так роблять усі браузери,
+# і PWA теж — сайт не може працювати у фоні). Але телефон лишається в Wi-Fi і відповідає на ARP. Тож сервер сам
+# перевіряє MAC телефона зміни в мережі точки: відповів — це те саме, що пінг з точки.
+PRESENCE_EVERY = 30   # с між перевірками
+PRESENCE_SILENT = 40  # с без пінгу, після яких зміну перевіряємо в мережі
+
+
+def presence_step():
+    import lan
+    with _lock:
+        conn = connect()
+        try:
+            if setting("lan_presence", conn) != "1":
+                return
+            # Відкриті зміни, що мовчать: активні або на паузі через Wi-Fi. Паузу зміни з застосунку не чіпаємо —
+            # застосунок сам знає, коли телефон вийшов з мережі, і поверне зміну точніше.
+            cands = [dict(s) for s in conn.execute(
+                "select s.* from shifts s where s.status != 'closed' and s.mac is not null and s.last_seen_ip is not null"
+                " and s.last_seen_at < ? and (s.status = 'active' or exists (select 1 from breaks b where b.shift_id = s.id"
+                " and b.ended_at is null and b.kind = 'wifi_loss'))", (now() - PRESENCE_SILENT,))
+                if not (s["status"] == "paused" and sleepy_shift(s))]
+        finally:
+            conn.close()
+    if not cands:
+        return
+    seen = lan.present(sorted({c["last_seen_ip"] for c in cands}))  # кілька секунд — поза _lock
+    where = {}
+    for ip, mac in seen.items():
+        where.setdefault(mac, ip)
+    with _lock:
+        conn = connect()
+        try:
+            for c in cands:
+                ip = c["last_seen_ip"] if seen.get(c["last_seen_ip"]) == c["mac"] else where.get(c["mac"])
+                if not ip or not ip_in_location(conn, ip, c["location_id"]):
+                    continue
+                s = conn.execute("select last_seen_at, status from shifts where id = ?", (c["id"],)).fetchone()
+                if not s or s["status"] == "closed" or s["last_seen_at"] > c["last_seen_at"]:
+                    continue  # тим часом зміну закрили або телефон пінганув сам
+                user = conn.execute("select * from users where id = ?", (c["user_id"],)).fetchone()
+                clock_action(conn, user, "heartbeat", ip, None, None, {"via": "lan"})
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def start_presence(interval=PRESENCE_EVERY):
+    run_worker("presence", interval, presence_step)
 
 
 def sweep_step():
@@ -2922,6 +2977,8 @@ def api_clock(action):
         key = device_key(body.get("device_id"))
         res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
         note_device(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
+        if mac and res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
+            conn.execute("update shifts set mac = ? where id = ? and mac is not ?", (mac, res["shift"]["id"], mac))
         conn.commit()
     return jsonify(res)
 
@@ -4324,7 +4381,7 @@ def admin_zones():
 
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
-                     "offline_keeps_counting", "dayoff_paid", "lan_scan")
+                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence")
 
 
 @app.post("/admin/backup_mirror")

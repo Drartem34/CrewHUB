@@ -133,6 +133,80 @@ def neighbours():
         return {}
 
 
+# ── Чи телефон зараз у мережі (присутність без пінгу) ─────────────────────
+# Таблиця ARP пам'ятає пристрій ще довго після того, як він пішов (запис «застарілий»), тож просто прочитати її
+# мало. Стукаємо в адресу (UDP) — система сама перепитує ARP, — і за кілька секунд беремо лише ті записи,
+# що відповіли. Wi-Fi-чип телефона відповідає на ARP навіть коли телефон спить з вимкненим екраном.
+PRESENCE_WAIT = 7  # с: Linux перепитує застарілий запис за 5 с (delay_first_probe_time) + ~1 с на відповідь
+
+
+def parse_ip_neigh(text):
+    """Linux `ip -4 neigh show` → {ip: (mac, стан)}: «192.168.1.23 dev wlan0 lladdr da:a1:.. REACHABLE»."""
+    out = {}
+    for line in text.splitlines():
+        f = line.split()
+        if "lladdr" in f and f.index("lladdr") + 1 < len(f):
+            mac = norm_mac(f[f.index("lladdr") + 1])
+            if mac and usable_mac(mac):
+                out[f[0]] = (mac, f[-1].upper())
+    return out
+
+
+def parse_net_neighbor(text):
+    """Windows PowerShell Get-NetNeighbor, рядки «IP MAC Стан» (стан — назва англійською, не перекладається)."""
+    out = {}
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) == 3 and IP_RE.fullmatch(f[0]):
+            mac = norm_mac(f[1])
+            if mac and usable_mac(mac):
+                out[f[0]] = (mac, f[2].upper())
+    return out
+
+
+def _run(cmd, timeout=5):
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=flags).stdout.decode("ascii", "replace")
+
+
+def neighbour_states():
+    """{ip: (mac, стан)} зі станами записів (REACHABLE — щойно відповів), або None, якщо система їх не дає."""
+    try:
+        if sys.platform.startswith("linux"):
+            return parse_ip_neigh(_run(["ip", "-4", "neigh", "show"], 3))
+        if os.name == "nt":
+            return parse_net_neighbor(_run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                            "Get-NetNeighbor -AddressFamily IPv4 | ForEach-Object "
+                                            "{ $_.IPAddress + ' ' + $_.LinkLayerAddress + ' ' + $_.State }"], 15))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def knock(ips):
+    """Порожній UDP-пакет на кожну адресу: система мусить перевірити ARP (застарілий запис — перепитати)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            for ip in ips:
+                try:
+                    s.sendto(b"", (ip, 9))  # порт 9 — «discard»: нікого не турбує
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def present(ips, wait=PRESENCE_WAIT):
+    """Які пристрої зараз справді в мережі: {ip: mac}. Стукаємо в ips, чекаємо, читаємо таблицю.
+    Де система дає стан запису (Linux, Windows), беремо лише REACHABLE — «щойно відповів»; інакше всю таблицю."""
+    knock(ips)
+    time.sleep(wait)
+    states = neighbour_states()
+    if states is None:
+        return neighbours()
+    return {ip: mac for ip, (mac, state) in states.items() if state == "REACHABLE"}
+
+
 # ── Імена: NetBIOS, mDNS, DNS роутера ─────────────────────────────────────
 def nbstat_query(tid):
     """Запит NetBIOS «Node Status» на ім'я «*»: Windows відповідає своєю назвою комп'ютера."""

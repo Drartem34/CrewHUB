@@ -20,7 +20,7 @@ test_app/
 │                      контроль Wi-Fi (sweep), зарплата, дей-оффи, бекапи, усі маршрути Flask
 ├── settings_file.py   settings.ini ⇄ база (правила, точки, мережі, порт)
 ├── profiles.py        особові папки people/ ⇄ база; CLI імпорту папок
-├── lan.py             «Пристрої в мережі»: ARP, NetBIOS, mDNS, DNS роутера, User-Agent, OUI
+├── lan.py             «Пристрої в мережі»: ARP, NetBIOS, mDNS, DNS роутера, User-Agent, OUI; present() — хто щойно відповів на ARP
 ├── start.py           запуск: перенесення даних, перевірка бази, фонові потоки, тунель, Waitress
 ├── tui.py             панель сервера в терміналі (rich)
 ├── recover_admin.py   скидання пароля адміна з консолі сервера
@@ -75,7 +75,7 @@ python -m unittest test_features.LanTest -v                       # окреми
 | `users` | люди: логін, хеш пароля, ПІБ, роль, посада, відділ, точка, телефон, контакти, ставка, статус, `folder`, `must_change_password` |
 | `devices` | телефони людей (`device_key`: `app-…` застосунок, `web-…` браузер), перший і останній IP, `mac`, `fingerprint` (відбиток зі сторінки) |
 | `remember_tokens` | «запам'ятати мене»: selector + хеш validator, термін, пристрій, `mac`, `fingerprint` |
-| `shifts` | зміни: початок, кінець, статус (`active`/`paused`/`closed`), причина закриття, ставка на момент старту, останній пінг і IP, пристрій, `is_edited`, `bg_ok` |
+| `shifts` | зміни: початок, кінець, статус (`active`/`paused`/`closed`), причина закриття, ставка на момент старту, останній пінг і IP, пристрій, `is_edited`, `bg_ok`, `mac` (телефон зміни в мережі точки) |
 | `breaks` | перерви: `lunch`/`rest`/`wifi_loss`, оплачувана, % ставки, причина (`left`/`silence`), `notified` |
 | `schedule` | графік: заплановані зміни |
 | `requests` | запити: тип, статус, дати, пропонований час, обмін, коментарі, `grant_until` |
@@ -98,6 +98,7 @@ python -m unittest test_features.LanTest -v                       # окреми
 | `people` (Особові папки) | 3 с | папки ⇄ база, відновлення зниклих папок |
 | `config` (settings.ini) | 10 с | файл ⇄ база |
 | `lan` (Пристрої в мережі) | 5 хв | сканування мережі (якщо `lan_scan = 1`) |
+| `presence` (Телефони в Wi-Fi) | 30 с | `presence_step`: змінам, що мовчать понад 40 с, — пінг від імені телефона, якщо його MAC щойно відповів у мережі точки (`lan_presence = 1`) |
 | `backup` (Автобекап) | 1 год | копія, якщо сьогоднішньої немає; обслуговування бази |
 
 Стан потоків — `WORKERS`, перевірка — `workers_problem()`: `/health` → 503 і банер для адміна, якщо потік

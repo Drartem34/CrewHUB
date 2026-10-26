@@ -615,5 +615,100 @@ class ForeignDeviceTest(CrewHubBase):
         self.assertEqual(core.log_details(None), "")
 
 
+class PresenceTest(CrewHubBase):
+    """Браузер на телефоні з вимкненим екраном не пінгує, але телефон у Wi-Fi: сервер бачить його MAC сам."""
+    MAC = "da:a1:19:00:00:01"
+    APP_UA = "Mozilla/5.0 (Linux; Android 14; wv) CrewHubApp/2.2 CrewHubDevice/ivanphone001"
+
+    def start(self, headers=None):
+        self.login("ivan")
+        with mock.patch.object(core, "client_mac", lambda ip, cached_only=False: self.MAC):
+            r = self.client.post("/api/clock/start", json={"device_id": "web-0aa11bb2"},
+                                 headers={"X-Forwarded-For": WORK_IP, **(headers or {})})
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(self.sql("select mac from shifts")[0][0], self.MAC)  # MAC з мережі точки запам'ятовано
+
+    def silent(self, sec):
+        with core.connect() as c:
+            c.execute("update shifts set last_seen_at = last_seen_at - ?", (sec,))
+            c.commit()
+
+    def step(self, seen):
+        with mock.patch("lan.present", return_value=seen) as p:
+            core.presence_step()
+        return p
+
+    def sweep(self):
+        with core.connect() as c:
+            n = core.sweep(c)
+            c.commit()
+        return n
+
+    def status(self):
+        return self.sql("select status from shifts")[0][0]
+
+    def test_sleeping_browser_phone_in_wifi_keeps_shift(self):
+        self.start()
+        self.silent(300)  # екран вимкнено 5 хв — браузер мовчить
+        p = self.step({WORK_IP: self.MAC})
+        p.assert_called_once_with([WORK_IP])
+        self.assertEqual(self.sweep(), 0)
+        self.assertEqual(self.status(), "active")
+        self.assertLess(core.now() - self.sql("select last_seen_at from shifts")[0][0], 5)
+
+    def test_phone_left_wifi_pauses_and_comes_back(self):
+        self.start()
+        self.silent(300)
+        self.step({})  # телефон не відповів — його немає в мережі
+        self.assertEqual(self.sweep(), 1)
+        self.assertEqual(self.status(), "paused")
+        self.step({WORK_IP: self.MAC})  # повернувся в Wi-Fi, сторінку не відкривав
+        self.assertEqual(self.status(), "active")
+        self.assertEqual(self.sql("select count(*) from breaks where kind = 'wifi_loss' and ended_at is not null")[0][0], 1)
+
+    def test_other_phone_or_other_network_does_not_count(self):
+        self.start()
+        self.silent(300)
+        self.step({WORK_IP: "02:00:00:00:00:99"})   # за цим IP тепер інший телефон
+        self.step({"192.168.50.7": self.MAC})       # той самий телефон, але не в мережі точки
+        self.assertEqual(self.sweep(), 1)
+        self.assertEqual(self.status(), "paused")
+
+    def test_nothing_to_check(self):
+        self.start()
+        self.step({}).assert_not_called()        # щойно пінгував — перевіряти нема чого
+        self.silent(300)
+        with core.connect() as c:
+            c.execute("insert or replace into settings(key, value) values ('lan_presence', '0')")
+            c.commit()
+        self.step({WORK_IP: self.MAC}).assert_not_called()  # вимкнено в «Правилах»
+
+    def test_app_pause_is_left_to_the_app(self):
+        self.start(headers={"User-Agent": self.APP_UA})
+        with core.connect() as c:
+            s = c.execute("select * from shifts").fetchone()
+            core.start_wifi_pause(c, s, core.now() - 120, "left")  # застосунок повідомив: телефон вийшов
+            c.commit()
+        self.step({WORK_IP: self.MAC}).assert_not_called()
+        self.assertEqual(self.status(), "paused")
+
+    def test_present_reads_only_fresh_entries(self):
+        lan = __import__("lan")
+        neigh = ("192.168.1.23 dev wlan0 lladdr da:a1:19:00:00:01 REACHABLE\n"
+                 "192.168.1.40 dev wlan0 lladdr 5e:66:77:88:99:00 STALE\n"
+                 "192.168.1.41 dev wlan0  FAILED\n")
+        self.assertEqual(lan.parse_ip_neigh(neigh)["192.168.1.40"], ("5e:66:77:88:99:00", "STALE"))
+        win = "192.168.1.23 DA-A1-19-00-00-01 Reachable\r\n192.168.1.40 5E-66-77-88-99-00 Stale\r\n192.168.1.41 00-00-00-00-00-00 Unreachable\r\n"
+        self.assertEqual(lan.parse_net_neighbor(win), {"192.168.1.23": ("da:a1:19:00:00:01", "REACHABLE"),
+                                                        "192.168.1.40": ("5e:66:77:88:99:00", "STALE")})
+        with mock.patch.object(lan, "knock") as knock, mock.patch.object(lan, "neighbour_states", return_value=lan.parse_ip_neigh(neigh)):
+            self.assertEqual(lan.present(["192.168.1.23", "192.168.1.40"], wait=0), {"192.168.1.23": "da:a1:19:00:00:01"})
+        knock.assert_called_once_with(["192.168.1.23", "192.168.1.40"])
+        # система не дає станів (macOS) — уся таблиця
+        with mock.patch.object(lan, "knock"), mock.patch.object(lan, "neighbour_states", return_value=None), \
+                mock.patch.object(lan, "neighbours", return_value={"192.168.1.40": "5e:66:77:88:99:00"}):
+            self.assertEqual(lan.present(["192.168.1.40"], wait=0), {"192.168.1.40": "5e:66:77:88:99:00"})
+
+
 if __name__ == "__main__":
     unittest.main()

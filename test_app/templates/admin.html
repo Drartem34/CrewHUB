@@ -452,6 +452,7 @@
     <div class="card-head"><h3>{{ icon('shield') }} Дисципліна і доступ</h3></div>
     <label class="check"><input type="checkbox" name="registration_open" {{ 'checked' if settings.registration_open == '1' }}>Дозволити самостійну реєстрацію (з підтвердженням)</label>
     <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_scan" {{ 'checked' if settings.lan_scan == '1' }}><span><b>Шукати всі пристрої в мережі сервера.</b> Раз на 5 хв: IP, назва, модель, чий телефон — блок унизу «Огляду»</span></label>
+    <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_presence" {{ 'checked' if settings.lan_presence == '1' }}><span><b>Бачити телефон у робочому Wi-Fi, коли браузер спить.</b> Зміна в браузері не стає на паузу, поки телефон людини в мережі точки (сервер перевіряє його MAC раз на пів хвилини). Застосунку не потрібно — він повідомляє сам</span></label>
     <div class="form-grid" style="margin-top:10px">
       <div><label>Спізнення після, хв</label><input name="late_threshold_minutes" type="number" min="0" value="{{ settings.late_threshold_minutes }}"></div>
       <div><label>Максимальна зміна, год</label><input name="max_shift_hours" type="number" min="1" value="{{ settings.max_shift_hours }}"></div>
