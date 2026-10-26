@@ -854,7 +854,12 @@ def client_mac(ip, cached_only=False):
     t = time.time()
     if not cached_only and (t - _mac_cache["at"] > 60 or (ip not in _mac_cache["table"] and t - _mac_cache["at"] > 5)):
         import lan
-        _mac_cache.update(at=t, table=lan.neighbours())
+        try:
+            table = lan.neighbours()
+        except Exception:  # noqa: BLE001 — MAC лише підказка: збій таблиці сусідів не може зламати вхід
+            log.exception("Не вдалося прочитати таблицю сусідів (ARP)")
+            table = {}
+        _mac_cache.update(at=t, table=table)
     return _mac_cache["table"].get(ip)
 
 

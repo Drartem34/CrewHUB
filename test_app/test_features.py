@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import time
 import unittest
@@ -223,6 +224,24 @@ class LanTest(CrewHubBase):
         self.assertEqual(self.lan.parse_arp_a(mac), {"192.168.1.7": "00:1e:c2:0a:0b:0c"})
         self.assertTrue(self.lan.private_mac("da:a1:19:00:00:01"))
         self.assertFalse(self.lan.private_mac("a4:2b:b0:11:22:33"))
+
+    def test_ukrainian_windows_arp_output(self):
+        # Українська Windows: заголовки кирилицею в кодуванні консолі (cp1125) — не UTF-8 і не cp1251; читання не має падати
+        out = ("\r\nІнтерфейс: 192.168.1.5 --- 0x7\r\n  Адреса в Інтернеті      Фізична адреса      Тип\r\n"
+               "  192.168.1.1           a4-2b-b0-11-22-33     динамічний\r\n  192.168.1.23          da-a1-19-00-00-01     динамічний\r\n"
+               "  Шлюз\r\n").encode("cp1125")
+        for strict in ("utf-8", "cp1251"):
+            with self.assertRaises(UnicodeDecodeError):
+                out.decode(strict)
+        done = subprocess.CompletedProcess(["arp", "-a"], 0, stdout=out, stderr=b"")
+        with mock.patch.object(self.lan.os.path, "exists", return_value=False), \
+                mock.patch.object(self.lan.subprocess, "run", return_value=done):
+            self.assertEqual(self.lan.neighbours(), {"192.168.1.1": "a4:2b:b0:11:22:33", "192.168.1.23": "da:a1:19:00:00:01"})
+        # навіть якщо таблиця сусідів зламалась зовсім, вхід працює: MAC просто невідомий
+        core._mac_cache.update(at=0.0, table={})
+        with mock.patch("lan.neighbours", side_effect=RuntimeError("arp зламався")):
+            self.assertIsNone(core.client_mac("192.168.1.23"))
+        core._mac_cache.update(at=0.0, table={})
 
     def test_windows_name_from_netbios(self):
         import struct

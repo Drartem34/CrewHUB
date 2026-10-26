@@ -125,8 +125,10 @@ def neighbours():
     try:
         cmd = ["arp", "-a"] if os.name == "nt" else ["arp", "-an"]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows: без чорного вікна консолі
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5, creationflags=flags).stdout
-        return parse_arp_a(out)
+        # Байти, а не text=True: на українській/російській Windows `arp -a` пише заголовки кирилицею в кодуванні
+        # консолі (cp1125, cp866), і суворе декодування (UTF-8 чи cp1251) падало. IP і MAC — ASCII, решту замінюємо.
+        out = subprocess.run(cmd, capture_output=True, timeout=5, creationflags=flags).stdout
+        return parse_arp_a(out.decode("ascii", errors="replace"))
     except (OSError, subprocess.SubprocessError):
         return {}
 
