@@ -1068,8 +1068,10 @@ def phone_check(conn, user, device, ip, extra, event):
     quiet = event in ("heartbeat", "auto_start")  # фонові пінги: у журнал раз на пів години
     if what[0] == "other":
         block = setting("foreign_phone_action", conn) != "flag"
-        flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac, quiet_repeats=quiet,
-                     extra={"зміна": "не дозволено"} if block else None)
+        # Що сталось зі зміною — у журнал, щоб записи «Зміна в чужому акаунті» не виглядали однаковими
+        how = "не дозволено" if block else {"start": "почато вручну", "auto_start": "сама не почалась — лише вручну",
+                                           "heartbeat": "зміну ведуть з цього телефона"}[event]
+        flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac, quiet_repeats=quiet, extra={"зміна": how})
         if block:
             return None, foreign_text(user, what[1]) + (". Зміну можна почати лише у своєму акаунті зі свого телефона. "
                                                          "Якщо свій телефон сів чи загубився — попросіть керівника додати зміну")
@@ -1127,7 +1129,7 @@ def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repe
                f"У ваш акаунт {what_text} з телефона {owner['full_name']} ({where}). Якщо це не ви — змініть пароль і скажіть керівнику")
         notify_staff(conn, "Підозріло: чужий телефон",  # заголовок — як у v17 (на нього спираються тести)
                      f"Чужий акаунт — {user['full_name']}: {what_text} з телефона {owner['full_name']} ({where})"
-                     + (" — зміну не дозволено" if (extra or {}).get("зміна") else ""))
+                     + (" — зміну не дозволено" if (extra or {}).get("зміна") == "не дозволено" else ""))
     else:
         what_text = "зміну почали" if event == "shift_new_device" else "увійшли"
         notify(conn, user["id"], "Вхід з нового пристрою",
@@ -1715,6 +1717,11 @@ def try_auto_start(conn, user, loc, ip, device, t):
     flag, refuse = phone_check(conn, user, device, ip, None, "auto_start")
     if refuse:
         return _why(user, ip, loc, t, "чужий акаунт: телефон іншої людини — зміна з нього не починається")
+    if flag and flag.startswith("other:"):
+        # Телефон іншої людини в мережі — ознака, що на роботі вона, а не власник цього акаунта: сама зміна з нього
+        # не починається і телефон не прив'язується до акаунта (інакше чужий телефон ставав би «своїм»).
+        # Вручну почати можна — з позначкою «чужий акаунт» (foreign_phone_action = flag)
+        return _why(user, ip, loc, t, "чужий акаунт: телефон іншої людини — сама зміна з нього не починається, лише вручну")
     if not device_allowed(conn, user["id"], device, ip):
         _why(user, ip, loc, t, "пінг з іншого телефона, ніж прив'язаний до людини (див. картку працівника)")
         if not conn.execute("select 1 from conn_log where user_id = ? and event = 'denied' and details like '%other_device%'"
@@ -3227,8 +3234,10 @@ def register():
                           {"registration": [None, f"{name} {format_phone(phone)}"], "ip": [None, client_ip()]})
                     # Телефон, з якого зареєструвались, стає телефоном людини: з нього вмикається автозміна
                     reg_key, reg_fp = device_key(form.get("device_id")), clean_fp(form.get("fp"))
-                    if not conn.execute("select 1 from devices where device_key = ?", (reg_key,)).fetchone():
-                        remember_device(conn, cur.lastrowid, reg_key, client_ip())  # прив'язаний телефон колеги — не прив'язуємо
+                    # Телефон колеги (прив'язаний до неї чи вона з нього заходила) — не прив'язуємо: новачку його лише позичили
+                    if not conn.execute("select 1 from devices where device_key = ?", (reg_key,)).fetchone() \
+                            and not device_owner(conn, reg_key, reg_fp, reg_mac, other_than=cur.lastrowid):
+                        remember_device(conn, cur.lastrowid, reg_key, client_ip())
                     note_usage(conn, cur.lastrowid, reg_key, reg_fp, reg_mac)
                     notify_staff(conn, "Нова реєстрація", f"{name}, {format_phone(phone)} чекає підтвердження")
                     conn.commit()
@@ -3541,6 +3550,48 @@ def admin_device_delete(uid, did):
         audit(conn, current_user()["id"], "DELETE", "devices", did, uid, {"device": [f"{d['name']} ({d['device_key']})", None]})
         conn.commit()
     flash("Телефон відв'язано")
+    return redirect(url_for("admin_employee", uid=uid))
+
+
+@app.post("/admin/employee/<int:uid>/device/rewrite")
+@login_required(staff=True)
+def admin_device_rewrite(uid):
+    """Перезаписати код пристрою: у людини новий телефон. Код — з «Пристроїв, з яких заходив(ла)» (pick) або
+    введений вручну з «Налаштувань додатку» нового телефона (code). Старі прив'язки знімаються, як «Відв'язати»
+    (і з історії: старий телефон більше не її), новий код стає «Телефоном людини» — з нього вмикається автозміна."""
+    key = (request.form.get("code") or "").strip() or (request.form.get("pick") or "").strip()
+    if not re.fullmatch(r"(app|web)-[\w-]{4,64}", key):
+        flash("Вкажіть код пристрою: app-… (застосунок) або web-… (браузер) — він є в «Налаштуваннях додатку» на телефоні людини")
+        return redirect(url_for("admin_employee", uid=uid))
+    with _lock:
+        conn = db()
+        conn.execute("select 1 from users where id = ?", (uid,)).fetchone() or abort(404)
+        other = conn.execute("select u.full_name from devices d join users u on u.id = d.user_id where d.device_key = ? and d.user_id != ?",
+                             (key, uid)).fetchone()
+        if other:
+            flash(f"Код {key} прив'язаний до {other['full_name']}. Спершу відв'яжіть його в картці {other['full_name']}")
+            return redirect(url_for("admin_employee", uid=uid))
+        old = conn.execute("select * from devices where user_id = ?", (uid,)).fetchall()
+        if [d["device_key"] for d in old] == [key]:
+            flash("Цей код уже прив'язаний до людини")
+            return redirect(url_for("admin_employee", uid=uid))
+        for d in old:
+            conn.execute("delete from devices where id = ?", (d["id"],))
+            if d["device_key"] != key:
+                conn.execute("delete from device_history where user_id = ? and (device_key = ? or (mac = ? and fingerprint = ?))",
+                             (uid, d["device_key"], d["mac"], d["fingerprint"]))
+        h = conn.execute("select * from device_history where device_key = ? order by user_id != ?, last_at desc limit 1", (key, uid)).fetchone()
+        name = conn.execute("select name from remember_tokens where device = ? and name is not null order by last_used_at desc limit 1",
+                            (key,)).fetchone()
+        t = now()
+        conn.execute("insert into devices(user_id, device_key, name, first_ip, last_ip, created_at, last_seen_at, mac, fingerprint)"
+                     " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (uid, key, name[0] if name else "Новий телефон (код перезаписав керівник)", h["last_ip"] if h else None,
+                      h["last_ip"] if h else None, t, h["last_at"] if h else None, h["mac"] if h else None, h["fingerprint"] if h else None))
+        audit(conn, current_user()["id"], "UPDATE", "devices", None, uid,
+              {"device": [", ".join(d["device_key"] for d in old) or None, key]})
+        conn.commit()
+    flash(f"Код пристрою перезаписано: тепер телефон людини — {key}")
     return redirect(url_for("admin_employee", uid=uid))
 
 

@@ -409,6 +409,14 @@
   </div>
 </div>
 {% elif tab == 'app' %}
+<div class="card">
+  <div class="card-head"><h3>{{ icon('phone') }} Код цього пристрою</h3></div>
+  <p class="muted small" style="margin:0 0 8px">За цим кодом сервер знає, що це ваш телефон, і сам вмикає зміну. Новий телефон — покажіть код керівнику: він перезапише його у вашій картці.</p>
+  <b class="mono" id="myDeviceCode">—</b>
+  <script>(function () { var m = /CrewHubDevice\/([\w-]{6,64})/.exec(navigator.userAgent), id = m ? "app-" + m[1] : null;
+    if (!id) try { id = localStorage.getItem("crewhub_device"); } catch (e) {}
+    document.getElementById("myDeviceCode").textContent = id || "ще немає — відкрийте вкладку «Зміна»"; })();</script>
+</div>
 <div class="grid-2">
   <div class="card">
     <div class="card-head"><h3>{{ icon('sun') }} Тема</h3></div>

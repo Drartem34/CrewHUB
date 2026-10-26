@@ -25,6 +25,7 @@ class Phone:
             self.ua = f"Mozilla/5.0 (Linux; Android 14; {model}; wv) CrewHubApp/2.3 CrewHubDevice/{app}"
             self.fp = f"{n + 0x100:016x}"  # WebView малює інакше, ніж Chrome: інший відбиток
         self.key = f"web-{n:08x}"
+        self.key_app = f"app-{app}" if app else None  # код, під яким сервер знає застосунок (з User-Agent)
         self.online = True
         net[self.ip] = self
         self.c = core.app.test_client()
@@ -347,6 +348,160 @@ class AllPagesTest(ScenarioBase):
                     r = p.req("get", url)
                     self.assertEqual(r.status_code, 200)
                     self.assertNotIn("Traceback", r.get_data(as_text=True))
+
+
+class RegularAccountSwapTest(ScenarioBase):
+    """Звичайний акаунт А на телефоні P → вихід → вхід у звичайний акаунт Б на тому самому телефоні → зміна.
+    Адмінка має це показати: червона зміна в «Огляді» й табелі, «Підключення», сповіщення; людині — плашка."""
+
+    def make_a(self, p, how):
+        if how == "register":  # А сам зареєструвався з телефона P, адмін підтвердив
+            p.req("post", "/register", data={"full_name": "Андрій Звичайний", "phone": "0991112233", "password": "123456",
+                                             "password2": "123456", "device_id": p.key, "fp": p.fp})
+            with core.connect() as c:
+                c.execute("update users set status = 'active' where phone = '+380991112233'")
+                c.commit()
+        else:  # А створив адмін, А лише заходив з P
+            with core.connect() as c:
+                c.execute("insert into users(username, password_hash, full_name, role, hourly_rate, phone, status, location_id)"
+                          " values ('andriy', ?, 'Андрій Звичайний', 'employee', 100, '+380991112233', 'active', 1)",
+                          (core.hash_password("123456"),))
+                c.commit()
+        p.login("0991112233", "123456")
+        if how == "worked":  # А ще й відпрацював з P зміну (телефон прив'язався автостартом)
+            self.tick(9, 5)
+            p.clock("auto")
+            p.clock("stop")
+        p.logout()
+
+    def check(self, p):
+        self.tick(10)
+        p.login(OLHA)
+        self.assertIn("Ви в чужому акаунті", p.req("get", "/me").get_data(as_text=True))
+        p.clock("auto")
+        self.assertTrue(p.clock("start")["ok"])
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        row = [r for r in admin.req("get", "/api/live").get_json()["rows"] if r["name"] == "Ольга Коваль"][0]
+        self.assertEqual(row["device_flag"], "other:Андрій Звичайний")
+        self.assertTrue(row["device"])
+        self.assertIn('id="liveAlarm"', admin.req("get", "/admin?tab=live").get_data(as_text=True))
+        self.assertIn("Вхід у чужий акаунт", admin.req("get", "/admin?tab=logs").get_data(as_text=True))
+        uid = self.sql("select id from users where username = 'olha'")[0][0]
+        card = admin.req("get", f"/admin/employee/{uid}").get_data(as_text=True)
+        self.assertIn("чужий акаунт — телефон Андрій Звичайний", card)
+        self.assertIn("розпочата з:", card)
+        self.assertIn("Підозріло: чужий телефон",
+                      [r[0] for r in self.sql("select n.title from notifications n join users u on u.id = n.user_id where u.username = 'admin'")])
+
+    def test_browser_registered(self):
+        p = Phone(self.net, 21)
+        self.tick(8)
+        self.make_a(p, "register")
+        self.check(p)
+
+    def test_registered_in_browser_then_app(self):
+        b, p = Phone(self.net, 22), Phone(self.net, 22, app="phone22app")  # той самий телефон: браузер і застосунок
+        self.tick(8)
+        self.make_a(b, "register")
+        p.login("0991112233", "123456")
+        p.logout()
+        self.check(p)
+
+    def test_app_account_made_by_admin(self):
+        p = Phone(self.net, 23, app="phone23app")
+        self.tick(8)
+        self.make_a(p, "admin")
+        self.check(p)
+
+    def test_app_after_a_worked_a_shift(self):
+        p = Phone(self.net, 24, app="phone24app")
+        self.tick(8)
+        self.make_a(p, "worked")
+        self.check(p)
+
+    def test_b_has_own_phone(self):
+        Phone(self.net, 26, model="SM-S911B").login(OLHA)  # в Ольги свій телефон
+        p = Phone(self.net, 25)
+        self.tick(8)
+        self.make_a(p, "admin")
+        self.check(p)
+
+    def test_foreign_phone_never_becomes_hers(self):
+        # Іван лише заходив зі свого телефона (не прив'язаний). Ольга на ньому: автостарт не починає зміну і не
+        # прив'язує телефон Івана до неї (раніше прив'язував — і в картці Івана його телефон ставав «чужим: Ольга»)
+        p = Phone(self.net, 27)
+        self.tick(8)
+        p.login(IVAN)
+        p.logout()
+        self.tick(10)
+        p.login(OLHA)
+        p.clock("auto")
+        self.assertEqual(self.sql("select count(*) from shifts")[0][0], 0)
+        self.assertEqual(self.sql("select count(*) from devices where device_key = ?", p.key)[0][0], 0)
+        self.assertTrue(p.clock("start")["ok"])  # вручну — можна, з позначкою
+        self.assertEqual(self.shift("olha")["device_flag"], "other:Іван Петренко")
+        # новачок реєструється з телефона Івана (Іван допомагав) — телефон не стає телефоном новачка
+        q = Phone(self.net, 28)
+        q.login(IVAN)
+        q.logout()
+        q.req("post", "/register", data={"full_name": "Новий Новачок", "phone": "0991112244", "password": "123456",
+                                         "password2": "123456", "device_id": q.key, "fp": q.fp})
+        self.assertEqual(self.sql("select count(*) from devices where device_key = ?", q.key)[0][0], 0)
+
+
+class DeviceRewriteTest(ScenarioBase):
+    """«Перезаписати код пристрою»: у людини новий телефон — адмін ставить його код замість старого."""
+
+    def setUp(self):
+        super().setUp()
+        self.old, self.new = Phone(self.net, 41, app="ivanold01"), Phone(self.net, 42, app="ivannew01", model="SM-S911B")
+        self.tick(8)
+        self.old.login(IVAN)
+        self.uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.connect() as c:
+            core.remember_device(c, self.uid, self.old.key_app, self.old.ip)
+            c.commit()
+        self.admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+
+    def rewrite(self, **form):
+        page = self.admin.req("get", f"/admin/employee/{self.uid}").get_data(as_text=True)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        self.admin.req("post", f"/admin/employee/{self.uid}/device/rewrite", data={"csrf": csrf, **form},
+                       headers={"Origin": "http://localhost"})
+        return self.admin.req("get", f"/admin/employee/{self.uid}").get_data(as_text=True)
+
+    def bound(self):
+        return [r[0] for r in self.sql("select device_key from devices where user_id = ?", self.uid)]
+
+    def test_pick_new_phone_from_history(self):
+        self.new.login(IVAN)  # Іван зайшов з нового телефона
+        page = self.admin.req("get", f"/admin/employee/{self.uid}").get_data(as_text=True)
+        self.assertIn("Перезаписати код пристрою", page)
+        self.assertIn(self.new.key_app, page)
+        page = self.rewrite(pick=self.new.key_app)
+        self.assertIn("Код пристрою перезаписано", page)
+        self.assertEqual(self.bound(), [self.new.key_app])
+        self.assertEqual(self.sql("select count(*) from device_history where user_id = ? and device_key = ?",
+                                  self.uid, self.old.key_app)[0][0], 0)  # старий телефон більше не Іванів
+        with core.connect() as c:
+            self.assertTrue(core.device_allowed(c, self.uid, self.new.key_app, self.new.ip))
+            self.assertFalse(core.device_allowed(c, self.uid, self.old.key_app, self.old.ip))
+
+    def test_typed_code_and_errors(self):
+        self.assertIn("Вкажіть код пристрою", self.rewrite(code="абв"))
+        self.assertEqual(self.bound(), [self.old.key_app])
+        olha = Phone(self.net, 43, app="olhaphone1")
+        olha.login(OLHA)
+        with core.connect() as c:
+            core.remember_device(c, self.sql("select id from users where username = 'olha'")[0][0], olha.key_app, olha.ip)
+            c.commit()
+        self.assertIn("прив&#39;язаний до Ольга Коваль", self.rewrite(code=olha.key_app))
+        self.assertEqual(self.bound(), [self.old.key_app])
+        self.assertIn("Код пристрою перезаписано", self.rewrite(code="app-ivannew01"))  # код ще не бачений сервером
+        self.assertEqual(self.bound(), ["app-ivannew01"])
+
+    def test_person_sees_own_code(self):
+        self.assertIn("Код цього пристрою", self.old.req("get", "/me?tab=app").get_data(as_text=True))
 
 
 if __name__ == "__main__":

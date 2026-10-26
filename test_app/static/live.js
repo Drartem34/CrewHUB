@@ -33,8 +33,17 @@
     // Чому зміна не почалась сама — окремим рядком, щоб адмін одразу бачив, що виправити
     return r.why ? (line ? line + "<br>" : "") + '<span style="color:var(--warn-text)">Автозміна не почалась: ' + esc(r.why) + "</span>" : line;
   }
+  function alarm() {
+    // Хтось зараз на зміні в чужому акаунті (з телефона іншої людини) — велика червона плашка вгорі «Огляду»
+    const box = document.getElementById("liveAlarm");
+    if (!box) return;
+    box.innerHTML = data.rows.filter((r) => r.started_at && r.device_flag && r.device_flag.startsWith("other:")).map((r) => `
+      <a class="banner bad" href="/admin/employee/${r.id}">⚠<div><b>Чужий акаунт на зміні: ${esc(r.name)}</b> · зміну розпочато з телефона
+        ${esc(r.device_flag.slice(6))}${r.device ? " (" + esc(r.device) + ")" : ""}, з ${hhmm(r.started_at)}. Відкрийте картку, щоб розібратись</div></a>`).join("");
+  }
   function render() {
     if (!data) return;
+    alarm();
     const rows = data.rows.filter((r) => !filter || r.state === filter);
     document.getElementById("liveList").innerHTML = rows.map((r) => `
       <div class="row" style="padding:10px 0;border-bottom:1px solid var(--line)">

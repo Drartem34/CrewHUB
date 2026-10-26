@@ -50,6 +50,17 @@
         <form method="post" action="{{ url_for('admin_device_delete', uid=u.id, did=d.id) }}" data-confirm="Відв'язати {{ d.name or 'пристрій' }}? Наступний телефон, з якого прийде автопінг, прив'яжеться сам."><button class="sm">{{ icon('x', 'sm') }}Відв'язати</button></form>
       </div>
       {% else %}<div class="muted small">Ще не прив'язано. Телефон запам'ятається під час реєстрації або з першого автопінгу з робочого Wi-Fi.</div>{% endfor %}
+      <form method="post" action="{{ url_for('admin_device_rewrite', uid=u.id) }}" style="margin-top:12px"
+        data-confirm="Перезаписати код пристрою {{ u.full_name }}? Старий телефон відв'яжеться, автозміна вмикатиметься лише з нового.">
+        <label>Перезаписати код пристрою (у людини новий телефон)</label>
+        {% if device_history %}<select name="pick"><option value="">— код з пристроїв, з яких людина заходила —</option>
+          {% for h in device_history %}<option value="{{ h.device_key }}">{{ h.device_key }} · {{ 'телефон' if h.phone else "комп'ютер / інше" }} · востаннє {{ h.last_at|dt }}{% if h.last_ip %} · IP {{ h.last_ip }}{% endif %}{% if h.owner %} · чужий: {{ h.owner.full_name }}{% endif %}</option>{% endfor %}
+        </select>{% endif %}
+        <div class="row" style="margin-top:6px">
+          <input name="code" class="grow mono" placeholder="{{ 'або ' if device_history }}код з «Налаштувань додатку» нового телефона: app-… чи web-…" autocomplete="off">
+          <button class="sm">{{ icon('refresh', 'sm') }}Перезаписати код</button></div>
+        <span class="muted small">Код показано людині в «Меню» → «Налаштування додатку» → «Код цього пристрою».</span>
+      </form>
       {% if device_history %}
       <div class="muted small" style="margin:12px 0 4px"><b>Пристрої, з яких заходив(ла)</b> — не прив'язані. Чужий телефон тут означає, що людина заходила з телефона колеги.
         Якщо це насправді її телефон (напр., застосунок налаштовував керівник) — «Прив'язати»; не її і більше не знадобиться — «Забути».</div>
