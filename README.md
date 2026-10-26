@@ -11,6 +11,8 @@
 - **Документація** (`docs/`): усе для власника, адміністратора, працівника й розробника.
   Сервер докладно, з історією всіх версій — [test_app/README.md](test_app/README.md); застосунок — [android/README.md](android/README.md);
   `readme.html` — опис механізмів, ролей, що робить кожен файл, FAQ; карта коду з номерами рядків — [docs/11-code-map.md](docs/11-code-map.md).
+- **Усі версії** від v15 до v17.9 — теги в git, хронологія з архівами й комітами — [docs/VERSIONS.md](docs/VERSIONS.md);
+  APK застосунку всіх версій — [releases/](releases/README.md).
 
 ## Швидкий старт
 
