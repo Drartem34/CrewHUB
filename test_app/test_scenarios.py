@@ -504,5 +504,93 @@ class DeviceRewriteTest(ScenarioBase):
         self.assertIn("Код цього пристрою", self.old.req("get", "/me?tab=app").get_data(as_text=True))
 
 
+class DhcpNewIpTest(ScenarioBase):
+    """Роутер видав телефону новий IP: сервер не стукає вічно в стару адресу, а шукає телефон за MAC у всій мережі
+    точки — навіть коли загальний пошук пристроїв (lan_scan) вимкнено."""
+
+    def setUp(self):
+        super().setUp()
+        core._presence_sweep["at"] = 0.0
+        self.knocked = []
+
+        def present(ips, wait=0):  # як у житті: у таблиці сусідів з'являється лише той, у кого постукали
+            self.knocked.append(list(ips))
+            return {ip: p.mac for ip, p in self.net.items() if p.online and ip in ips}
+        patcher = mock.patch.object(lan, "present", present)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with core.connect() as c:
+            c.execute("update settings set value = '0' where key = 'lan_scan'")
+            c.commit()
+
+    def test_new_ip_next_morning(self):
+        self.tick(17)
+        phone = Phone(self.net, 11)  # учора: телефон Івана мав .11
+        phone.login(IVAN)
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.connect() as c:
+            core.remember_device(c, uid, phone.key, phone.ip)
+            core.note_device(c, uid, phone.key, phone.fp, phone.mac)
+            c.commit()
+        del self.net[phone.ip]  # уранці роутер дав йому .77 (.11 зайняв хтось інший)
+        phone.ip = "192.168.1.77"
+        self.net[phone.ip] = phone
+        self.tick(9, 1)
+        core.presence_step()
+        self.assertEqual(self.knocked[0], ["192.168.1.11"])  # спершу — стара адреса
+        self.assertIn("192.168.1.77", self.knocked[1])      # потім уся мережа точки
+        s = self.shift("ivan")
+        self.assertEqual((s["status"], s["start_ip"], s["mac"]), ("active", "192.168.1.77", phone.mac))
+
+    def test_whole_network_not_more_often_than_every_90s(self):
+        self.tick(9, 1)
+        phone = Phone(self.net, 12)
+        phone.login(OLHA)
+        uid = self.sql("select id from users where username = 'olha'")[0][0]
+        with core.connect() as c:
+            core.remember_device(c, uid, phone.key, phone.ip)
+            core.note_device(c, uid, phone.key, phone.fp, phone.mac)
+            c.commit()
+        phone.online = False  # Ольги ще немає
+        core.presence_step()
+        core.presence_step()
+        self.assertEqual(sum(len(k) > 1 for k in self.knocked), 1)  # уся мережа — один раз
+
+
+class BrowserPhoneSleepTest(ScenarioBase):
+    """Браузер на телефоні без застосунку (iPhone): у кишені сторінка засинає. Зміна не стає на паузу від
+    короткої тиші (browser_phone_grace_minutes), але пішов насправді — пауза з останнього пінгу."""
+    IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+
+    def setUp(self):
+        super().setUp()
+        with core.connect() as c:
+            c.execute("update settings set value = '0' where key = 'lan_presence'")  # сонний iPhone не відповідає на ARP
+            c.commit()
+
+    def until(self, mm):
+        self.live_until(10, mm)  # сервер працює: фонова перевірка щохвилини
+        return self.shift("ivan")
+
+    def test_iphone_in_pocket(self):
+        self.tick(10)
+        phone = Phone(self.net, 15, ua=self.IPHONE)
+        phone.login(IVAN)
+        self.assertTrue(phone.clock("start")["ok"])
+        self.assertEqual(self.until(8)["status"], "active")   # 8 хв тиші — не пауза
+        phone.clock("heartbeat")                              # дістав телефон о 10:08
+        self.assertEqual(self.until(17)["status"], "active")
+        self.assertEqual(self.until(20)["status"], "paused")  # понад 10 хв тиші — пауза...
+        b = self.sql("select started_at from breaks where kind = 'wifi_loss'")[0][0]
+        self.assertEqual(b, self.at(10, 8))                  # ...з останнього пінгу: цей час не оплачується
+
+    def test_computer_browser_unchanged(self):
+        self.tick(10)
+        pc = Phone(self.net, 16, ua=PC)
+        pc.login(IVAN)
+        self.assertTrue(pc.clock("start")["ok"])
+        self.assertEqual(self.until(4)["status"], "paused")  # як і раніше: браузер на комп'ютері — 2 хв
+
+
 if __name__ == "__main__":
     unittest.main()

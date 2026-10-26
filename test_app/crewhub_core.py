@@ -94,6 +94,8 @@ DEFAULT_SETTINGS = {
     "currency": "грн",
     "wifi_grace_minutes": "2",       # скільки хвилин без пінгу з робочої мережі допускається (браузер)
     "sleep_grace_minutes": "20",     # те саме для застосунку: телефон, який ніхто не чіпає, засинає і пінгує рідше
+    "browser_phone_grace_minutes": "10",  # браузер на телефоні без застосунку (напр. iPhone): у кишені сторінка засинає
+                                     # і мовчить; пауза — лише після стількох хвилин тиші (і з останнього пінгу)
     "silence_forgive_minutes": "45",  # застосунок «мовчав» (телефон спав), але знову озвався з робочого Wi-Fi —
                                      # цей час рахується. Лише для застосунку: браузер не спить
     "wifi_loss_action": "pause",     # pause | close
@@ -141,6 +143,7 @@ SETTING_RULES = {
     "currency": ("text", 10, "Валюта"),
     "wifi_grace_minutes": ("int", 1, 120, "Допустима втрата Wi-Fi"),
     "sleep_grace_minutes": ("int", 1, 240, "Допустима тиша застосунку"),
+    "browser_phone_grace_minutes": ("int", 0, 120, "Допустима тиша браузера на телефоні"),
     "silence_forgive_minutes": ("int", 0, 240, "Поблажка за сон телефона"),
     "wifi_loss_action": ("choice", ("pause", "close"), "Дія при втраті Wi-Fi"),
     "offline_keeps_counting": ("bool", "Зміна рахується без зв'язку"),
@@ -1948,6 +1951,12 @@ def battery_dead(conn, s):
                 and s["battery_at"] and s["battery_at"] >= s["last_seen_at"] - 1800)
 
 
+def browser_phone(conn, shift):
+    """Зміна в браузері телефона (не застосунок і не комп'ютер): пристрій зміни в історії людини позначено телефоном."""
+    return bool(shift["device"]) and not shift["device"].startswith("app-") and bool(conn.execute(
+        "select 1 from device_history where user_id = ? and device_key = ? and phone = 1", (shift["user_id"], shift["device"])).fetchone())
+
+
 def sleepy_shift(shift):
     """Зміна з застосунку: телефон засинає і пінгує рідше (служба не тримає процесор увімкненим — бережемо батарею),
     тож його тишу можна простити. Вихід з Wi-Fi застосунок повідомляє окремо, з точним часом (away_since)."""
@@ -2023,6 +2032,7 @@ def sweep(conn):
     meta_set(conn, "alive_at", t)
     outage_end = int(meta_get(conn, "outage_end", 0))
     sleep = max(setting_int("sleep_grace_minutes", conn) * 60, grace)
+    phone_grace = setting_int("browser_phone_grace_minutes", conn) * 60
     pause_limit = setting_int("wifi_pause_close_minutes", conn) * 60
     after_end = setting_int("auto_close_minutes", conn) * 60
     keep = setting("offline_keeps_counting", conn) == "1"
@@ -2033,6 +2043,11 @@ def sweep(conn):
         if sleepy_shift(s) and s["last_seen_at"] >= t - sleep:
             # застосунок: телефон міг просто заснути, у сні Android будить службу раз на 5–15 хв.
             # Вихід з Wi-Fi служба повідомляє сама (away_since), тож тут чекаємо лише на випадок, що телефон вимкнули
+            continue
+        if not sleepy_shift(s) and phone_grace > grace and s["last_seen_at"] >= t - phone_grace and browser_phone(conn, s):
+            # Браузер на телефоні (iPhone чи Android без застосунку): у кишені сторінка засинає і не пінгує, а сонний
+            # iPhone не завжди відповідає й на перевірку за MAC — чекаємо довше. Пішов насправді — пауза все одно
+            # з останнього пінгу з точки (час не зарахується), а пінг з чужої мережі ставить паузу одразу
             continue
         keep_dead = setting_int("battery_keep_minutes", conn) * 60
         if keep_dead and battery_dead(conn, s):
@@ -2379,6 +2394,9 @@ def backup_step():
 # і PWA теж — сайт не може працювати у фоні). Але телефон лишається в Wi-Fi і відповідає на ARP. Тож сервер сам
 # перевіряє MAC телефона зміни в мережі точки: відповів — це те саме, що пінг з точки.
 PRESENCE_EVERY = 30   # с між перевірками
+PRESENCE_SWEEP_EVERY = 90  # с: не частіше стукаємо в УСЮ мережу точки, якщо телефона немає на відомих адресах
+PRESENCE_SWEEP_MAX = 1024  # адрес за раз (мережа /22 і менша)
+_presence_sweep = {"at": 0.0}
 PRESENCE_SILENT = 40  # с без пінгу, після яких зміну перевіряємо в мережі
 
 
@@ -2406,6 +2424,21 @@ def presence_step():
     where = {}
     for ip, mac in seen.items():
         where.setdefault(mac, ip)
+    # Роутер видав телефону новий IP (DHCP: старий учора зайняв хтось інший) — на старій адресі його немає, а
+    # загальний пошук пристроїв (lan_scan) ходить раз на 5 хв або вимкнений. Тоді самі стукаємо в усю мережу точки
+    # і шукаємо телефон за MAC на будь-якій адресі. Не частіше раз на PRESENCE_SWEEP_EVERY.
+    if any(x["mac"] not in where for x in (*starters, *cands)) and time.time() - _presence_sweep["at"] >= PRESENCE_SWEEP_EVERY:
+        _presence_sweep["at"] = time.time()
+        with _lock:
+            conn = connect()
+            try:
+                rest = [ip for ip in work_subnet_ips(conn) if ip not in ips]
+            finally:
+                conn.close()
+        if rest:
+            for ip, mac in lan.present(rest).items():
+                seen.setdefault(ip, mac)
+                where.setdefault(mac, ip)
     with _lock:
         conn = connect()
         try:
@@ -2430,6 +2463,20 @@ def presence_step():
             conn.commit()
         finally:
             conn.close()
+
+
+def work_subnet_ips(conn):
+    """Усі адреси робочих мереж активних точок (приватні IPv4, не більші за /22) — куди стукати, коли телефон
+    отримав новий IP. Не більше PRESENCE_SWEEP_MAX адрес."""
+    out = []
+    for (cidr,) in conn.execute("select n.cidr from networks n join locations l on l.id = n.location_id where l.is_active = 1"):
+        try:
+            net = ipaddress.ip_network(cidr.strip(), strict=False)
+        except ValueError:
+            continue
+        if net.version == 4 and net.is_private and 22 <= net.prefixlen <= 30:
+            out += [str(h) for h in net.hosts() if str(h) not in out]
+    return out[:PRESENCE_SWEEP_MAX]
 
 
 def presence_starters(conn, t):
