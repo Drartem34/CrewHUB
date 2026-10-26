@@ -94,6 +94,8 @@ DEFAULT_SETTINGS = {
     "currency": "грн",
     "wifi_grace_minutes": "2",       # скільки хвилин без пінгу з робочої мережі допускається (браузер)
     "sleep_grace_minutes": "20",     # те саме для застосунку: телефон, який ніхто не чіпає, засинає і пінгує рідше
+    "soft_check_minutes": "0",       # м'який облік: 0 — вимкнено; N — телефон зміни перевіряють у випадковий момент
+                                     # кожних N хв, і пауза лише після ~2N хв без жодної ознаки (з останньої ознаки)
     "browser_phone_grace_minutes": "10",  # браузер на телефоні без застосунку (напр. iPhone): у кишені сторінка засинає
                                      # і мовчить; пауза — лише після стількох хвилин тиші (і з останнього пінгу)
     "silence_forgive_minutes": "45",  # застосунок «мовчав» (телефон спав), але знову озвався з робочого Wi-Fi —
@@ -144,6 +146,7 @@ SETTING_RULES = {
     "wifi_grace_minutes": ("int", 1, 120, "Допустима втрата Wi-Fi"),
     "sleep_grace_minutes": ("int", 1, 240, "Допустима тиша застосунку"),
     "browser_phone_grace_minutes": ("int", 0, 120, "Допустима тиша браузера на телефоні"),
+    "soft_check_minutes": ("int", 0, 60, "М'який облік: перевірка раз на N хв"),
     "silence_forgive_minutes": ("int", 0, 240, "Поблажка за сон телефона"),
     "wifi_loss_action": ("choice", ("pause", "close"), "Дія при втраті Wi-Fi"),
     "offline_keeps_counting": ("bool", "Зміна рахується без зв'язку"),
@@ -2033,6 +2036,7 @@ def sweep(conn):
     outage_end = int(meta_get(conn, "outage_end", 0))
     sleep = max(setting_int("sleep_grace_minutes", conn) * 60, grace)
     phone_grace = setting_int("browser_phone_grace_minutes", conn) * 60
+    soft = setting_int("soft_check_minutes", conn) * 60
     pause_limit = setting_int("wifi_pause_close_minutes", conn) * 60
     after_end = setting_int("auto_close_minutes", conn) * 60
     keep = setting("offline_keeps_counting", conn) == "1"
@@ -2040,6 +2044,10 @@ def sweep(conn):
                           " where s.status = 'active' and s.last_seen_at < ?", (t - grace,)).fetchall():
         if outage_end and t - outage_end < OUTAGE_GRACE and s["last_seen_at"] >= outage_end:
             continue  # світло щойно з'явилось: роутер вантажиться, телефони ще не в Wi-Fi — чекаємо
+        if soft and s["last_seen_at"] >= t - soft_grace(soft):
+            # М'який облік: телефон перевіряють раз на soft у випадковий момент, тож між двома перевірками буває до
+            # 2·soft тиші — це не пауза. Пішов довше — пауза все одно з останньої ознаки (час без людини не оплачується)
+            continue
         if sleepy_shift(s) and s["last_seen_at"] >= t - sleep:
             # застосунок: телефон міг просто заснути, у сні Android будить службу раз на 5–15 хв.
             # Вихід з Wi-Fi служба повідомляє сама (away_since), тож тут чекаємо лише на випадок, що телефон вимкнули
@@ -2397,6 +2405,30 @@ PRESENCE_EVERY = 30   # с між перевірками
 PRESENCE_SWEEP_EVERY = 90  # с: не частіше стукаємо в УСЮ мережу точки, якщо телефона немає на відомих адресах
 PRESENCE_SWEEP_MAX = 1024  # адрес за раз (мережа /22 і менша)
 _presence_sweep = {"at": 0.0}
+_soft_checked = {}  # м'який облік: {id зміни: номер вікна, у якому її вже перевірили}
+_soft_missed = set()  # м'який облік: зміни, чий телефон на випадковій перевірці не знайшовся — їх перевіряємо щопівхвилини
+
+
+def soft_grace(soft):
+    """Скільки тиші допускає м'який облік з перевіркою раз на soft секунд. Дві випадкові перевірки сусідніх вікон
+    бувають до 2·soft одна від одної, а людина могла вийти одразу після вдалої — тож 3·soft + хвилина (стук і фонова
+    перевірка): відлучка до soft хвилин ніколи не стає паузою, а повернення після промаху ловиться за пів хвилини."""
+    return 3 * soft + 60
+
+
+def soft_due(shift_id, t, soft):
+    """Чи настав випадковий момент перевірки цієї зміни в поточному вікні soft секунд (і чи її ще не перевіряли в ньому).
+    Момент «випадковий», але відтворюваний: хеш (зміна, вікно) — людина не вгадає його, а тест — так."""
+    if len(_soft_checked) > 10000:  # старі зміни давно закриті — не тримаємо їх у пам'яті вічно
+        _soft_checked.clear()
+    w = t // soft
+    moment = w * soft + int(hashlib.sha256(f"{shift_id}:{w}".encode()).hexdigest()[:8], 16) % soft
+    if shift_id in _soft_missed:
+        return True  # минулого разу телефона не було — перевіряємо щопівхвилини, поки не знайдеться
+    if t < moment or _soft_checked.get(shift_id) == w:
+        return False
+    _soft_checked[shift_id] = w
+    return True
 PRESENCE_SILENT = 40  # с без пінгу, після яких зміну перевіряємо в мережі
 
 
@@ -2415,6 +2447,11 @@ def presence_step():
                 " and b.ended_at is null and b.kind = 'wifi_loss'))", (now() - PRESENCE_SILENT,))
                 if not (s["status"] == "paused" and sleepy_shift(s))]
             starters = presence_starters(conn, now())
+            soft = setting_int("soft_check_minutes", conn) * 60
+            if soft:
+                # М'який облік: активну зміну, що мовчить, перевіряємо не щопівхвилини, а раз на soft у випадковий момент.
+                # Зміну на паузі — як і раніше, щопівхвилини: людина повернулась — зміна йде далі одразу
+                cands = [c for c in cands if c["status"] != "active" or soft_due(c["id"], now(), soft)]
         finally:
             conn.close()
     if not cands and not starters:
@@ -2439,6 +2476,10 @@ def presence_step():
             for ip, mac in lan.present(rest).items():
                 seen.setdefault(ip, mac)
                 where.setdefault(mac, ip)
+    if soft:  # м'який облік: чий телефон не знайшовся — далі щопівхвилини, знайшовся — знову раз на вікно
+        for c in cands:
+            if c["status"] == "active":
+                (_soft_missed.discard if c["mac"] in where else _soft_missed.add)(c["id"])
     with _lock:
         conn = connect()
         try:

@@ -592,5 +592,73 @@ class BrowserPhoneSleepTest(ScenarioBase):
         self.assertEqual(self.until(4)["status"], "paused")  # як і раніше: браузер на комп'ютері — 2 хв
 
 
+class SoftCheckTest(ScenarioBase):
+    """М'який облік (soft_check_minutes = 15): телефон зміни перевіряють у випадковий момент раз на 15 хв, а не
+    щопівхвилини; коротка відлучка — не пауза; довга — пауза з останньої ознаки телефона."""
+
+    def setUp(self):
+        super().setUp()
+        core._soft_checked.clear()
+        with core.connect() as c:
+            c.execute("insert or replace into settings(key, value) values ('soft_check_minutes', '15')")
+            c.commit()
+        self.knocks = []
+        table = lambda: {ip: p.mac for ip, p in self.net.items() if p.online}  # noqa: E731
+
+        def present(ips, wait=0):
+            self.knocks.append(list(ips))
+            return table()
+        patcher = mock.patch.object(lan, "present", present)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tick(10)
+        self.phone = Phone(self.net, 31)  # браузер на телефоні, сторінку потім закрили
+        self.phone.login(OLHA)
+        self.assertTrue(self.phone.clock("start")["ok"])
+        self.phone.clock("heartbeat")  # з робочої мережі: сервер запам'ятав MAC телефона зміни
+
+    def breaks(self):
+        return self.sql("select started_at, ended_at from breaks where kind = 'wifi_loss'")
+
+    def test_phone_in_wifi_two_hours_rare_checks(self):
+        self.live_until(12)
+        self.assertEqual(self.shift("olha")["status"], "active")
+        self.assertEqual(self.breaks(), [])
+        mine = sum(self.phone.ip in k for k in self.knocks)
+        self.assertGreaterEqual(mine, 7)   # раз на 15 хв...
+        self.assertLessEqual(mine, 9)      # ...а не щохвилини (було б ~120)
+
+    def test_short_absence_is_not_a_pause(self):
+        off, on = (lambda: setattr(self.phone, "online", False)), (lambda: setattr(self.phone, "online", True))
+        self.live_until(11, hooks={(10, 20): off, (10, 40): on})
+        self.assertEqual(self.shift("olha")["status"], "active")
+        self.assertEqual(self.breaks(), [])
+
+    def test_short_absence_any_moment(self):
+        # відлучка до 15 хв — не пауза, хоч би як випали випадкові перевірки
+        for mm in range(5, 60, 7):
+            core._soft_checked.clear()
+            core._soft_missed.clear()
+            self.setUp()
+            self.live_until(10, mm, hooks={})
+            self.phone.online = False
+            back = mm + 14
+            self.live_until(10 + back // 60, back % 60)
+            self.phone.online = True
+            self.live_until(11, 30)
+            self.assertEqual(self.breaks(), [], mm)
+
+    def test_long_absence_ends_at_last_sign(self):
+        self.live_until(12, hooks={(10, 20): lambda: setattr(self.phone, "online", False)})
+        s = self.shift("olha")
+        self.assertIn(s["status"], ("paused", "closed"))  # пауза довша за wifi_pause_close_minutes — закрито
+        end = s["ended_at"] or self.breaks()[0][0]
+        self.assertGreaterEqual(end, self.at(10))
+        self.assertLessEqual(end, self.at(10, 20))  # з останньої ознаки — час без людини не оплачується
+
+    def test_off_by_default(self):
+        self.assertEqual(core.DEFAULT_SETTINGS["soft_check_minutes"], "0")
+
+
 if __name__ == "__main__":
     unittest.main()
