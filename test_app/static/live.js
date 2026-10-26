@@ -19,11 +19,17 @@
       p.push("з " + hhmm(r.started_at) + " · " + dur(w));
     }
     if (r.last_seen) p.push("пінг " + hhmm(r.last_seen) + " · " + esc(r.ip));
+    // З якого пристрою почали зміну; чужий акаунт (телефон іншої людини) — червоним окремим першим рядком, щоб не обрізався
+    const dev = r.device ? " (" + esc(r.device) + ")" : "";
+    let alarm = "";
+    if (r.device_flag && r.device_flag.startsWith("other:")) alarm = '<span style="display:block;white-space:normal;color:var(--bad-text, #c62828)">⚠ Зміна в чужому акаунті — з телефона ' + esc(r.device_flag.slice(6)) + dev + "</span>";
+    else if (r.device_flag === "new") alarm = '<span style="display:block;white-space:normal;color:var(--warn-text)">⚠ Зміна з нового пристрою' + dev + "</span>";
+    else if (r.device) p.push("з пристрою: " + esc(r.device));
     if (r.power_lost) p.push('<span style="color:var(--warn-text)">телефон розрядився о ' + hhmm(r.power_lost) + ", зміна рахується</span>");
     else if (r.battery != null) p.push("заряд " + r.battery + "%" + (r.charging ? " ⚡" : ""));
     if (r.sched_start) p.push("за графіком " + hhmm(r.sched_start) + "–" + hhmm(r.sched_end));
     if (r.seen && !r.last_seen) p.push("пінг " + hhmm(r.seen) + " · " + esc(r.seen_ip));
-    const line = p.join(" · ");
+    const line = alarm + p.join(" · ");  // alarm — блок: сам переносить рядок
     // Чому зміна не почалась сама — окремим рядком, щоб адмін одразу бачив, що виправити
     return r.why ? (line ? line + "<br>" : "") + '<span style="color:var(--warn-text)">Автозміна не почалась: ' + esc(r.why) + "</span>" : line;
   }

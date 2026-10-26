@@ -54,8 +54,12 @@
         $("error").textContent = data.error;
         if (!quiet(action) && navigator.vibrate) navigator.vibrate(150);
         busy = false;
-        // Відмова (напр. зміну вже закрив сервер): беремо свіжий стан, щоб не показувати й не пінгувати стару зміну
-        if (action !== "check") await call("check");
+        // Відмова (напр. зміну вже закрив сервер): беремо свіжий стан, щоб не показувати й не пінгувати стару зміну.
+        // Свіжий стан стирає текст помилки — повертаємо його, щоб людина побачила, чому зміна не почалась
+        if (action !== "check") {
+          await call("check");
+          $("error").textContent = data.error;
+        }
         return;
       }
       $("error").textContent = "";

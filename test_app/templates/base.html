@@ -68,6 +68,8 @@
     </div>
     <main class="content">
       {% if system_alert %}<div class="banner bad">{{ icon('alert') }}<div><b>Сервер потребує уваги.</b> {{ system_alert }}. Подробиці в logs/crewhub.log</div></div>{% endif %}
+      {% if session.foreign_owner %}<div class="banner bad">{{ icon('alert') }}<div><b>Ви в чужому акаунті: {{ me.full_name }}.</b> Цей телефон належить <b>{{ session.foreign_owner }}</b>.
+        Керівника повідомлено, а зміну з цього телефона адмінка покаже з позначкою «чужий акаунт». Якщо це помилка — вийдіть і увійдіть у свій акаунт.</div></div>{% endif %}
       {% block body %}{% endblock %}
     </main>
   </div>

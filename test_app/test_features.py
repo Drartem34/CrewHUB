@@ -661,6 +661,82 @@ class ForeignDeviceTest(CrewHubBase):
         self.assertEqual(core.log_details(None), "")
 
 
+class ForeignPhoneBlockTest(CrewHubBase):
+    """Чужий акаунт (телефон іншої людини): типово — плашка «Ви в чужому акаунті», зміна починається, але в адмінці
+    видно, з якого пристрою; у «Правилах» можна заборонити зміну або й сам вхід."""
+    IVAN_PHONE = ForeignDeviceTest.IVAN_PHONE
+
+    def setUp(self):
+        super().setUp()
+        with core.connect() as c:
+            uid = c.execute("select id from users where username = 'ivan'").fetchone()[0]
+            core.remember_device(c, uid, "app-ivanphone001", WORK_IP)  # телефон Івана
+            c.commit()
+        self.olha = core.app.test_client()
+        self.olha.post("/login", data={"username": "0937654321", "password": "1234"}, headers={"User-Agent": self.IVAN_PHONE})
+
+    def start(self):
+        return self.olha.post("/api/clock/start", json={}, headers={"X-Forwarded-For": WORK_IP, "User-Agent": self.IVAN_PHONE}).get_json()
+
+    def set_mode(self, mode):
+        with core.connect() as c:
+            c.execute("insert or replace into settings(key, value) values ('foreign_phone_action', ?)", (mode,))
+            c.commit()
+
+    def test_banner_in_someone_elses_account(self):
+        page = self.olha.get("/me", headers={"User-Agent": self.IVAN_PHONE}).get_data(as_text=True)
+        self.assertIn("Ви в чужому акаунті", page)
+        self.assertIn("Цей телефон належить <b>Іван Петренко</b>", page)
+        own = core.app.test_client()  # Іван у своєму акаунті на своєму телефоні — плашки немає
+        own.post("/login", data={"username": "0671234567", "password": "1234"}, headers={"User-Agent": self.IVAN_PHONE})
+        self.assertNotIn("Ви в чужому акаунті", own.get("/me", headers={"User-Agent": self.IVAN_PHONE}).get_data(as_text=True))
+
+    def test_default_starts_and_shows_device_in_admin(self):
+        self.assertTrue(self.start()["ok"])  # типово зміна починається (як у v17), але позначена
+        flag, name = self.sql("select device_flag, device_name from shifts")[0]
+        self.assertEqual(flag, "other:Іван Петренко")
+        self.assertTrue(name)
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        row = [r for r in admin.get("/api/live").get_json()["rows"] if r["name"] == "Ольга Коваль"][0]
+        self.assertEqual(row["device"], name)
+        olha_id = self.sql("select id from users where username = 'olha'")[0][0]
+        page = admin.get(f"/admin/employee/{olha_id}").get_data(as_text=True)
+        self.assertIn("чужий акаунт — телефон Іван Петренко", page)
+        self.assertIn(f"розпочата з: {name}", page)
+
+    def test_shift_from_colleagues_phone_is_refused(self):
+        self.set_mode("block_shift")
+        res = self.start()
+        self.assertFalse(res["ok"])
+        self.assertIn("Ви в чужому акаунті (Ольга Коваль): цей телефон належить Іван Петренко", res["error"])
+        self.assertEqual(self.sql("select count(*) from shifts")[0][0], 0)
+        events = [r[0] for r in self.sql("select event from conn_log")]
+        self.assertIn("shift_other_device", events)
+        self.assertIn("denied", events)
+        self.assertIn("Підозріло: чужий телефон", [r[0] for r in self.sql("select title from notifications n join users u on u.id = n.user_id where u.username = 'admin'")])
+
+    def test_flag_mode_marks_the_shift(self):
+        self.set_mode("flag")
+        self.assertTrue(self.start()["ok"])
+        self.assertEqual(self.sql("select device_flag from shifts")[0][0], "other:Іван Петренко")
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        row = [r for r in admin.get("/api/live").get_json()["rows"] if r["name"] == "Ольга Коваль"][0]
+        self.assertEqual(row["device_flag"], "other:Іван Петренко")
+        olha_id = self.sql("select id from users where username = 'olha'")[0][0]
+        self.assertIn("чужий акаунт — телефон Іван Петренко", admin.get(f"/admin/employee/{olha_id}").get_data(as_text=True))
+
+    def test_block_login(self):
+        self.set_mode("block_login")
+        c = core.app.test_client()
+        r = c.post("/login", data={"username": "0937654321", "password": "1234"}, headers={"User-Agent": self.IVAN_PHONE})
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("Ви в чужому акаунті", r.get_data(as_text=True))
+        self.assertEqual(c.get("/me").status_code, 302)  # не увійшла
+        # керівника з чужого телефона пускає (міг свій розрядити), але позначає
+        r = c.post("/login", data={"username": "admin", "password": "admin123"}, headers={"User-Agent": self.IVAN_PHONE})
+        self.assertEqual(r.status_code, 302)
+
+
 class PresenceTest(CrewHubBase):
     """Браузер на телефоні з вимкненим екраном не пінгує, але телефон у Wi-Fi: сервер бачить його MAC сам."""
     MAC = "da:a1:19:00:00:01"

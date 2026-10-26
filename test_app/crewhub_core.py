@@ -113,6 +113,7 @@ DEFAULT_SETTINGS = {
     "sick_auto_approve": "1",
     "auto_start": "1",
     "device_lock": "1",               # зміна починається сама, коли телефон з'являється в робочому Wi-Fi
+    "foreign_phone_action": "flag",  # чужий акаунт (телефон іншої людини): flag — позначати й повідомляти (як у v17); block_shift — не дати почати / вести зміну; block_login — ще й не пустити в акаунт
     "work_start": "09:00",           # звичайні години зміни (якщо в «Графіку» на цей день нічого немає)
     "work_end": "18:00",             # кінець раніше за початок = нічна зміна через північ
     "work_weekends": "0",            # автостарт і в суботу/неділю
@@ -158,6 +159,7 @@ SETTING_RULES = {
     "sick_auto_approve": ("bool", "Автопогодження лікарняного"),
     "auto_start": ("bool", "Автостарт"),
     "device_lock": ("bool", "Лише свій телефон"),
+    "foreign_phone_action": ("choice", ("flag", "block_shift", "block_login"), "Чужий акаунт (телефон іншої людини)"),
     "work_start": ("time", "Початок робочого дня"),
     "work_end": ("time", "Кінець робочого дня"),
     "work_weekends": ("bool", "Робочі вихідні"),
@@ -242,11 +244,11 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "wifi_lost": "Втрата Wi-Fi", "wifi_restored": "Wi-Fi відновлено", "denied": "Відмова",
           "server_downtime": "Сервер не працював", "auto_start": "Зміна почалась автоматично",
           "auto_close": "Зміна закрилась автоматично", "login_other_device": "Вхід у чужий акаунт",
-          "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна з чужого телефона",
+          "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна в чужому акаунті (чужий телефон)",
           "device_recognised": "Свій телефон упізнано", "battery_dead": "Телефон розрядився",
-          "outage_credit": "Сервер не працював: час зараховано"}
+          "outage_credit": "Сервер не працював: час зараховано", "shift_new_device": "Зміна з нового пристрою"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні»
-SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device")
+SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device")
 
 SCHEMA = """
 create table if not exists settings (key text primary key, value text not null);
@@ -569,6 +571,10 @@ def init_db(seed=True):
     if "mac" not in scols:
         # MAC телефона в робочому Wi-Fi (версія 17.2): за ним сервер бачить, що телефон на точці, коли браузер спить
         conn.execute("alter table shifts add column mac text")
+    if "device_flag" not in scols:  # «other:Ім'я» — зміну почали / вели з телефона іншої людини, «new» — з нового пристрою (17.6)
+        conn.execute("alter table shifts add column device_flag text")
+    if "device_name" not in scols:  # з якого пристрою почали зміну: «Galaxy S23 (samsung SM-S911B)» — для адмінки (17.6)
+        conn.execute("alter table shifts add column device_name text")
     for c in ("battery", "charging", "battery_at", "power_lost_at"):
         if c not in scols:  # заряд телефона з останнього пінгу і коли він розрядився (версія 17.3)
             conn.execute(f"alter table shifts add column {c} integer")
@@ -939,15 +945,25 @@ def _device_where(key, fp, mac):
     return " or ".join(conds), args
 
 
-def first_user(conn, key, fp=None, mac=None):
-    """Хто першим користувався пристроєм (з історії device_history), або None. Керівники й звільнені не
-    рахуються: керівник часто налаштовує застосунок на чужому телефоні, а телефон звільненого переходить новій людині."""
+def first_user(conn, key, fp=None, mac=None, staff=True):
+    """Хто першим користувався пристроєм (з історії device_history), або None. Звільнені не рахуються: телефон
+    звільненого переходить новій людині. staff=False — не рахуються й керівники (як у 17.5): керівник часто
+    налаштовує застосунок на телефоні новачка. Якщо ж у людини вже є свій телефон, телефон керівника — чужий (17.6)."""
     where, args = _device_where(key, fp, mac)
     if not where:
         return None
     return conn.execute(f"select u.id, u.full_name from device_history x join users u on u.id = x.user_id"
-                        f" where ({where.format(key='device_key')}) and u.status != 'dismissed' and u.role not in ('moderator', 'admin')"
-                        " order by x.first_at, x.id limit 1", args).fetchone()
+                        f" where ({where.format(key='device_key')}) and u.status != 'dismissed'"
+                        + ("" if staff else " and u.role not in ('moderator', 'admin')")
+                        + " order by x.first_at, x.id limit 1", args).fetchone()
+
+
+def has_own_phone(conn, user_id, key=None):
+    """Чи є в людини свій телефон, крім цього пристрою: прив'язаний або телефон з історії входів
+    (акаунт зареєстрували чи вели з іншого телефона)."""
+    return bool(conn.execute("select 1 from devices where user_id = ? and device_key != ? union all"
+                             " select 1 from device_history where user_id = ? and phone = 1 and device_key != ? limit 1",
+                             (user_id, key or "", user_id, key or "")).fetchone())
 
 
 def device_owner(conn, key, fp=None, mac=None, other_than=None):
@@ -964,7 +980,9 @@ def device_owner(conn, key, fp=None, mac=None, other_than=None):
                          (*args, skip)).fetchone()
     if bound:
         return bound
-    first = first_user(conn, key, fp, mac)
+    # Керівник — власник телефона, лише якщо в людини other_than уже є свій телефон: інакше він, мабуть,
+    # налаштовував телефон новачку (17.5), і телефон стає новачка
+    first = first_user(conn, key, fp, mac, staff=other_than is None or has_own_phone(conn, other_than, key))
     if first and first["id"] == skip:
         return None
     return conn.execute(f"select u.id, u.full_name from remember_tokens x join users u on u.id = x.user_id"
@@ -1024,12 +1042,61 @@ def foreign_device(conn, user_id, key, fp=None, mac=None):
     for table in ("devices", "device_history"):
         if conn.execute(f"select 1 from {table} x where x.user_id = ? and ({where.format(key='device_key')})", (user_id, *args)).fetchone():
             return None  # свій (у т. ч. той самий телефон з новим кодом після очищення браузера)
-    if mine and key and not (key.startswith("app-") and all(k.startswith("web-") for k in mine)):
+    known = mine + [r[0] for r in conn.execute("select device_key from device_history where user_id = ? and phone = 1", (user_id,))]
+    if known and key and not (key.startswith("app-") and all(k.startswith("web-") for k in known)):
         return "new", None  # (зареєструвався в браузері, а тепер увійшов у застосунку — це той самий телефон)
     return None
 
 
-def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repeats=False):
+def phone_check(conn, user, device, ip, extra, event):
+    """Перевірка пристрою для дій зі зміною (старт, автостарт, пінг). Повертає (позначка для shifts.device_flag
+    або None, текст відмови або None). Телефон іншої людини: позначаємо і, якщо foreign_phone_action не «flag»,
+    не даємо почати чи вести зміну. Новий пристрій — лише позначаємо (це може бути новий телефон самої людини)."""
+    fp, mac = clean_fp((extra or {}).get("fp")), client_mac(ip, cached_only=True)
+    what = foreign_device(conn, user["id"], device, fp, mac)
+    if not what and device and event != "heartbeat":
+        # Вхід з цього пристрою вже записано в історію, тож foreign_device його знає. Але якщо в людини є свій
+        # прив'язаний телефон, а зміну почали з іншого (не той самий телефон з новим кодом) — це новий пристрій
+        mine = [r[0] for r in conn.execute("select device_key from devices where user_id = ?", (user["id"],))]
+        where, args = _device_where(device, fp, mac)
+        if mine and not conn.execute(f"select 1 from devices x where x.user_id = ? and ({where.format(key='device_key')})",
+                                     (user["id"], *args)).fetchone() \
+                and not (device.startswith("app-") and all(k.startswith("web-") for k in mine)):
+            what = ("new", None)
+    if not what:
+        return None, None
+    quiet = event in ("heartbeat", "auto_start")  # фонові пінги: у журнал раз на пів години
+    if what[0] == "other":
+        block = setting("foreign_phone_action", conn) != "flag"
+        flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac, quiet_repeats=quiet,
+                     extra={"зміна": "не дозволено"} if block else None)
+        if block:
+            return None, foreign_text(user, what[1]) + (". Зміну можна почати лише у своєму акаунті зі свого телефона. "
+                                                         "Якщо свій телефон сів чи загубився — попросіть керівника додати зміну")
+        return f"other:{what[1]['full_name']}", None
+    if event != "heartbeat":
+        flag_foreign(conn, user, device, ip, "shift_new_device", what, fp, mac, quiet_repeats=quiet)
+    return "new", None
+
+
+def foreign_text(user, owner):
+    """«Ви в чужому акаунті» — для людини, що зайшла не у свій акаунт: чий акаунт і чий телефон."""
+    return f"Ви в чужому акаунті ({user['full_name']}): цей телефон належить {owner['full_name']}"
+
+
+def shift_device(conn, s):
+    """З якого пристрою почали зміну — для адмінки. Назва, записана при старті (модель з User-Agent чи
+    назва від застосунку); для старих змін і автостарту без запиту — назва цього пристрою з «Пристроїв»
+    людини чи з токена входу; інакше лише тип: застосунок чи браузер."""
+    key, name = s["device"], s["device_name"] if "device_name" in s.keys() else None
+    if not name and key:
+        r = conn.execute("select name from devices where device_key = ? and name is not null union all"
+                         " select name from remember_tokens where device = ? and name is not null limit 1", (key, key)).fetchone()
+        name = r[0] if r else ("застосунок" if key.startswith("app-") else "браузер")
+    return name
+
+
+def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repeats=False, extra=None):
     """Пише підозрілий вхід чи зміну в журнал і повідомляє: власнику акаунта — завжди, керівникам — якщо
     акаунт відкрили на телефоні іншої людини. what = foreign_device(...). Сповіщення — не частіше раз на 30 хв."""
     kind, owner = what
@@ -1039,6 +1106,7 @@ def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repe
         details["чий телефон"] = owner["full_name"]
     if mac:
         details["MAC"] = mac
+    details.update(extra or {})
     if fp and not owner:  # однаковий відбиток буває в однакових телефонів — лише підказка, не доказ
         alike = conn.execute("select u.full_name from devices d join users u on u.id = d.user_id"
                              " where d.fingerprint = ? and d.user_id != ? limit 1", (fp, user["id"])).fetchone()
@@ -1057,11 +1125,15 @@ def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repe
         what_text = "зміну почали" if event == "shift_other_device" else "увійшли"
         notify(conn, user["id"], "Ваш акаунт відкрили на чужому телефоні",
                f"У ваш акаунт {what_text} з телефона {owner['full_name']} ({where}). Якщо це не ви — змініть пароль і скажіть керівнику")
-        notify_staff(conn, "Підозріло: чужий телефон",
-                     f"{user['full_name']}: {what_text} з телефона {owner['full_name']} ({where})")
+        notify_staff(conn, "Підозріло: чужий телефон",  # заголовок — як у v17 (на нього спираються тести)
+                     f"Чужий акаунт — {user['full_name']}: {what_text} з телефона {owner['full_name']} ({where})"
+                     + (" — зміну не дозволено" if (extra or {}).get("зміна") else ""))
     else:
+        what_text = "зміну почали" if event == "shift_new_device" else "увійшли"
         notify(conn, user["id"], "Вхід з нового пристрою",
-               f"У ваш акаунт увійшли з нового пристрою ({where}). Якщо це не ви — змініть пароль і скажіть керівнику")
+               f"У ваш акаунт {what_text} з нового пристрою ({where}). Якщо це не ви — змініть пароль і скажіть керівнику")
+        if event == "shift_new_device" or is_phone():  # новий телефон (не ПК вдома) — керівникам теж
+            notify_staff(conn, "Новий пристрій", f"{user['full_name']}: {what_text} з пристрою, якого сервер ще не бачив ({where})")
 
 
 def remember_device(conn, user_id, key, ip, bind=True):
@@ -1639,6 +1711,10 @@ def try_auto_start(conn, user, loc, ip, device, t):
     if conn.execute("select 1 from shifts where user_id = ? and started_at >= ? and started_at < ?",
                     (user["id"], start - early, end)).fetchone():
         return _why(user, ip, loc, t, "зміну на цей робочий час уже закрито, вдруге сама не починається")
+    # Телефон іншої людини — до прив'язки: «своїм» він не стане, а зміна з нього не почнеться (foreign_phone_action)
+    flag, refuse = phone_check(conn, user, device, ip, None, "auto_start")
+    if refuse:
+        return _why(user, ip, loc, t, "чужий акаунт: телефон іншої людини — зміна з нього не починається")
     if not device_allowed(conn, user["id"], device, ip):
         _why(user, ip, loc, t, "пінг з іншого телефона, ніж прив'язаний до людини (див. картку працівника)")
         if not conn.execute("select 1 from conn_log where user_id = ? and event = 'denied' and details like '%other_device%'"
@@ -1663,9 +1739,10 @@ def try_auto_start(conn, user, loc, ip, device, t):
             began = max(start, o["started_at"])
             note += " · час без світла зараховано"
     try:
-        cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device, note)"
-                           " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (user["id"], loc["id"], began, user["hourly_rate"], t, ip, ip, device, note))
+        cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device, note,"
+                           " device_flag, device_name) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           (user["id"], loc["id"], began, user["hourly_rate"], t, ip, ip, device, note, flag,
+                            device_name() if has_request_context() and device else None))
     except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
         return None
     log_clock(conn, user["id"], cur.lastrowid, "auto_start", ip, loc["id"], True, device)
@@ -1730,16 +1807,18 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
             return {"ok": False, "error": f"Ви не в робочій мережі Wi-Fi (ваш IP {ip})", "ip": ip}
         if shift:
             return state({"already": True})  # повторне натискання при лагах не ламає нічого
+        flag, refuse = phone_check(conn, user, device, ip, extra, "start")  # відмітив колегу на своєму телефоні?
+        if refuse:
+            log_clock(conn, user["id"], None, "denied", ip, loc["id"], False, device, {"reason": "other_phone"})
+            return {"ok": False, "error": refuse}
         try:
-            cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device)"
-                               " values (?, ?, ?, ?, ?, ?, ?, ?)",
-                               (user["id"], loc["id"], t, user["hourly_rate"], t, ip, ip, device))
+            cur = conn.execute("insert into shifts(user_id, location_id, started_at, hourly_rate, last_seen_at, last_seen_ip, start_ip, device,"
+                               " device_flag, device_name) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               (user["id"], loc["id"], t, user["hourly_rate"], t, ip, ip, device, flag,
+                                device_name() if has_request_context() else None))
         except sqlite3.IntegrityError:  # зміну щойно відкрив інший запит
             return state({"already": True})
         log_clock(conn, user["id"], cur.lastrowid, "start", ip, loc["id"], True, device)
-        fp, mac = clean_fp((extra or {}).get("fp")), client_mac(ip, cached_only=True)
-        if (what := foreign_device(conn, user["id"], device, fp, mac)) and what[0] == "other":
-            flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac)  # відмітив колегу на своєму телефоні
         return state()
 
     keep = setting("offline_keeps_counting", conn) == "1"  # втрата зв'язку не зупиняє зміну
@@ -1799,9 +1878,12 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
             return state()
         if device:
             # Чужу зміну тримає живою телефон колеги (Ольга почала зміну, а пінгує телефон Івана) — підозріло
-            fp, mac = clean_fp((extra or {}).get("fp")), client_mac(ip, cached_only=True)
-            if (what := foreign_device(conn, user["id"], device, fp, mac)) and what[0] == "other":
-                flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac, quiet_repeats=True)
+            flag, refuse = phone_check(conn, user, device, ip, extra, "heartbeat")
+            if refuse:
+                return {**state(), "ok": False, "error": refuse}  # такий пінг присутність не продовжує
+            if flag and flag.startswith("other:"):
+                conn.execute("update shifts set device_flag = ? where id = ? and (device_flag is null or device_flag = 'new')",
+                             (flag, shift["id"]))
         away = _away(conn, shift, t, extra)
         b = conn.execute("select * from breaks where shift_id = ? and ended_at is null", (shift["id"],)).fetchone()
         if b and b["kind"] == "wifi_loss":
@@ -2523,7 +2605,7 @@ def timesheet(conn, user_id, month):
                        " where s.user_id = ? and s.started_at >= ? and s.started_at < ? order by s.started_at desc",
                        (user_id, start, end)).fetchall()
     brk, rules = breaks_by_shift(conn, [s["id"] for s in raw]), pay_rules(conn)
-    shifts = [shift_stats(conn, s, rules=rules, breaks=brk.get(s["id"], [])) for s in raw]
+    shifts = [{**shift_stats(conn, s, rules=rules, breaks=brk.get(s["id"], [])), "device_label": shift_device(conn, s)} for s in raw]
     adj = conn.execute("select * from adjustments where user_id = ? and day between ? and ? order by day desc",
                        (user_id, d_from.isoformat(), d_to.isoformat())).fetchall()
     totals = {"shifts": len(shifts), "seconds": sum(s["worked_seconds"] for s in shifts),
@@ -2869,7 +2951,8 @@ LOG_WORDS = {"reason": "причина", "not_on_work_network": "не з роб�
              "ended_at_last_seen": "кінець за останнім пінгом", "slept_seconds": "спав, с", "seconds": "секунд",
              "shifts": "змін", "pause": "пауза", "close": "закрито", "silence": "тиша", "left": "вийшов з Wi-Fi",
              "break_end": "завершити перерву", "offline_keeps_counting": "рахувати без зв'язку",
-             "from": "з", "to": "до", "outage": "сервер не працював", "battery_dead": "телефон розрядився"}
+             "from": "з", "to": "до", "outage": "сервер не працював", "battery_dead": "телефон розрядився",
+             "other_phone": "телефон іншої людини", "blocked": "не дозволено"}
 
 
 @app.template_filter("logdetails")
@@ -3026,13 +3109,20 @@ def _remember_login():
     cookie = request.cookies.get(REMEMBER_COOKIE)
     if not cookie:
         return
+    owner = None
     with _lock:
         conn = db()
         uid = remember_user(conn, cookie, client_ip())
+        if uid:  # токен видали на чужому телефоні — та сама плашка «Ви в чужому акаунті», що й після входу з паролем
+            t = conn.execute("select device, fingerprint, mac from remember_tokens where selector = ?", (cookie.split(":", 1)[0],)).fetchone()
+            what = t and foreign_device(conn, uid, t["device"], t["fingerprint"], t["mac"])
+            owner = what[1]["full_name"] if what and what[0] == "other" else None
         conn.commit()
     if uid:
         session["uid"] = uid
         session.permanent = True
+        if owner:
+            session["foreign_owner"] = owner
         g.pop("user", None)
 
 
@@ -3077,6 +3167,13 @@ def login():
                     # Пристрій не власника (телефон колеги чи невідомий) — підозріло: у журнал і сповіщення
                     if what := foreign_device(conn, u["id"], key, fp, mac):
                         flag_foreign(conn, u, key, ip, "login_other_device" if what[0] == "other" else "login_new_device", what, fp, mac)
+                        if what[0] == "other" and setting("foreign_phone_action", conn) == "block_login" and u["role"] not in STAFF_ROLES:
+                            conn.commit()
+                            session.clear()
+                            flash(foreign_text(u, what[1]) + ". Увійти можна лише у свій акаунт або зі свого телефона")
+                            return render_template("login.html", ip=ip, registration_open=setting("registration_open") == "1"), 403
+                        if what[0] == "other":  # плашка «Ви в чужому акаунті» на всіх сторінках цього входу
+                            session["foreign_owner"] = what[1]["full_name"]
                     else:
                         adopt_device(conn, u["id"], key, fp, mac, ip)
                     note_usage(conn, u["id"], key, fp, mac)
@@ -3444,6 +3541,30 @@ def admin_device_delete(uid, did):
         audit(conn, current_user()["id"], "DELETE", "devices", did, uid, {"device": [f"{d['name']} ({d['device_key']})", None]})
         conn.commit()
     flash("Телефон відв'язано")
+    return redirect(url_for("admin_employee", uid=uid))
+
+
+@app.post("/admin/employee/<int:uid>/history/<int:hid>/<action>")
+@login_required(staff=True)
+def admin_device_history(uid, hid, action):
+    """Пристрій з історії входів людини: «bind» — прив'язати як її телефон (напр., керівник налаштовував його
+    працівнику й сервер вважав телефон керівника), «forget» — забути (не її пристрій, позичала)."""
+    if action not in ("bind", "forget"):
+        abort(404)
+    with _lock:
+        conn = db()
+        h = conn.execute("select * from device_history where id = ? and user_id = ?", (hid, uid)).fetchone() or abort(404)
+        if action == "bind":
+            conn.execute("insert or ignore into devices(user_id, device_key, name, first_ip, last_ip, created_at, last_seen_at, mac, fingerprint)"
+                         " values (?, ?, ?, ?, ?, ?, ?, ?, ?)", (uid, h["device_key"], "Прив'язано керівником", h["last_ip"], h["last_ip"],
+                                                                 now(), h["last_at"], h["mac"], h["fingerprint"]))
+            audit(conn, current_user()["id"], "INSERT", "devices", None, uid, {"device": [None, h["device_key"]]})
+            flash("Пристрій прив'язано як телефон людини")
+        else:
+            conn.execute("delete from device_history where id = ?", (hid,))
+            audit(conn, current_user()["id"], "DELETE", "device_history", hid, uid, {"device": [h["device_key"], None]})
+            flash("Пристрій забуто")
+        conn.commit()
     return redirect(url_for("admin_employee", uid=uid))
 
 
@@ -3858,6 +3979,8 @@ def _live_payload(conn):
             "why": r["presence"]["why"] if r.get("presence") else None,
             "battery": s["battery"] if s else None, "charging": bool(s["charging"]) if s else False,
             "power_lost": s["power_lost_at"] if s else None,
+            "device_flag": s["device_flag"] if s else None,
+            "device": shift_device(conn, s) if s else None, "start_ip": s["start_ip"] if s else None,
         })
     counts = {k: sum(1 for r in rows if r["state"] == k) for k in LIVE_STATES}
     return {"rows": out, "counts": counts, "stats": dashboard_stats(conn), "now": now()}
@@ -4015,6 +4138,10 @@ def admin_employee(uid):
                            week=hours_by_day(conn, uid), open_shift=shift_stats(conn, open_s) if open_s else None,
                            logs=conn.execute("select * from conn_log where user_id = ? order by id desc limit 15", (uid,)).fetchall(),
                            devices=conn.execute("select * from devices where user_id = ? order by id", (uid,)).fetchall(),
+                           device_history=[{**dict(h), "owner": device_owner(conn, h["device_key"], h["fingerprint"], h["mac"], other_than=uid)}
+                                           for h in conn.execute("select * from device_history h where user_id = ? and not exists"
+                                                                 " (select 1 from devices d where d.user_id = h.user_id and d.device_key = h.device_key)"
+                                                                 " order by last_at desc limit 20", (uid,))],
                            remember_count=conn.execute("select count(*) from remember_tokens where user_id = ?", (uid,)).fetchone()[0],
                            **ts)
 

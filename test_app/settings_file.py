@@ -28,7 +28,8 @@ SECTION_ALIASES = {"server": "server", "сервер": "server", "rules": "rules
 POINT_RE = re.compile(r"(?:point|точка)\s*(\d{1,6})", re.I)
 TRUE, FALSE = ("1", "yes", "true", "on", "так", "y"), ("0", "no", "false", "off", "ні", "n")
 UNITS = (("_minutes", "хв"), ("_hours", "год"), ("_seconds", "с"), ("_pct", "%"))
-CHOICE_HELP = {"pause": "пауза", "close": "закрити зміну"}
+CHOICE_HELP = {"pause": "пауза", "close": "закрити зміну", "flag": "лише позначати",
+               "block_shift": "не дати почати чи вести зміну в чужому акаунті (з чужого телефона)", "block_login": "ще й не пустити в чужий акаунт"}
 DEFAULT_PORT = 5000
 # Правила, які лишились у базі від старих версій, але ні на що не впливають: у файл не пишемо, щоб не плутали
 UNUSED = {"sick_auto_approve"}

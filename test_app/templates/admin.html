@@ -394,6 +394,12 @@
     <div class="card-head"><h3>{{ icon('clock') }} Робочий час і автозміна</h3></div>
     <label class="check"><input type="checkbox" name="auto_start" {{ 'checked' if settings.auto_start == '1' }}><span><b>Автостарт:</b> зміна починається сама, коли телефон підключився до робочого Wi-Fi</span></label>
     <label class="check"><input type="checkbox" name="device_lock" {{ 'checked' if settings.device_lock == '1' }}><span><b>Лише свій телефон:</b> автозміна вмикається тільки з телефона, з якого людина зареєструвалась (або першого, з якого прийшла). Новий телефон — відв'яжіть старий у картці працівника</span></label>
+    <div style="margin-top:10px"><label>Чужий акаунт (зайшли в чужий акаунт з телефона іншої людини чи почали з нього зміну)</label>
+      <select name="foreign_phone_action">
+        {% for k, v in [('flag', 'Позначати й повідомляти: плашка «Ви в чужому акаунті», зміна з позначкою і пристроєм в адмінці (типово)'), ('block_shift', 'Ще й не дати почати чи вести зміну в чужому акаунті'), ('block_login', 'Ще й не пускати в чужий акаунт (керівників пускає)')] %}
+        <option value="{{ k }}" {{ 'selected' if settings.foreign_phone_action == k }}>{{ v }}</option>{% endfor %}
+      </select>
+      <span class="muted small">Чий телефон: кому прив'язаний, або хто першим з нього заходив. Позначка ⚠ видно на зміні в «Огляді» й у табелі, подія — у «Підключеннях».</span></div>
     <div class="form-grid" style="margin-top:6px">
       <div><label>Зміна починається о</label><input type="time" name="work_start" value="{{ settings.work_start }}"></div>
       <div><label>Зміна закінчується о</label><input type="time" name="work_end" value="{{ settings.work_end }}"></div>
@@ -540,7 +546,7 @@
     w.document.close(); w.focus(); setTimeout(() => w.print(), 300);
   }
 </script>
-{% elif tab == 'live' %}<script>window.CURRENCY = {{ currency|tojson }};</script><script src="{{ url_for('static', filename='live.js') }}?v=5"></script>
+{% elif tab == 'live' %}<script>window.CURRENCY = {{ currency|tojson }};</script><script src="{{ url_for('static', filename='live.js') }}?v=8"></script>
 {% elif tab == 'employees' %}
 <script>
   // Роль змінюється одразу, без збереження форми; сервер не дасть прибрати останнього адміністратора

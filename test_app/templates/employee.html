@@ -50,6 +50,18 @@
         <form method="post" action="{{ url_for('admin_device_delete', uid=u.id, did=d.id) }}" data-confirm="Відв'язати {{ d.name or 'пристрій' }}? Наступний телефон, з якого прийде автопінг, прив'яжеться сам."><button class="sm">{{ icon('x', 'sm') }}Відв'язати</button></form>
       </div>
       {% else %}<div class="muted small">Ще не прив'язано. Телефон запам'ятається під час реєстрації або з першого автопінгу з робочого Wi-Fi.</div>{% endfor %}
+      {% if device_history %}
+      <div class="muted small" style="margin:12px 0 4px"><b>Пристрої, з яких заходив(ла)</b> — не прив'язані. Чужий телефон тут означає, що людина заходила з телефона колеги.
+        Якщо це насправді її телефон (напр., застосунок налаштовував керівник) — «Прив'язати»; не її і більше не знадобиться — «Забути».</div>
+      {% for h in device_history %}
+      <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+        <div class="grow"><b>{{ 'Телефон' if h.phone else "Комп'ютер / інше" }}</b>{% if h.owner %} <span class="pill bad">чужий: {{ h.owner.full_name }}</span>{% endif %}
+          <div class="muted small">уперше {{ h.first_at|dt }} · востаннє {{ h.last_at|dt }}{% if h.last_ip %}, IP {{ h.last_ip }}{% endif %}</div>
+          <div class="muted small mono">код {{ h.device_key }}{% if h.mac %} · MAC {{ h.mac }}{% endif %}{% if h.fingerprint %} · відбиток {{ h.fingerprint }}{% endif %}</div></div>
+        <form method="post" action="{{ url_for('admin_device_history', uid=u.id, hid=h.id, action='bind') }}" data-confirm="Прив'язати цей пристрій як телефон {{ u.full_name }}?"><button class="sm">{{ icon('check', 'sm') }}Прив'язати</button></form>
+        <form method="post" action="{{ url_for('admin_device_history', uid=u.id, hid=h.id, action='forget') }}"><button class="sm">{{ icon('x', 'sm') }}Забути</button></form>
+      </div>
+      {% endfor %}{% endif %}
     </div>
     {% if me.role == 'admin' and u.id != me.id %}
     <div class="card">
@@ -117,6 +129,8 @@
         {% if s.close_reason == 'wifi_lost' %}<span class="pill bad">втрата Wi-Fi</span>{% endif %}
         {% if s.close_reason == 'auto_max_length' %}<span class="pill warn">автозакриття</span>{% endif %}
         {% if s.is_edited %}<span class="pill plain">відредаговано</span>{% endif %}
+        {% if s.device_flag and s.device_flag.startswith('other:') %}<span class="pill bad" title="Зміну почали або вели в чужому акаунті — з телефона іншої людини">⚠ чужий акаунт — телефон {{ s.device_flag[6:] }}</span>{% elif s.device_flag == 'new' %}<span class="pill warn" title="Зміну почали з пристрою, якого сервер ще не бачив у цієї людини">⚠ новий пристрій</span>{% endif %}
+        {% if s.device_label %}<div class="small{{ '' if s.device_flag and s.device_flag.startswith('other:') else ' muted' }}"{% if s.device_flag and s.device_flag.startswith('other:') %} style="color:var(--bad-text)"{% endif %}>розпочата з: {{ s.device_label }}{% if s.mac %} · MAC {{ s.mac }}{% endif %}</div>{% endif %}
         {% if s.unpaid_break_seconds %}<div class="muted small">перерви {{ s.unpaid_break_seconds|dur }}</div>{% endif %}
         {% if s.note %}<div class="muted small">{{ s.note }}</div>{% endif %}</td>
       <td class="hide-mobile muted">{{ s.location or '' }}</td>

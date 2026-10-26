@@ -202,6 +202,31 @@ class PhoneHandoverTest(ScenarioBase):
             uid = c.execute("select id from users where username = 'ivan'").fetchone()[0]
             self.assertTrue(core.device_allowed(c, uid, phone.key, phone.ip))  # і стає «своїм» Івану
 
+    def test_admin_phone_into_account_with_own_phone(self):
+        # 17.6: у Івана вже є свій телефон, а в його акаунт зайшли з телефона адміна — це чужий акаунт
+        Phone(self.net, 30).login(IVAN)
+        phone = Phone(self.net, 31)
+        phone.login("admin", "admin123")
+        phone.logout()
+        phone.login(IVAN)
+        self.assertEqual(len(self.events("ivan", "login_other_device")), 1)
+        self.assertIn("Ви в чужому акаунті", phone.req("get", "/me").get_data(as_text=True))  # плашка
+        # Адмін у картці Івана: «Пристрої, з яких заходив» → «Прив'язати» — телефон стає Івановим
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        admin = Phone(self.net, 60, ua=PC).login("admin", "admin123")
+        page = admin.req("get", f"/admin/employee/{uid}").get_data(as_text=True)
+        self.assertIn("Пристрої, з яких заходив", page)
+        hid = self.sql("select id from device_history where user_id = ? and device_key = ?", uid, phone.key)[0][0]
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        r = admin.req("post", f"/admin/employee/{uid}/history/{hid}/bind", data={"csrf": csrf}, headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 302)
+        phone.logout()
+        phone.login(IVAN)
+        self.assertEqual(len(self.events("ivan", "login_other_device")), 1)  # більше не позначає
+        self.assertNotIn("Ви в чужому акаунті", phone.req("get", "/me").get_data(as_text=True))
+        with core.connect() as c:
+            self.assertTrue(core.device_allowed(c, uid, phone.key, phone.ip))
+
     def test_phone_of_dismissed_or_unbound(self):
         phone = Phone(self.net, 32)
         phone.login(IVAN)
