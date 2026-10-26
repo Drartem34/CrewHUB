@@ -366,10 +366,13 @@ def _same(a, b):
 def apply_manual_edit(conn, u, p, trusted=False):
     """profile.json поправили руками → перевіряємо і переносимо в базу. Повертає текст помилки або None.
     trusted — дані написав сам сервер (відновлення після збою бази): тоді переносимо й роль, статус, ставку."""
+    ignored = []
     if not trusted:
-        changed = [k for k in PROTECTED if not _same(p.get(k), u[k])]
-        if changed:
-            return f"{', '.join(changed)} змінює лише адміністратор в адмінці (файл їх не міняє)"
+        # Роль, статус і ставку файл не міняє (це права й гроші — лише адмін в адмінці), але решту правки
+        # (посада, ім'я, телефон…) застосовуємо, як в оригінальній версії; про проігнороване — у ПОМИЛКА.txt
+        ignored = [k for k in PROTECTED if not _same(p.get(k), u[k])]
+        if ignored:
+            p = {**p, **{k: u[k] for k in ignored}}
     new = {}
     name = (p.get("full_name") or "").strip()
     if not name:
@@ -408,6 +411,9 @@ def apply_manual_edit(conn, u, p, trusted=False):
         core.follow_phone(conn, u, new["phone"])
         conn.execute(f"update users set {', '.join(k + ' = ?' for k in new)} where id = ?", (*new.values(), u["id"]))
         core.audit(conn, None, "UPDATE", "users", u["id"], u["id"], {**changes, "via": ["", "правка profile.json"]})
+    if ignored:
+        return (f"{', '.join(ignored)} змінює лише адміністратор в адмінці (файл їх не міняє). "
+                "Решту правки застосовано" if changes else f"{', '.join(ignored)} змінює лише адміністратор в адмінці (файл їх не міняє)")
     return None
 
 
@@ -491,7 +497,8 @@ def scan(conn):
             continue
         err = apply_manual_edit(conn, u, p)
         if err:
-            _write(os.path.join(path, "ПОМИЛКА.txt"), f"Правку profile.json не прийнято: {err}.\nПовернуто попередні дані.\n")
+            _write(os.path.join(path, "ПОМИЛКА.txt"), f"Частину правки profile.json не прийнято: {err}.\n"
+                   if err.endswith("застосовано") else f"Правку profile.json не прийнято: {err}.\nПовернуто попередні дані.\n")
         elif os.path.exists(os.path.join(path, "ПОМИЛКА.txt")):
             os.remove(os.path.join(path, "ПОМИЛКА.txt"))
         conn.execute("insert or ignore into dirty_users values (?)", (u["id"],))  # перезаписати profile.json з новим _sync

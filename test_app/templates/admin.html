@@ -502,7 +502,7 @@
     {% if mirror_error %}<div class="banner bad">{{ icon('alert') }}<span>Друга копія не записалась: {{ mirror_error }}</span></div>{% endif %}
   </form>
   {% for b in backups %}
-    <div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line)">{{ icon('file', 'sm') }}<span class="grow">{{ b.name }}</span><span class="muted">{{ b.size }}</span><span class="muted">{{ b.mtime|dt }}</span></div>
+    <div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line)">{{ icon('file', 'sm') }}<span class="grow">{{ b.name }}{% if b.manual %} <span class="muted">· на вимогу</span>{% endif %}</span><span class="muted">{{ b.size }}</span><span class="muted">{{ b.mtime|dt }}</span></div>
   {% else %}<div class="muted small" style="margin-top:8px">Копій ще немає.</div>{% endfor %}
 </div>
 </div>

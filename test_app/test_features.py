@@ -416,6 +416,8 @@ class MaintenanceTest(CrewHubBase):
 class ForeignDeviceTest(CrewHubBase):
     """Хтось входить у чужий акаунт не з телефона власника — сервер позначає це підозрілим."""
     IVAN_PHONE = "Mozilla/5.0 (Linux; Android 14; wv) CrewHubApp/2.0 CrewHubDevice/ivanphone001 CrewHubModel/samsung%20SM-A525F"
+    CHROME = "Mozilla/5.0 (Linux; Android 13; SM-A515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+    PC = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
     def bind(self, username, key):
         with core.connect() as c:
@@ -476,6 +478,49 @@ class ForeignDeviceTest(CrewHubBase):
         self.login_as("0937654321", ua="Mozilla/5.0 (Linux; Android 14) CrewHubApp/2.0 CrewHubDevice/olhaphone0001")
         self.login_as("0671234567", device_id="web-12121212")    # у Івана ще немає свого телефона — нема з чим звіряти
         self.assertEqual(self.sql("select count(*) from conn_log where allowed = 0")[0][0], 0)
+
+    def test_pc_counts_like_a_phone(self):
+        # Як у версії 17: з комп'ютера, яким користувався Іван, зайшли в акаунт Ольги — підозріло
+        self.login_as("0671234567", device_id="web-0ffc0ffc", ua=self.PC)
+        self.login_as("0937654321", device_id="web-0ffc0ffc", ua=self.PC)
+        self.assertIn(("login_other_device", 0), self.events("olha"))
+
+    def test_logout_does_not_forget_whose_phone_it_is(self):
+        # Іван увійшов на своєму телефоні (нічого не прив'язано), вийшов і зайшов в акаунт Ольги
+        ivan = self.login_as("0671234567", device_id="web-1a1a1a1a")
+        page = ivan.get("/me").get_data(as_text=True)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        self.assertEqual(ivan.post("/logout", data={"csrf": csrf}, headers={"Origin": "http://localhost"}).status_code, 302)
+        self.assertEqual(self.sql("select count(*) from remember_tokens where device = 'web-1a1a1a1a'")[0][0], 0)
+        self.login_as("0937654321", device_id="web-1a1a1a1a")
+        self.assertIn(("login_other_device", 0), self.events("olha"))
+        self.assertIn("Іван Петренко", self.sql("select details from conn_log where event = 'login_other_device'")[0][0])
+        self.assertIn("Підозріло: чужий телефон", self.notes("moder"))
+        # а сам Іван на своєму телефоні — як завжди, без підозр
+        self.login_as("0671234567", device_id="web-1a1a1a1a")
+        self.assertEqual([e for e in self.events("ivan") if e[1] == 0], [])
+
+    def test_colleagues_phone_keeps_someone_elses_shift_alive(self):
+        # Ольга почала зміну зі свого телефона, а далі зміну пінгує телефон Івана
+        self.login_as("0671234567", device_id="web-1a1a1a1a")
+        olha = self.login_as("0937654321", device_id="web-0aa11bb2")
+        self.assertTrue(olha.post("/api/clock/start", json={"device_id": "web-0aa11bb2"},
+                                  headers={"X-Forwarded-For": WORK_IP, "User-Agent": self.CHROME}).get_json()["ok"])
+        for _ in range(3):
+            olha.post("/api/clock/heartbeat", json={"device_id": "web-1a1a1a1a"}, headers={"X-Forwarded-For": WORK_IP, "User-Agent": self.CHROME})
+        self.assertEqual(self.events("olha").count(("shift_other_device", 0)), 1)  # у журнал раз на пів години
+        self.assertIn("Підозріло: чужий телефон", self.notes("admin"))
+
+    def test_colleagues_phone_never_becomes_own(self):
+        # У Ольги ще немає «свого» телефона; перший пінг автозміни — з телефона Івана: він не стає її телефоном
+        with core.connect() as c:
+            c.execute("update settings set value = '1' where key = 'auto_start'")
+            c.commit()
+        self.bind("ivan", "web-1a1a1a1a")  # телефон Івана прив'язаний до нього
+        with core.connect() as c:
+            olha = c.execute("select id from users where username = 'olha'").fetchone()[0]
+            self.assertFalse(core.device_allowed(c, olha, "web-1a1a1a1a", WORK_IP))
+            self.assertTrue(core.device_allowed(c, olha, "web-0aa11bb2", WORK_IP))  # свій — так
 
     def test_repeated_login_notifies_once(self):
         self.bind("ivan", "app-ivanphone001")
@@ -990,6 +1035,26 @@ class OutageTest(CrewHubBase):
         self.assertEqual(self.shift()["status"], "paused")
         self.clock("heartbeat")
         self.assertEqual(self.worked(), 3600)  # 10:00–11:00, далі неоплачувана пауза до 12:25
+
+
+class DayoffBannerTest(CrewHubBase):
+    """Плашка дей-оффу з'являється лише після дозволу керівника (відкритий збір заявок або дозвіл людині)."""
+
+    def test_banner_only_after_permission(self):
+        ivan = self.login("ivan")
+        for url in ("/me?tab=clock", "/me?tab=schedule"):
+            page = ivan.get(url).get_data(as_text=True)
+            self.assertNotIn("Попросити дей-офф", page, url)
+            self.assertNotIn("Запросити дей-офф", page, url)
+        # модератор відкрив збір — плашка є
+        moder = self.login("moder", "moder123", client=core.app.test_client())
+        self.assertEqual(moder.post("/dayoffs/campaign", data={"action": "open"}).status_code, 302)
+        self.assertIn("Запросити дей-офф", ivan.get("/me?tab=clock").get_data(as_text=True))
+        self.assertIn("Попросити дей-офф", ivan.get("/me?tab=schedule").get_data(as_text=True))
+        # закрив — знову немає
+        moder.post("/dayoffs/campaign", data={"action": "close"})
+        self.assertNotIn("Запросити дей-офф", ivan.get("/me?tab=clock").get_data(as_text=True))
+        self.assertNotIn("Попросити дей-офф", ivan.get("/me?tab=schedule").get_data(as_text=True))
 
 
 if __name__ == "__main__":

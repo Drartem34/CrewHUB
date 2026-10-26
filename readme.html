@@ -1,130 +1,754 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="uk">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CrewHub · огляд системи</title>
-<!-- Сторінка повністю офлайн: шрифти системні, іконки — вбудований SVG. Відкривається з диска без інтернету. -->
-<style>
-  :root { --brand: #e8173d; --brand-soft: #fde8ec; --bg: #f6f6f8; --surface: #fff; --text: #17171c; --muted: #61616b; --line: #e4e4ea; --ok: #12a05c; }
-  @media (prefers-color-scheme: dark) { :root { --brand: #ff4b6b; --brand-soft: #3a1720; --bg: #0f0f13; --surface: #18181e; --text: #f2f2f5; --muted: #a0a0ab; --line: #2a2a33; --ok: #3fd38b; } }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 18px 64px; }
-  header { display: flex; align-items: center; gap: 14px; }
-  .logo { width: 52px; height: 52px; border-radius: 14px; background: #111; display: grid; place-items: center; flex: none; }
-  .logo svg { width: 32px; height: 32px; stroke: var(--brand); stroke-width: 2.1; fill: none; }
-  h1 { margin: 0; font-size: 30px; line-height: 1.15; }
-  h2 { font-size: 22px; margin: 44px 0 14px; display: flex; align-items: center; gap: 10px; }
-  h3 { margin: 0 0 6px; font-size: 17px; }
-  p { margin: 0 0 10px; max-width: 70ch; }
-  .lead { color: var(--muted); font-size: 18px; margin-top: 14px; }
-  .icon { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-  h2 .icon { color: var(--brand); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
-  .card .icon { color: var(--brand); margin-bottom: 6px; }
-  .card p { color: var(--muted); font-size: 15px; margin: 0; }
-  ol.steps { margin: 0; padding-left: 22px; display: grid; gap: 8px; }
-  ol.steps li { max-width: 72ch; }
-  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; font-size: 15px; }
-  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 13px; }
-  tr:last-child td { border-bottom: 0; }
-  .tw { overflow-x: auto; }
-  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; }
-  code { background: var(--brand-soft); padding: 1px 6px; border-radius: 6px; }
-  pre { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; overflow-x: auto; margin: 0 0 10px; }
-  a { color: var(--brand); }
-  .docs a { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--text); font-weight: 600; }
-  .docs a:hover { color: var(--brand); }
-  .docs p { margin-top: 4px; }
-  details { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-bottom: 8px; }
-  summary { cursor: pointer; font-weight: 600; }
-  details p { margin: 8px 0 0; color: var(--muted); }
-  footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrewHub | Документація</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+
+    <style>
+        :root {
+            --primary: #e8173d;
+            --primary-glow: rgba(232, 23, 61, 0.22);
+            --accent: #ffffff;
+            --bg-main: #0b0b0e;
+            --bg-secondary: #121216;
+            --bg-card: #18181d;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --border: #27272a;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
+            --ok: #22c55e;
+            --android: #3ddc84;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-main);
+            background-image: radial-gradient(circle at 50% -20%, var(--primary-glow) 0%, transparent 50%);
+            color: var(--text-primary);
+            line-height: 1.6;
+            display: flex;
+            min-height: 100vh;
+        }
+
+        nav {
+            width: 290px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            padding: 2rem 1.5rem;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        nav h3 {
+            color: var(--primary);
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 0.4rem;
+            font-size: 1.4rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-shadow: 0 0 15px var(--primary-glow);
+        }
+        nav .sub { color: var(--text-secondary); font-size: 0.78rem; margin-bottom: 2rem; padding-left: 2px; }
+
+        nav ul { list-style: none; }
+
+        nav a {
+            display: block;
+            padding: 0.7rem 1rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.35rem;
+            transition: 0.2s;
+            font-weight: 500;
+            font-size: 0.92rem;
+            border-left: 3px solid transparent;
+        }
+        nav a:hover, nav a.active {
+            background: rgba(232, 23, 61, 0.1);
+            color: var(--primary);
+            border-left: 3px solid var(--primary);
+        }
+        nav a i { width: 22px; }
+
+        main {
+            margin-left: 290px;
+            padding: 3rem 4rem;
+            width: 100%;
+            max-width: 1120px;
+        }
+
+        h1 { font-size: 2.8rem; margin-bottom: 1rem; font-weight: 800; letter-spacing: -1px; }
+        h1 span { color: var(--primary); font-family: 'JetBrains Mono', monospace; }
+
+        h2 {
+            margin-top: 4rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.8rem;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.5rem;
+            scroll-margin-top: 20px;
+        }
+        h2 i { color: var(--primary); font-size: 1.2rem; }
+
+        h3.block { margin-top: 2rem; margin-bottom: 1rem; color: white; font-size: 1.15rem; }
+
+        p { color: var(--text-secondary); margin-bottom: 1rem; font-size: 1.03rem; }
+        a.inline { color: var(--primary); text-decoration: none; }
+        a.inline:hover { text-decoration: underline; }
+
+        .lead { font-size: 1.15rem; color: var(--text-primary); }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.3rem;
+            margin: 2rem 0;
+        }
+
+        .card {
+            background: var(--bg-card);
+            padding: 1.6rem;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            border-top: 4px solid var(--primary);
+            transition: 0.3s;
+        }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .card h4 { margin-bottom: 0.7rem; color: var(--text-primary); font-size: 1.12rem; display: flex; align-items: center; gap: 8px; }
+        .card h4 i { color: var(--primary); }
+        .card p { font-size: 0.95rem; margin-bottom: 0.5rem; }
+
+        pre {
+            background: #000;
+            padding: 1.1rem 1.2rem;
+            border-radius: 12px;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            margin: 1rem 0;
+        }
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            color: #fb7185;
+            font-size: 0.9rem;
+        }
+        p code, li code, td code { background: rgba(232,23,61,0.1); padding: 1px 6px; border-radius: 5px; color: #fda4af; }
+
+        .alert-box {
+            padding: 1.3rem 1.4rem;
+            border-radius: 12px;
+            margin: 1.8rem 0;
+            border: 1px solid transparent;
+            display: flex;
+            gap: 15px;
+            align-items: flex-start;
+        }
+        .alert-box i { font-size: 1.4rem; margin-top: 3px; }
+        .alert-box p { margin-bottom: 0; }
+        .alert-box strong { color: var(--text-primary); }
+        .warning { background: rgba(245, 158, 11, 0.06); border-color: rgba(245, 158, 11, 0.3); color: #fbbf24; }
+        .danger  { background: rgba(239, 68, 68, 0.06); border-color: rgba(239, 68, 68, 0.3); color: #f87171; }
+        .info    { background: rgba(59, 130, 246, 0.06); border-color: rgba(59, 130, 246, 0.3); color: #60a5fa; }
+        .ok      { background: rgba(34, 197, 94, 0.06); border-color: rgba(34, 197, 94, 0.3); color: #4ade80; }
+
+        table.files { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: 0.93rem; }
+        table.files th, table.files td { text-align: left; padding: 0.75rem 0.9rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+        table.files th { color: var(--primary); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        table.files td:first-child { white-space: nowrap; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-size: 0.86rem; }
+        table.files td { color: var(--text-secondary); }
+        table.files tr:hover td { background: rgba(255,255,255,0.015); }
+
+        ul.feature-list { list-style: none; margin: 10px 0; }
+        ul.feature-list li { margin-bottom: 9px; color: var(--text-secondary); display: flex; align-items: flex-start; gap: 10px; font-size: 0.97rem; }
+        ul.feature-list li::before { content: "\f00c"; font-family: "Font Awesome 6 Free"; font-weight: 900; color: var(--primary); font-size: 12px; margin-top: 5px; }
+
+        ol.steps { margin: 1rem 0 1rem 1.2rem; color: var(--text-secondary); }
+        ol.steps li { margin-bottom: 0.6rem; padding-left: 0.3rem; }
+        ol.steps li b { color: var(--text-primary); }
+
+        .badge { font-size: 0.62rem; padding: 3px 9px; border-radius: 6px; vertical-align: middle; margin-left: 8px; font-weight: 800; text-transform: uppercase; border: 1px solid; font-family: 'JetBrains Mono', monospace; }
+        .badge.py { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: #3b82f6; }
+        .badge.android { background: rgba(61,220,132,0.15); color: var(--android); border-color: var(--android); }
+        .badge.core { background: var(--primary); color: white; border-color: var(--primary); }
+
+        .faq-item { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 1rem; overflow: hidden; }
+        .faq-item summary { padding: 1.1rem 1.3rem; cursor: pointer; font-weight: 600; color: var(--text-primary); font-size: 1.02rem; display: flex; align-items: center; gap: 10px; list-style: none; }
+        .faq-item summary::-webkit-details-marker { display: none; }
+        .faq-item summary::before { content: "\f054"; font-family: "Font Awesome 6 Free"; font-weight: 900; color: var(--primary); font-size: 0.8rem; transition: 0.2s; }
+        .faq-item[open] summary::before { transform: rotate(90deg); }
+        .faq-item[open] summary { border-bottom: 1px solid var(--border); }
+        .faq-item .answer { padding: 1.1rem 1.3rem; color: var(--text-secondary); font-size: 0.97rem; }
+        .faq-item .answer p { margin-bottom: 0.7rem; }
+        .faq-item .answer p:last-child { margin-bottom: 0; }
+
+        .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 1.2rem 0; }
+        .tag { background: var(--bg-card); border: 1px solid var(--border); border-radius: 20px; padding: 5px 14px; font-size: 0.82rem; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
+        .tag b { color: var(--primary); }
+
+        footer { margin-top: 5rem; padding-top: 2rem; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 0.88rem; }
+
+        @media (max-width: 860px) {
+            nav { display: none; }
+            main { margin-left: 0; padding: 2rem 1.3rem; }
+            h1 { font-size: 2rem; }
+        }
+    </style>
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M8.5 5.42A7.45 7.45 0 0 0 8.5 18.58M15.5 5.42A7.45 7.45 0 0 1 15.5 18.58"/><circle cx="12" cy="12" r="2.5"/></symbol>
-  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.3a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></symbol>
-  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-  <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20M16 15h2M6 6V5a2 2 0 0 1 2-2h10"/></symbol>
-  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
-  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/></symbol>
-  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
-  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
-  <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 9l1.5-5h15L21 9M3 9v11h18V9M3 9h18M9 20v-6h6v6"/></symbol>
-  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></symbol>
-  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
-</svg>
-<div class="wrap">
-  <header>
-    <span class="logo"><svg viewBox="0 0 24 24"><use href="#i-logo"/></svg></span>
-    <div><h1>CrewHub</h1><div style="color:var(--muted)">облік робочого часу за робочим Wi-Fi</div></div>
-  </header>
-  <p class="lead">Прийшов на точку, телефон у робочому Wi-Fi — зміна йде. Вийшов з мережі — сервер це бачить і ставить зміну на паузу.
-    Усе працює на вашому комп'ютері в мережі точки: без хмар, підписок і інтернету.</p>
 
-  <div class="grid" style="margin-top:22px">
-    <div class="card"><svg class="icon"><use href="#i-wifi"/></svg><h3>Присутність за Wi-Fi</h3><p>Сервер знає мережі кожної точки й бачить IP телефона. Підробити не вийде: IP визначає сервер.</p></div>
-    <div class="card"><svg class="icon"><use href="#i-play"/></svg><h3>Зміна сама</h3><p>Застосунок починає зміну, коли людина приходить у робочий час, і ставить паузу, коли виходить.</p></div>
-    <div class="card"><svg class="icon"><use href="#i-wallet"/></svg><h3>Зарплата</h3><p>Ставки, нічні й вихідні множники, оплачувані перерви, дей-оффи, бонуси й штрафи, CSV для Excel.</p></div>
-    <div class="card"><svg class="icon"><use href="#i-shield"/></svg><h3>Надійно</h3><p>Дані окремо від програми, щоденні копії, самовідновлення бази, журнал кожної правки.</p></div>
-  </div>
+<nav>
+    <h3><i class="fa-solid fa-user-clock"></i> CrewHub</h3>
+    <div class="sub">Облік робочого часу за робочим Wi-Fi</div>
+    <ul>
+        <li><a href="#about" class="active"><i class="fa-solid fa-circle-info"></i> Огляд</a></li>
+        <li><a href="#how"><i class="fa-solid fa-wifi"></i> Як це працює</a></li>
+        <li><a href="#roles"><i class="fa-solid fa-users-gear"></i> Ролі та доступи</a></li>
+        <li><a href="#structure"><i class="fa-solid fa-folder-tree"></i> Структура проєкту</a></li>
+        <li><a href="#server"><i class="fa-brands fa-python"></i> Сервер: файли</a></li>
+        <li><a href="#android"><i class="fa-brands fa-android"></i> Android-застосунок</a></li>
+        <li><a href="#nuances"><i class="fa-solid fa-sliders"></i> Ключові механізми</a></li>
+        <li><a href="#start"><i class="fa-solid fa-terminal"></i> Запуск</a></li>
+        <li><a href="#recover"><i class="fa-solid fa-key"></i> Відновлення адміна</a></li>
+        <li><a href="#tests"><i class="fa-solid fa-vial"></i> Тести і стрес</a></li>
+        <li><a href="#faq"><i class="fa-solid fa-circle-question"></i> Питання-відповіді</a></li>
+        <li><a href="#new17"><i class="fa-solid fa-star"></i> Нове у версіях 17+</a></li>
+        <li><a href="#docs"><i class="fa-solid fa-book"></i> Інші документи</a></li>
+    </ul>
+</nav>
 
-  <h2><svg class="icon"><use href="#i-play"/></svg>Запуск за 3 хвилини</h2>
-  <ol class="steps">
-    <li>Поставте Python 3.10+ (у Windows позначте «Add Python to PATH»).</li>
-    <li>Відкрийте папку <code>test_app</code> і запустіть <code>start.bat</code> (Windows) або <code>./start.sh</code> (Linux, macOS).</li>
-    <li>Відкрийте адресу з консолі (наприклад <code>http://192.168.1.23:5000</code>) на телефоні в тому ж Wi-Fi.</li>
-    <li>Увійдіть: <code>050 000 00 01</code> / <code>admin123</code>. Система одразу попросить задати свій пароль.</li>
-    <li>«Правила» → години й оплата; «Точки і Wi-Fi» → назва точки; «Працівники» → люди; QR з «Точки і Wi-Fi» — працівникам.</li>
-  </ol>
+<main>
+    <section id="about">
+        <h1>Crew<span>Hub</span> <span class="badge core">документація</span></h1>
+        <p class="lead">CrewHub — це система обліку робочого часу й присутності, яка перевіряє працівника за <b>робочою Wi-Fi мережею</b>. Прийшов на точку, телефон у робочому Wi-Fi — зміна йде. Вийшов з мережі — сервер це бачить і ставить зміну на паузу.</p>
+        <p>Усе працює на вашому власному сервері: Flask + SQLite, жодних хмар і підписок. Сайт відкривається в браузері, а для працівників є Android-застосунок, який рахує зміну навіть зі сплячим телефоном у кишені.</p>
 
-  <h2><svg class="icon"><use href="#i-store"/></svg>Де лежать дані</h2>
-  <p>Окремо від програми, у папці <code>CrewHub-data</code> в домашній папці користувача
-    (у Windows — <code>C:\Users\&lt;ім'я&gt;\CrewHub-data</code>). Нову версію програми можна розпакувати поверх старої чи будь-куди — люди,
-    зміни, правила й точки лишаться. Правила й точки ще й лежать текстом у <code>settings.ini</code>: його можна правити Блокнотом.</p>
-<pre>CrewHub-data/
-├── crewhub.db       база
-├── settings.ini     правила, точки, Wi-Fi, порт
-├── people/          особова папка кожного працівника
-├── backups/         щоденні копії (30), ручні, видалені
-└── logs/            журнал сервера</pre>
+        <div class="tag-row">
+            <span class="tag"><b>Python</b> Flask + Waitress</span>
+            <span class="tag"><b>БД</b> SQLite (WAL)</span>
+            <span class="tag"><b>Клієнт</b> HTML + JS (PWA)</span>
+            <span class="tag"><b>Моб.</b> Android WebView</span>
+            <span class="tag"><b>Мова</b> українська</span>
+        </div>
 
-  <h2><svg class="icon"><use href="#i-users"/></svg>Ролі</h2>
-  <div class="tw"><table>
-    <tr><th>Роль</th><th>Що може</th></tr>
-    <tr><td><b>Працівник</b></td><td>Своя зміна, табель, графік, запити (дей-офф, відпустка, лікарняний, правка часу, пропущена зміна), колеги, профіль.</td></tr>
-    <tr><td><b>Тімлід</b></td><td>Те саме + дей-оффи команди (дозволити, погодити, перенести, збір заявок), зміни в графіку, передача змін.</td></tr>
-    <tr><td><b>Модератор</b></td><td>Керування: огляд, працівники, запити, графік, точки, журнали, зарплата. Власні записи змінює лише адмін.</td></tr>
-    <tr><td><b>Адміністратор</b></td><td>Усе + правила, ролі, робочі мережі, скидання паролів, видалення, резервні копії.</td></tr>
-  </table></div>
+        <div class="card-grid">
+            <div class="card">
+                <h4><i class="fa-solid fa-wifi"></i> Присутність за Wi-Fi</h4>
+                <p>Сервер знає IP-діапазон кожної точки. Телефон заходить з робочої мережі — зміна рахується; інакша мережа — ні.</p>
+            </div>
+            <div class="card" style="border-top-color: var(--android);">
+                <h4><i class="fa-brands fa-android"></i> Рахує навіть у сні</h4>
+                <p>Застосунок у фоні пінгує сервер раз на хвилину. Якщо телефон справді вимкнув Wi-Fi — сервер помічає це за 3 хвилини, а не за 20.</p>
+                <p style="font-size:0.85rem;"><b>Зараз (з версії 16):</b> щоб берегти батарею, служба в сні прокидається раз на 5–15 хв, а вихід з Wi-Fi помічає сама (<code>onLost</code>) і одразу повідомляє точний час. З версії 2.2 застосунок ще й показує сповіщення «Телефон відключився від робочого Wi-Fi».</p>
+            </div>
+            <div class="card" style="border-top-color: var(--warning);">
+                <h4><i class="fa-solid fa-qrcode"></i> Підключення за QR</h4>
+                <p>Працівник не бачить IP сервера — він сканує QR або вводить короткий код. На екрані лише назва компанії.</p>
+            </div>
+            <div class="card" style="border-top-color: var(--info);">
+                <h4><i class="fa-solid fa-wallet"></i> Зарплата й графік</h4>
+                <p>Ставки, нічні/вихідні коефіцієнти, табель, графік на місяць, дей-оффи з лімітами й оплатою — усе всередині.</p>
+            </div>
+        </div>
+    </section>
 
-  <h2><svg class="icon"><use href="#i-file"/></svg>Документація</h2>
-  <div class="grid docs">
-    <div class="card"><a href="docs/01-install.md"><svg class="icon"><use href="#i-play"/></svg>Встановлення й оновлення</a><p>Перший запуск, служба, перенесення, змінні середовища.</p></div>
-    <div class="card"><a href="docs/02-admin-guide.md"><svg class="icon"><use href="#i-shield"/></svg>Адміністратор</a><p>Кожна вкладка й кнопка керування.</p></div>
-    <div class="card"><a href="docs/03-employee-guide.md"><svg class="icon"><use href="#i-users"/></svg>Працівник і тімлід</a><p>Зміна, табель, графік, запити, дей-оффи.</p></div>
-    <div class="card"><a href="docs/04-settings.md"><svg class="icon"><use href="#i-file"/></svg>Правила і settings.ini</a><p>Кожне налаштування з типовим значенням.</p></div>
-    <div class="card"><a href="docs/05-shifts-and-pay.md"><svg class="icon"><use href="#i-clock"/></svg>Зміни, Wi-Fi і гроші</a><p>Паузи, автозміна, приклад розрахунку.</p></div>
-    <div class="card"><a href="docs/06-data-and-backups.md"><svg class="icon"><use href="#i-store"/></svg>Дані й бекапи</a><p>Копії, відновлення, перенесення сервера.</p></div>
-    <div class="card"><a href="docs/07-android.md"><svg class="icon"><use href="#i-phone"/></svg>Android</a><p>Що вміє, дозволи, збірка, ключ.</p></div>
-    <div class="card"><a href="docs/08-security.md"><svg class="icon"><use href="#i-shield"/></svg>Безпека</a><p>Права, вхід, захист від підміни IP.</p></div>
-    <div class="card"><a href="docs/09-developer.md"><svg class="icon"><use href="#i-file"/></svg>Розробнику</a><p>Архітектура, база, маршрути, тести.</p></div>
-    <div class="card"><a href="docs/10-faq.md"><svg class="icon"><use href="#i-alert"/></svg>Питання й несправності</a><p>Що робити, якщо…</p></div>
-  </div>
+    <section id="how">
+        <h2><i class="fa-solid fa-wifi"></i> Як це працює</h2>
+        <p>Логіка присутності — серце системи. Ось повний ланцюжок від «прийшов на роботу» до «зміна порахована».</p>
 
-  <h2><svg class="icon"><use href="#i-alert"/></svg>Найчастіші питання</h2>
-  <details><summary>Чи можна відмітитися з дому?</summary><p>Ні. Зміна рахується лише з IP робочої мережі точки, а IP визначає сервер. Закрити зміну з дому можна, але кінцем стане останній пінг з точки.</p></details>
-  <details><summary>Телефон спав у кишені — зміна стала на паузу?</summary><p>Ні, якщо стоїть застосунок: сервер чекає до 20 хв, а вихід з Wi-Fi застосунок повідомляє сам з точним часом.</p></details>
-  <details><summary>Оновив програму — правила скинулись?</summary><p>Ні: дані й settings.ini лежать у папці даних окремо від програми.</p></details>
-  <details><summary>Забули пароль адміна?</summary><p>На самому сервері: <code>python recover_admin.py</code>.</p></details>
-  <details><summary>Чи потрібен інтернет?</summary><p>Ні. Сервер і телефони працюють у локальній мережі, іконки й шрифти вбудовані.</p></details>
+        <ol class="steps">
+            <li><b>Точка і її мережа.</b> Адмін створює точку (локацію) і прив'язує до неї IP-діапазон (CIDR) робочого Wi-Fi, за бажання — назву й пароль мережі. Функція <code>suggest_cidr()</code> підказує діапазон за поточним IP.</li>
+            <li><b>Прив'язка пристрою.</b> Під час першого входу застосунок отримує унікальний ключ пристрою (<code>device_key()</code>, таблиця <code>devices</code>, trust-on-first-use). Так зміну не можна відкрити з чужого телефона.</li>
+            <li><b>Старт зміни.</b> Працівник тисне «На зміну» (або вона стартує автоматично в межах робочого вікна). Сервер звіряє IP клієнта з діапазоном точки — <code>match_location()</code>.</li>
+            <li><b>Пульс (heartbeat).</b> Застосунок раз на хвилину шле серверу короткий сигнал: «я тут, у робочій мережі». Разом із ним — прапорець <code>unrestricted</code> (чи дозволено застосунку працювати у фоні без обмежень батареї).</li>
+            <li><b>Вихід з мережі.</b> Пропав робочий Wi-Fi — зміна стає на паузу (<code>start_wifi_pause()</code>). Повернувся — рахунок продовжується.</li>
+            <li><b>Прибиральник (sweep).</b> Фоновий потік кожні 15 секунд (<code>sweep()</code>) перевіряє, хто давно не озивався, і закриває «забуті» зміни.</li>
+            <li><b>Підрахунок.</b> <code>shift_stats()</code> і <code>weighted_seconds()</code> рахують час із урахуванням коефіцієнтів (ніч, вихідні), а <code>payroll()</code> зводить це в зарплату.</li>
+        </ol>
 
-  <footer>CrewHub · сервер Flask + SQLite, застосунок Android · версія 17. Ця сторінка працює без інтернету.</footer>
-</div>
+        <div class="alert-box info">
+            <i class="fa-solid fa-lightbulb"></i>
+            <div>
+                <strong>Чому саме Wi-Fi, а не GPS?</strong>
+                <p>GPS сідає на батарею, бреше в приміщеннях і його легко підробити. Робоча Wi-Fi мережа — це фізичний факт: щоб бути в ній, треба бути в будівлі. Простіше, точніше й чесніше.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="roles">
+        <h2><i class="fa-solid fa-users-gear"></i> Ролі та доступи</h2>
+        <p>Чотири ролі. Кожна бачить рівно стільки, скільки їй треба.</p>
+        <div class="card-grid">
+            <div class="card">
+                <h4><i class="fa-solid fa-user"></i> Працівник</h4>
+                <p>Своя зміна, табель, графік, запити (дей-офф, відпустка, лікарняний, правка часу), профіль. Чужого не бачить.</p>
+            </div>
+            <div class="card">
+                <h4><i class="fa-solid fa-user-tie"></i> Тімлід</h4>
+                <p>Усе, що працівник, плюс графік команди, обміни змінами й узгодження дей-оффів у своїй команді.</p>
+            </div>
+            <div class="card" style="border-top-color: var(--warning);">
+                <h4><i class="fa-solid fa-user-shield"></i> Модератор</h4>
+                <p>Повне керування: огляд «хто на зміні», працівники, запити, графік, точки й Wi-Fi, підключення, зарплата.</p>
+            </div>
+            <div class="card" style="border-top-color: var(--danger);">
+                <h4><i class="fa-solid fa-crown"></i> Адмін</h4>
+                <p>Усе, що модератор, плюс вкладка «Правила» (налаштування системи) і відновлення пароля з сервера.</p>
+            </div>
+        </div>
+        <p style="font-size:0.9rem;"><i>У коді: <code>STAFF_ROLES = ("moderator","admin")</code>, <code>DAYOFF_ROLES = ("teamlead","moderator","admin")</code>.</i></p>
+    </section>
+
+    <section id="structure">
+        <h2><i class="fa-solid fa-folder-tree"></i> Структура проєкту</h2>
+        <p>Проєкт складається з двох частин: <b>сервер</b> (<code>test_app/</code>) і <b>мобільний застосунок</b> (<code>android/</code>). Плюс документація й збірки у корені.</p>
+        <pre><code>crewhub/
+├── test_app/            # сервер: Flask + SQLite
+│   ├── crewhub_core.py      # ★ усе ядро: БД, логіка, маршрути
+│   ├── profiles.py          # особові папки people/&lt;Ім'я&gt;/
+│   ├── start.py             # запуск одним файлом
+│   ├── tui.py               # панель сервера в терміналі (rich)
+│   ├── recover_admin.py     # скидання пароля адміна з сервера
+│   ├── test_crewhub.py      # автотести (unittest)
+│   ├── test_hardening.py    # тести на виправлені дірки й баги
+│   ├── test_features.py     # тести функцій версії 17+ (settings.ini, пристрої, MAC, заряд, світло…)
+│   ├── test_scenarios.py    # сценарії з життя: кілька телефонів у Wi-Fi, робочий день, усі сторінки
+│   ├── settings_file.py     # settings.ini у папці даних ↔ «Правила» в базі
+│   ├── lan.py               # пристрої в мережі сервера (ARP, NetBIOS, mDNS), присутність телефона
+│   ├── install_service.sh   # служба systemd (Linux)
+│   ├── start.bat / start.sh # запуск з автоперезапуском
+│   ├── requirements.txt     # залежності
+│   ├── templates/           # HTML-сторінки (Jinja2)
+│   ├── static/              # CSS, JS, іконки, APK
+│   └── people/              # особові папки працівників (з версії 17 — у папці даних, див. нижче)
+├── android/             # застосунок (WebView-обгортка)
+│   ├── src/ua/crewhub/app/  # 4 Java-класи
+│   ├── res/                 # ресурси, іконки
+│   ├── libs/                # zxing-core (сканер QR)
+│   ├── demo/                # демо-застосунок без сервера (знімки сторінок у APK)
+│   └── build.sh             # збірка APK
+├── docs/                # документація для передачі проєкту (01-install … 10-faq, CHANGELOG, карта коду)
+├── readme.html          # ця документація
+├── reports/             # звіти (стрес-тест) — в оригінальному описі; у цьому архіві папки немає
+└── screenshots/         # скріни з тестової компанії — в оригінальному описі; у цьому архіві папки немає
+
+~/CrewHub-data/          # папка даних (з версії 17, CREWHUB_DATA): окремо від програми
+├── crewhub.db               # база
+├── settings.ini             # правила, точки, Wi-Fi, порт — текстом
+├── people/                  # особові папки
+├── backups/  (manual/)      # щоденні копії і «Завантажити зараз»
+└── logs/crewhub.log         # журнал сервера</code></pre>
+    </section>
+
+    <section id="server">
+        <h2><i class="fa-brands fa-python"></i> Сервер: що робить кожен файл</h2>
+        <p>Серце — <code>crewhub_core.py</code> (~3000 рядків у версії 16, зараз ~4800; детальна карта всіх функцій і маршрутів з номерами рядків — <a href="docs/11-code-map.md">docs/11-code-map.md</a>). Решта файлів крутяться навколо нього.</p>
+
+        <table class="files">
+            <tr><th>Файл</th><th>Що робить · як · яким способом</th></tr>
+            <tr>
+                <td>crewhub_core.py <span class="badge core">ядро</span></td>
+                <td>Уся система в одному модулі: створення й міграції БД (<code>init_db</code>), підключення SQLite у режимі WAL з <code>timeout=15</code> і <code>busy_timeout=15000</code> (<code>connect</code>), уся логіка змін (<code>clock_action</code>, <code>sweep</code>, <code>shift_stats</code>), зарплата (<code>payroll</code>), дей-оффи (<code>dayoff_*</code>), прив'язка пристроїв (<code>device_key</code>), QR-підключення (<code>connect_code</code>, <code>connect_link</code>), а також усі веб-маршрути Flask (<code>/login</code>, <code>/me</code>, <code>/admin</code>, <code>/api/live</code>, <code>/health</code> тощо) і фільтри Jinja2. <br><b>Додано у версіях 17+:</b> папка даних і перенесення старої бази (<code>DATA_DIR</code>, <code>migrate_legacy_data</code>); пристрої людини й історія входів (<code>device_history</code>, <code>note_usage</code>, <code>device_owner</code>, <code>first_user</code>, <code>foreign_device</code>, <code>flag_foreign</code>, <code>adopt_device</code>); відбиток і MAC (<code>clean_fp</code>, <code>client_mac</code>); доказ сервера для застосунку (<code>/api/hello?n=&amp;s=</code>); присутність телефона в мережі й автостарт без застосунку (<code>presence_step</code>, <code>presence_starters</code>); заряд телефона (<code>note_battery</code>, <code>battery_dead</code>); відключення світла (<code>restore_after_outage</code>, таблиця <code>outages</code>).</td>
+            </tr>
+            <tr>
+                <td>profiles.py <span class="badge py">python</span></td>
+                <td>Дзеркалить кожного працівника у теку <code>people/&lt;Ім'я&gt;/</code>: <code>profile.json</code>, <code>картка.txt</code>, <code>shifts.csv</code>, <code>shifts.json</code>, <code>requests.json</code>, <code>avatar.jpg</code>. <b>База — єдине джерело правди</b>, теки — зручний експорт. Фоновий потік: правка в базі → теку переписано; <code>profile.json</code> поправили руками → зміни йдуть у базу; теку видалили чи зник диск → сервер відтворює теку з бази (акаунт не чіпає). Створити акаунт із нової/поверненої теки можна лише вручну: <code>python profiles.py import "Ім'я"</code>. Так збій файлової системи ніколи не зносить людей із бази. Аватарки теж лежать у базі (таблиця <code>avatars</code>), а <code>avatar.jpg</code> у теці — лише копія: сервер роздає фото з бази (<code>/avatar/&lt;id&gt;</code>), тож воно переживає втрату чи відтворення теки.</td>
+            </tr>
+            <tr>
+                <td>start.py <span class="badge py">python</span></td>
+                <td>Запуск одним файлом: піднімає сервер на Waitress (кількість потоків — <code>CREWHUB_THREADS</code>, типово 48), стартує фоновий прибиральник змін (<code>start_sweeper</code>) і бекапи (<code>start_backups</code>), показує локальні адреси (щоб телефони в тій самій мережі знали, куди заходити) і живий монітор у консолі.</td>
+            </tr>
+            <tr>
+                <td>tui.py <span class="badge py">python</span></td>
+                <td>Красива панель сервера в терміналі на бібліотеці <code>rich</code>: хто на зміні, останні події, навантаження, адреси. Вмикається, якщо <code>rich</code> встановлено і це справжній термінал; інакше лишається простий текстовий монітор.</td>
+            </tr>
+            <tr>
+                <td>recover_admin.py <span class="badge py">python</span></td>
+                <td>Термінальна програма: якщо забули пароль адміна — запускаєш на сервері, вона питає новий пароль (<code>getpass</code>), хешує його (<code>scrypt</code>) і перезаписує для користувача з роллю <code>admin</code>, ставить прапорець «змінити при вході» й пише запис в аудит. Безпека гарантується тим, що доступ до самого сервера (SSH) має лише власник.</td>
+            </tr>
+            <tr>
+                <td>test_crewhub.py <span class="badge py">unittest</span></td>
+                <td>Автотести: вхід, зміни, дей-оффи й ліміти, QR-коди, прив'язка пристроїв, сплячий телефон, скидання пароля, WAL і бекапи. Запуск: <code>python3 -m unittest test_crewhub</code> (pytest у проєкті не використовується).</td>
+            </tr>
+            <tr>
+                <td>test_hardening.py <span class="badge py">unittest</span></td>
+                <td>Тест на кожну виправлену дірку й баг версії 16: безпека входу, гроші, CSRF, фаз-тест «сміття в кожну форму не дає 500».</td>
+            </tr>
+            <tr>
+                <td>test_features.py <span class="badge py">unittest</span></td>
+                <td>Функції версії 17+: папка даних і <code>settings.ini</code>, пристрої в мережі, іконки без інтернету, вхід у чужий акаунт (код пристрою, історія, MAC, відбиток), доказ сервера, присутність за MAC, заряд, відключення світла, плашка дей-оффу.</td>
+            </tr>
+            <tr>
+                <td>test_scenarios.py <span class="badge py">unittest</span></td>
+                <td>Сценарії з життя на стиках функцій: кілька телефонів в одній Wi-Fi (свій IP, MAC, браузер чи застосунок), «чий телефон» у всіх варіантах, повний робочий день, відключення світла, кожна сторінка для кожної ролі.</td>
+            </tr>
+            <tr>
+                <td>settings_file.py <span class="badge py">python</span></td>
+                <td>Файл <code>settings.ini</code> у папці даних: правила, точки, Wi-Fi, робочі мережі й порт текстом з поясненнями. Зміна в адмінці → файл переписано (<code>sync</code>); правка файлу Блокнотом → за 10 с у базі (трьохстороннє злиття з останнім відомим станом, щоб не перекрити свіжу зміну з адмінки); неправильне значення не застосовується, причина — на початку файлу. Свіжа база отримує правила й точки з файлу.</td>
+            </tr>
+            <tr>
+                <td>lan.py <span class="badge py">python</span></td>
+                <td>«Пристрої в мережі» в «Огляді»: раз на 5 хв таблиця сусідів (ARP: <code>/proc/net/arp</code>, <code>arp -a</code>), імена з NetBIOS / mDNS / DNS роутера, виробник за MAC, модель з User-Agent, чий телефон. Ще — <code>present()</code>: «стукає» в IP і бере лише ті записи ARP, що щойно відповіли (<code>ip neigh</code> REACHABLE на Linux, <code>Get-NetNeighbor</code> на Windows) — так сервер бачить телефон у Wi-Fi, коли браузер спить.</td>
+            </tr>
+            <tr>
+                <td>templates/ <span class="badge core">Jinja2</span></td>
+                <td><code>base.html</code> — каркас (бічне меню, шапка, теми); <code>me.html</code> — кабінет працівника (зміна, табель, графік, запити, профіль, налаштування додатку); <code>admin.html</code> — пульт керування; <code>login/register/password/error</code> — допоміжні; <code>_ui.html</code> — макроси (іконки, аватари).</td>
+            </tr>
+            <tr>
+                <td>static/ <span class="badge core">клієнт</span></td>
+                <td><code>style.css</code> — усе оформлення; <code>app.js</code> — тема, тости, діалоги, вкладка налаштувань; <code>clock.js</code> — екран зміни; <code>live.js</code> — живий огляд; <code>nav.js</code> — переходи без перезавантаження; <code>qrcode.js</code> — генерація QR; <code>motion.css/js</code> — анімації; <code>manifest.json</code>, <code>icon.svg</code> — PWA; тут же лежать <code>.apk</code> для завантаження. З версії 17 іконки вбудовані у сторінку (SVG-спрайт у <code>_ui.html</code>) і не залежать від інтернету; <code>app.js</code> ще рахує відбиток пристрою (<code>crewFingerprint</code>), <code>clock.js</code> шле в пінгах відбиток і заряд.</td>
+            </tr>
+        </table>
+    </section>
+
+    <section id="android">
+        <h2><i class="fa-brands fa-android"></i> Android-застосунок</h2>
+        <p>Застосунок — це тонка обгортка-WebView навколо сайту плюс фонова служба, яка тримає зв'язок із сервером навіть зі сплячим екраном. Збирається скриптом <code>build.sh</code>.</p>
+        <table class="files">
+            <tr><th>Клас</th><th>Що робить</th></tr>
+            <tr>
+                <td>MainActivity.java <span class="badge android">activity</span></td>
+                <td>Головне вікно (WebView). Декодує QR/код підключення (<code>decodeCode</code>, <code>applyLink</code>), пропонує під'єднатися до робочого Wi-Fi (<code>offerWifi</code>), показує назву компанії (не IP), має кнопку сканування QR. Схема <code>crewhub://connect</code>. <b>З версії 2.1:</b> <code>verifyThenLoad</code> — сервер не відповідає за старою адресою → шукає його в мережі (<code>WatchService.discover</code>) і входить збереженим токеном, лише після доказу сервера (<code>proven</code>).</td>
+            </tr>
+            <tr>
+                <td>WatchService.java <span class="badge android">service</span></td>
+                <td>Фонова служба: шле «пульс» раз на хвилину навіть у сні, передає прапорець <code>unrestricted</code>. Коли зникає Wi-Fi (<code>leftWifi</code>), чекає до 30 секунд на мобільну мережу, щоб повідомити сервер, що працівник вийшов. <b>Зараз:</b> у сні прокидається раз на 5–15 хв (батарея); з 2.1 — пошук сервера після зміни IP (<code>discover</code>, <code>proven</code>, <code>moveServer</code>); з 2.2 — сповіщення «Телефон відключився від робочого Wi-Fi» (<code>wifiGone</code>, <code>wifiAlert</code>, <code>wifiBack</code>); з 2.3 — заряд у кожному пінгу (<code>battery</code>) і останній пінг у мить вимкнення телефона (<code>ACTION_SHUTDOWN</code>).</td>
+            </tr>
+            <tr>
+                <td>ScanActivity.java <span class="badge android">activity</span></td>
+                <td>Сканер QR-коду через камеру (бібліотека ZXing). Повертає розкодований текст у MainActivity для підключення до сервера.</td>
+            </tr>
+            <tr>
+                <td>BootReceiver.java <span class="badge android">receiver</span></td>
+                <td>Піднімає фонову службу після перезавантаження телефона, щоб облік не переривався.</td>
+            </tr>
+            <tr>
+                <td>demo/ <span class="badge android">demo APK</span></td>
+                <td>Демо-застосунок без сервера: <code>build_demo.py</code> знімає сторінки сервера від імені працівника й адміна в <code>assets/www</code>, <code>demo.js</code> підміняє запити, <code>DemoActivity.java</code> віддає файли за адресою <code>https://demo.crewhub/</code> прямо з APK.</td>
+            </tr>
+        </table>
+        <div class="alert-box ok">
+            <i class="fa-solid fa-battery-full"></i>
+            <div>
+                <strong>Нюанс із батареєю</strong>
+                <p>Щоб облік був точним, застосунку варто дати дозвіл працювати у фоні без обмежень батареї. Тоді він пінгує щохвилини навіть у сні, і сервер відрізняє «телефон спить» від «працівник пішов».</p>
+                <p><b>Зараз (з версії 16):</b> дозвіл усе одно потрібен (інакше Android «приспить» службу довше), але щохвилини в сні служба вже не пінгує — вихід з Wi-Fi вона помічає сама й повідомляє точний час.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="nuances">
+        <h2><i class="fa-solid fa-sliders"></i> Ключові механізми й нюанси</h2>
+
+        <h3 class="block">🔒 Підключення за QR-кодом (без IP)</h3>
+        <p>Працівники не повинні бачити IP сервера — лише назву компанії. Тому адмін показує QR-код або короткий код, у якому IP із портом зашито (<code>connect_code</code> — 10 символів base32, XOR-ключ <code>CrewHub!</code>; <code>connect_link</code> несе ще назву компанії й Wi-Fi). Застосунок сканує й сам налаштовується.</p>
+
+        <h3 class="block">📶 Сплячий телефон проти вимкненого Wi-Fi</h3>
+        <p>Була проблема: працівник вимикав Wi-Fi, а сервер цього не помічав. Рішення — поле <code>shifts.bg_ok</code>. Якщо застосунку дозволено працювати без обмежень батареї, він озивається щохвилини навіть у сні. Тоді <b>3 хвилини тиші = реальний вихід</b>, а не 20 хвилин поблажки для сплячого телефона.</p>
+        <p><b>Як зараз (з версії 16):</b> Вихід з Wi-Fi (зокрема вимкнений Wi-Fi) застосунок помічає сам (<code>onLost</code>) і повідомляє серверу точний час (<code>away_since</code>) — через мобільний інтернет одразу або з першим пінгом після повернення. Тому служба не тримає процесор увімкненим усю зміну: у сні Android будить її раз на 5–15 хв, а сервер для змін із застосунку чекає <code>sleep_grace_minutes</code> (20) — це лише на випадок, що телефон вимкнули. Поза зміною сервер підказує (<code>next_check</code>), коли наступна перевірка має сенс, і телефон не будиться даремно. Поле <code>shifts.bg_ok</code> лише показує, чи дозволено застосунку працювати без обмежень батареї.</p>
+
+        <h3 class="block">⏸️ «Рахувати далі при втраті зв'язку»</h3>
+        <p>Налаштування <code>offline_keeps_counting</code>: якщо увімкнено, зміна не ставиться на паузу при втраті зв'язку, а закривається в кінці робочого вікна. Корисно там, де Wi-Fi нестабільний.</p>
+
+        <h3 class="block">🛡️ Захист від підміни IP</h3>
+        <p>IP визначає сам сервер (за реальним підключенням), а не те, що надсилає телефон, тож заголовок <code>X-Forwarded-For</code> приймається лише від довіреного локального проксі. Крім того, <b>зміну прив'язано до мережі тієї точки, де її почали</b> (<code>ip_in_location()</code>): якщо під час зміни пінг приходить з іншої робочої точки або з підміненої чужої мережі, це не рахується як присутність — зміна стає на паузу, а закривається часом останнього пінгу зі своєї точки. Разом із прив'язкою пристрою це не дає «перенести» зараховану присутність деінде.</p>
+
+        <h3 class="block">🔑 Постійний вхід (не за IP)</h3>
+        <p>Щоб працівник не вводив логін і пароль щоразу, після входу сервер видає <b>довгоживучий токен пристрою</b> («запам'ятати мене», таблиця <code>remember_tokens</code>, формат <code>selector:validator</code>, у базі лише хеш). Токен лежить у cookie на телефоні й у браузері; за ним людина входить автоматично — навіть якщо роутер дав інший IP телефону чи серверу. <b>Чому не за IP:</b> IP у Wi-Fi і мобільній мережі постійно змінюється і його легко підмінити, тож прив'язка входу до IP і викидала б людину при зміні мережі, і була б діркою в безпеці. Токен має ковзний термін (поки ним користуються — не протухає) і відкликається: кнопка «Вийти на всіх пристроях» в адмінці, а також автоматично при скиданні чи зміні пароля і звільненні. Фонова служба застосунку носить той самий токен, тож і її пінги не «протухають».</p>
+
+        <h3 class="block">🧷 Захист від CSRF</h3>
+        <p>Щоб чужий сайт не зміг тихо надіслати запит від імені залогіненого адміна, працюють три рівні: кука сесії має <code>SameSite=Lax</code> (не їде на сторонні сайти); на кожен POST сервер звіряє заголовок <code>Origin/Referer</code> зі своїм хостом (<code>_csrf_guard</code>); а кожна HTML-форма несе одноразовий токен <code>session['csrf']</code>, який автоматично підставляється в усі форми. API застосунку (<code>/api/*</code>, JSON) токен не вимагає — фонова служба телефона не браузер і куку чужого сайту не підставить, тож це не послаблює захист.</p>
+
+        <h3 class="block">🗓️ Дей-оффи: ліміти й оплата</h3>
+        <ul class="feature-list">
+            <li><code>dayoff_per_day</code> — скільки людей можуть узяти дей-офф в один день (типово 1).</li>
+            <li><code>dayoff_per_month</code> — скільки дей-оффів на людину на місяць (типово 1).</li>
+            <li><code>dayoff_paid</code> — чи оплачується дей-офф по повній ставці за повний робочий день (типово так).</li>
+        </ul>
+        <p style="font-size:0.9rem;">Перевіряє <code>dayoff_limit_error()</code>, оплату рахує <code>dayoff_pay()</code>.</p>
+
+        <h3 class="block">📣 Збір заявок на дей-офф (кампанія)</h3>
+        <p>Модератор чи тімлід на вкладці «Дей-оффи й обміни» натискає <b>«Відкрити збір заявок»</b>. На 3 реальних дні у кожного працівника на головному екрані з'являється маленька кнопка <b>«Запросити дей-офф»</b>: людина обирає бажаний день, і заявка одразу йде тімліду на погодження (із конкретною датою, не «дозвіл потім обереш»). Через 3 дні збір сам закривається і кнопка зникає; хто не встиг — тімліди ставлять день самі. Стан збору зберігається в <code>meta.dayoff_open_until</code> (<code>dayoff_campaign_until()</code>), маршрут <code>/dayoffs/campaign</code>. Заявку з датою модератор погоджує одним натиском — вона стає <code>approved</code>, а заплановані зміни того дня прибираються.</p>
+
+        <h3 class="block">🗓️ Дей-офи одним кліком у таблиці «Графік» (місяць)</h3>
+        <p>У місячній сітці графіка вгорі є перемикач режиму: <b>«Зміни»</b> (клік ставить/прибирає робочу зміну) і <b>«Дей-офи»</b> (клік ставить/знімає дей-офф людині на цей день). Так тімліду зручно швидко розставляти вихідні всій команді, не відкриваючи кожен запит окремо. Перший стовпець із іменами «липкий» — не губиться під час горизонтальної прокрутки. Маршрут <code>/schedule/dayoff</code> (ставить <code>approved</code>-дей-офф одразу, з перевіркою лімітів).</p>
+
+        <h3 class="block">💸 Бонуси і штрафи</h3>
+        <p>На картці працівника кнопка «Бонус / штраф» додає разове нарахування (<code>adjustments</code>). Суму можна задати двома способами: <b>фіксовану</b> (у валюті) або <b>у відсотках</b> — тоді вона рахується від заробітку людини за той місяць, у який потрапляє дата (години + дей-офи, без інших бонусів і штрафів). Кожен рядок бонуса/штрафа має кнопку <b>×</b> — помилково додане нарахування можна скасувати (<code>/admin/adjustment/&lt;id&gt;/delete</code>). Усе потрапляє в журнал аудиту й у зарплату (<code>payroll</code>).</p>
+
+        <h3 class="block">📱 Прив'язка WhatsApp і Telegram</h3>
+        <p>У профілі є поля WhatsApp і Telegram. Фільтр <code>walink</code> перетворює номер на посилання <code>wa.me</code> (з <code>0XX</code> на <code>380XX</code>) — одним кліком написати колезі.</p>
+
+        <h3 class="block">🗄️ Чому саме SQLite і де межа</h3>
+        <p>База працює в режимі WAL (паралельне читання без блокувань), усі записи серіалізує глобальний замок (<code>_lock</code>), а <code>busy_timeout=15000</code> не дає впасти під навантаженням. Стрес-тест показав 0 помилок блокування. Єдине вузьке місце — ранковий пік, коли всі стартують зміну одночасно: записи йдуть по черзі. Для сотень людей цього вистачає; тисячам знадобився б Postgres.</p>
+
+        <h3 class="block">💾 Бекапи й відновлення</h3>
+        <p>Сервер сам робить бекапи БД (<code>start_backups</code>, типово раз на добу), дзеркалить у окрему теку й прибирає старі (<code>_prune</code>). Плюс дані кожної людини лежать у теці <code>people/</code> — звідти людину можна відновити, просто повернувши теку.</p>
+        <p><b>Уточнення з версії 16:</b> Сервер сам робить бекапи БД (<code>start_backups</code>, типово раз на добу), дзеркалить у окрему теку й прибирає старі (<code>_prune</code>). «Завантажити копію» в «Правилах» кладе файл окремо (<code>backups/manual</code>) і щоденні копії не витісняє. Пошкоджену базу сервер відновлює з найсвіжішої <b>справної</b> копії. Плюс дані кожної людини лежать у теці <code>people/</code> (без хешів паролів): повернуту теку підключають командою <code>python profiles.py import "Ім'я"</code>, після чого людині скидають пароль.</p>
+
+        <h3 class="block">🧱 Надійність</h3>
+        <p>Фонові потоки (контроль Wi-Fi, бекап, папки) звітують про себе: <code>/health</code> відповідає 503, а адмін бачить банер, якщо котрийсь падає чи замовк. Журнал — <code>logs/crewhub.log</code> з ротацією. Усі значення з форм і «Правил» перевіряються: сміття не дає помилки 500 і не валить сервер. Сервер на VPS з UTC рахує час у <code>Europe/Kyiv</code> (або <code>CREWHUB_TZ</code>).</p>
+
+        <h3 class="block">📁 Папка даних і settings.ini (версія 17)</h3>
+        <p>База, особові папки, копії, журнали й <code>server_id.txt</code> лежать у <code>~/CrewHub-data</code> (або <code>CREWHUB_DATA</code>), окремо від програми: оновлення чи заміна файлів програми нічого не скидає. Стара база з <code>test_app/</code> переноситься сама один раз (<code>migrate_legacy_data</code>) і лишається поруч як страховка. Правила, точки, Wi-Fi і порт ще й у <code>settings.ini</code> текстом — див. <code>settings_file.py</code> вище.</p>
+
+        <h3 class="block">📡 Пристрої в мережі (версія 17)</h3>
+        <p>Блок унизу «Огляду»: усі пристрої в мережі сервера, і незареєстровані — IP, MAC, назва, модель, виробник, чий телефон. Сканування раз на 5 хв (<code>lan.py</code>), вимикається в «Правилах» (<code>lan_scan</code>).</p>
+
+        <h3 class="block">🕵️ Вхід у чужий акаунт / зміна з чужого телефона</h3>
+        <p>Сервер знає «свій» пристрій людини і позначає підозрілим (червоний запис у «Підключеннях», «Безпека сьогодні», сповіщення власнику акаунта й керівникам): вхід у чужий акаунт з телефона іншої людини, старт зміни з чужого телефона, а з версії 17.5 — і коли чужу зміну «тримає» пінгами телефон колеги. Чий пристрій: прив'язаний («Телефон людини») → з нього зараз увійшла інша людина (токен) → хто першим ним користувався (<code>device_history</code>, вихід з акаунта її не стирає). Той самий телефон з новим кодом (очистили браузер) упізнається за MAC (з ARP сервера) і відбитком (<code>crewFingerprint</code>) — але лише після перевірки на чужий, тож «свій» ніколи не ховає чужий вхід. Вхід не блокується (людина могла позичити телефон), лише позначається.</p>
+
+        <h3 class="block">🔁 Сервер змінив IP — без пароля (застосунок 2.1)</h3>
+        <p>Застосунок тримає токен входу окремо разом з <code>server_id</code>. Сервер не відповідає за старою адресою — застосунок шукає його у своїй підмережі /24 і віддає токен лише серверу, що довів, що він справжній: <code>/api/hello?n=&lt;випадкове&gt;&amp;s=&lt;selector&gt;</code> → <code>proof = HMAC-SHA256(sha256(validator), "n:server_id")</code>. Підставний пристрій із тим самим <code>server_id</code> токен не отримає. Браузер так не вміє (cookie прив'язані до адреси).</p>
+
+        <h3 class="block">🔔 Попередження «Телефон відключився від робочого Wi-Fi» (застосунок 2.2)</h3>
+        <p>Під час зміни телефон вийшов з робочого Wi-Fi і за хвилину не повернувся (або опинився в чужій Wi-Fi) — сповіщення зі звуком на окремому каналі. Повернувся — тихе «Знову в робочому Wi-Fi». Не спрацьовує під час обіду/паузи людини і поза зміною.</p>
+
+        <h3 class="block">🌙 Браузер засинає — сервер бачить телефон (версія 17.2)</h3>
+        <p>Браузер (і PWA теж) з вимкненим екраном не пінгує — сайти не можуть працювати у фоні. Тому сервер раз на 30 с сам «стукає» в телефони змін, що мовчать понад 40 с, і бере MAC, що щойно відповів на ARP у мережі точки (<code>presence_step</code>, <code>lan_presence</code>). Відповів — те саме, що пінг.</p>
+
+        <h3 class="block">▶️ Зміна без застосунку (версія 17.3)</h3>
+        <p>Сервер сам починає зміну, коли бачить «свій» телефон людини в мережі точки в робочий час (<code>presence_starters</code> → <code>try_auto_start</code>), і веде її, як із застосунком: пропав — пауза, довго немає — закриття.</p>
+
+        <h3 class="block">🔋 Телефон розрядився (версія 17.3, застосунок 2.3)</h3>
+        <p>Застосунок шле заряд у кожному пінгу і в мить вимкнення телефона; браузер — якщо дає (<code>navigator.getBattery</code>). Телефон замовк із зарядом ≤ <code>battery_dead_pct</code> (5 %) і не на зарядці — це «розрядився», а не «пішов»: зміна рахується до кінця робочого часу, не довше <code>battery_keep_minutes</code> (240), подія «Телефон розрядився», сповіщення керівникам.</p>
+
+        <h3 class="block">⚡ Відключення світла (версія 17.4)</h3>
+        <p>Фонова перевірка кожні 15 с пише «сервер живий» (<code>alive_at</code>). Після запуску сервер бачить, з котрої до котрої його не було (таблиця <code>outages</code>), і (<code>outage_credit = 1</code>) зараховує цей час усім, хто був на зміні — до появи світла, але не далі кінця робочого часу; 10 хв після появи світла нікого не ставить на паузу; «вийшов з Wi-Fi» застосунку під час відключення ігнорує; хто прийшов, поки світла не було, — з початку робочого часу (<code>restore_after_outage</code>). Щоб сервер сам вмикався: BIOS «Restore on AC Power Loss = Power On», вхід у Windows без пароля, <code>start.bat</code> в автозапуску.</p>
+
+        <h3 class="block">📅 Плашка дей-оффу лише з дозволу (версія 17.5)</h3>
+        <p>Картка «Дей-офф» у «Графіку» працівника (кнопка «Попросити дей-офф») показується лише коли тімлід/модератор відкрив збір заявок або людина вже має запит на розгляді чи дозвіл. Без цього — жодної плашки.</p>
+    </section>
+
+    <section id="start">
+        <h2><i class="fa-solid fa-terminal"></i> Запуск сервера</h2>
+        <div class="card" style="border-top-color: var(--primary);">
+            <p>1. Встанови залежності:</p>
+            <pre><code>pip install -r requirements.txt</code></pre>
+            <p>2. Запусти одним файлом:</p>
+            <pre><code>python start.py</code></pre>
+            <p>3. Відкрий адресу «Локальна мережа», яку покаже консоль, на телефоні в тій самій Wi-Fi мережі.</p>
+        </div>
+        <div class="alert-box warning">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            <div>
+                <strong>Корисні змінні оточення</strong>
+                <p><code>CREWHUB_PORT</code> — порт (типово 5000); <code>CREWHUB_THREADS</code> — потоки Waitress (типово 48); <code>CREWHUB_DB</code> — шлях до бази; <code>CREWHUB_PLAIN=1</code> — вимкнути красиву панель; <code>CREWHUB_TZ</code> — часовий пояс (типово системний, на UTC-сервері Europe/Kyiv); <code>CREWHUB_TRUST_PROXY=1</code> — вірити <code>X-Forwarded-For</code> від власного локального проксі (pinggy з <code>xff</code> вмикає це сам).</p>
+                <p><b>З версії 17:</b> <code>CREWHUB_DATA</code> — папка даних (типово <code>~/CrewHub-data</code>); порт можна задати й у <code>settings.ini</code> (<code>port</code>); <code>CREWHUB_LAN_NETS</code> — підмережі для «Пристроїв у мережі», якщо їх кілька; <code>CREWHUB_DEMO=1</code> — тестові акаунти й історія.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="recover">
+        <h2><i class="fa-solid fa-key"></i> Відновлення пароля адміна</h2>
+        <div class="alert-box danger">
+            <i class="fa-solid fa-user-lock"></i>
+            <div>
+                <strong>Запускати лише на самому сервері</strong>
+                <p>Якщо забули пароль адміна — зайдіть на сервер і запустіть:</p>
+            </div>
+        </div>
+        <pre><code>python recover_admin.py</code></pre>
+        <p>Програма запитає новий пароль у терміналі, захешує його й перезапише для адміна. Більше жодних «п'яти рівнів захисту» — справжній захист тут у тому, що до сервера (SSH) має доступ лише власник. Дію записано в журнал аудиту.</p>
+    </section>
+
+    <section id="tests">
+        <h2><i class="fa-solid fa-vial"></i> Тести і стрес-тест</h2>
+        <p>Автотести запускаються так:</p>
+        <pre><code>cd test_app &amp;&amp; python3 -m unittest test_crewhub test_hardening test_features test_scenarios</code></pre>
+        <p style="font-size:0.9rem;">До версії 17 — лише <code>test_crewhub test_hardening</code>. Тести старих версій можна запускати на новому коді: так перевіряється, що працювало — не зламалось.</p>
+        <div class="alert-box ok">
+            <i class="fa-solid fa-gauge-high"></i>
+            <div>
+                <strong>Результати стрес-тесту</strong>
+                <p>200 одночасних стартів зміни — за 7.8 с, 0 помилок, ~200 МБ пам'яті. До 344 «пульсів» за секунду. SQLite WAL — 0 помилок блокування. Повний звіт: <code>reports/СТРЕС-ТЕСТ.md</code> (в оригінальному архіві; у цьому репозиторії файлу немає).</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="faq">
+        <h2><i class="fa-solid fa-circle-question"></i> Питання — відповіді (FAQ)</h2>
+
+        <details class="faq-item">
+            <summary>Якщо Wi-Fi перезавантажиться й дасть серверу інший IP — система ляже? Треба заново вводити IP у додатку?</summary>
+            <div class="answer">
+                <p>Ні, у застосунку нічого вводити заново не треба — працівники підключаються за назвою компанії/QR, а не за IP. Але якщо IP самого <b>сервера</b> у локальній мережі зміниться, адресу доведеться оновити один раз (краще закріпити за сервером статичний IP або DHCP-резервацію на роутері). IP працівників у межах діапазону точки можуть мінятися вільно — головне, щоб вони лишалися в робочій мережі.</p>
+                <p><b>З застосунку 2.1:</b> якщо в сервера змінився IP, застосунок сам знаходить його в робочій мережі й входить без пароля (сервер спершу доводить, що він справжній). У браузері — нову адресу й пароль доведеться ввести.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Чому працівник не бачить IP сервера?</summary>
+            <div class="answer">
+                <p>Так безпечніше й простіше. Замість незрозумілих цифр працівник бачить назву компанії, а підключається скануванням QR або коротким кодом. IP зашито всередині коду підключення.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Я вимкнув Wi-Fi на телефоні — чому сервер інколи помічає це не одразу?</summary>
+            <div class="answer">
+                <p>Залежить від дозволу на роботу у фоні. Якщо застосунку дозволено працювати без обмежень батареї, він пінгує щохвилини навіть у сні — і сервер помічає вихід за 3 хвилини. Без цього дозволу система дає сплячому телефону до 20 хвилин поблажки, щоб не закрити зміну помилково.</p>
+                <p><b>Зараз:</b> застосунок сам помічає вихід з Wi-Fi і одразу повідомляє точний час (і показує людині сповіщення), тож вихід зараховується точно, незалежно від того, як часто служба прокидається в сні.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Чи можна «обдурити» систему з дому?</summary>
+            <div class="answer">
+                <p>Ні. Зміна рахується лише з IP робочої мережі точки, а пристрій прив'язаний до працівника (trust-on-first-use). З домашньої мережі старт не пройде. IP визначає сервер, а не телефон, тож підмінити його заголовком не вийде, і зміна прив'язана саме до мережі своєї точки — пінг з іншої мережі присутність не зараховує.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Скільки людей витримає сервер одночасно?</summary>
+            <div class="answer">
+                <p>Стрес-тест: 200 одночасних стартів за 7.8 с без помилок, до 344 пульсів/с. Для малого й середнього бізнесу (десятки-сотні людей) запасу вистачає. Вузьке місце — ранковий пік, коли всі стартують разом; за потреби масштабувати допоможе Postgres.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Як оплачується дей-офф?</summary>
+            <div class="answer">
+                <p>За замовчуванням — по повній ставці за повний робочий день (<code>dayoff_paid=1</code>). Ліміти: один дей-офф на людину на місяць і максимум одна людина на день (обидва налаштовуються в «Правилах»).</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Як зібрати дей-офи з усієї команди одразу?</summary>
+            <div class="answer">
+                <p>На вкладці «Дей-оффи й обміни» натисніть «Відкрити збір заявок». На 3 дні у кожного працівника на головному екрані з'явиться кнопка «Запросити дей-офф» — люди самі оберуть бажаний день, а ви лише погодите. Через 3 дні збір закриється автоматично; кому дня не вистачило — поставите самі.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Як швидко розставити дей-офи в графіку?</summary>
+            <div class="answer">
+                <p>Відкрийте «Графік» → вид «Місяць». Угорі перемкніть режим на «Дей-офи» і просто клікайте по клітинках потрібних людей і днів — дей-офф ставиться одразу. Повторний клік знімає його. У режимі «Зміни» клік так само ставить або прибирає робочу зміну.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Випадково додав бонус — як прибрати? А можна у відсотках?</summary>
+            <div class="answer">
+                <p>На картці працівника, у списку бонусів і штрафів, біля кожного рядка є кнопка × — вона скасовує нарахування. А коли додаєте бонус чи штраф, у вікні можна перемкнути «Сума» на «Відсоток» — тоді він порахується як % від заробітку людини за той місяць.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Що буде, якщо видалити теку працівника в people/?</summary>
+            <div class="answer">
+                <p>Нічого страшного: база — єдине джерело правди, тож акаунт, усі зміни й навіть аватарка лишаються (фото зберігається в базі), а теку сервер просто відтворить із бази за кілька секунд. Те саме, якщо від'єднався диск чи теку перемістили — ніхто й нічого не зникає.</p>
+                <p>Видалити працівника можна лише свідомо — в адмінці. А створити акаунт із нової або поверненої теки — лише вручну командою на сервері: <code>python profiles.py import "Ім'я"</code> (або <code>import-all</code> для всіх ще не підключених тек; <code>list</code> показує, які теки підключені).</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Забули пароль адміна — що робити?</summary>
+            <div class="answer">
+                <p>Зайти на сервер і запустити <code>python recover_admin.py</code>. Програма запитає новий пароль і перезапише його. Доступ до сервера — і є захист.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Чи треба вводити логін і пароль щоразу?</summary>
+            <div class="answer">
+                <p>Ні. Після першого входу застосунок (і браузер) запам'ятовує людину довгоживучим токеном пристрою й надалі входить сам — навіть якщо IP телефона чи сервера зміниться або роутер перезавантажиться. Токен не прив'язаний до IP (IP ненадійний і його легко підмінити), тож зміна мережі більше нікого не викидає.</p>
+                <p>Коли потрібно «розлогінити» людину (загубила телефон, звільнення) — в адмінці на її картці є кнопка «Вийти на всіх пристроях». Скидання чи зміна пароля теж автоматично відкликає старий вхід.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Чи потрібен інтернет?</summary>
+            <div class="answer">
+                <p>Для обліку — ні. Сервер і телефони працюють у локальній Wi-Fi мережі. Інтернет потрібен лише якщо хочете заходити ззовні (тоді прокидається тунель до порту сервера).</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Чим відкрити особові дані працівника?</summary>
+            <div class="answer">
+                <p>Тека <code>people/&lt;Ім'я&gt;/</code>: <code>картка.txt</code> — людською мовою, <code>shifts.csv</code> — у Excel, <code>profile.json</code> — можна правити руками (зміни підхопить база).</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Хтось зайшов в акаунт колеги зі свого телефона. Це видно?</summary>
+            <div class="answer"><p>Так: червоний запис «Вхід у чужий акаунт» у «Підключеннях» (з іменем, чий це телефон), плашка в «Огляді» → «Безпека сьогодні», сповіщення власнику акаунта й керівникам. Навіть якщо перед цим людина вийшла зі свого акаунта — сервер пам'ятає, хто першим користувався телефоном.</p></div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Зникло світло — що з годинами людей?</summary>
+            <div class="answer"><p>Коли світло з'явиться і сервер запуститься, він сам порахує, скільки його не було (з точністю до 15 с), і зарахує цей час усім, хто був на зміні. Щоб сервер вмикався сам — налаштуйте BIOS і автозапуск (див. docs/01-install.md).</p></div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Телефон розрядився посеред зміни — зміну закриє?</summary>
+            <div class="answer"><p>Ні: якщо телефон замовк із зарядом ≤ 5 % і не на зарядці, зміна рахується до кінця робочого часу (не довше 4 год), керівники бачать «Телефон розрядився». Пороги — у «Правилах».</p></div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Сайт «засинає», коли екран вимкнено. Допоможе PWA?</summary>
+            <div class="answer"><p>Ні — жоден браузер не дає сайту працювати у фоні, і PWA теж; по HTTP у локальній мережі PWA навіть не встановлюється. Тому сервер сам бачить телефон у Wi-Fi за MAC і веде зміну. Найточніше — Android-застосунок.</p></div>
+        </details>
+    </section>
+
+    <footer>
+        CrewHub · облік робочого часу за робочим Wi-Fi · сервер Flask + SQLite, застосунок Android.<br>
+        Документація згенерована автоматично й охоплює поточний стан проєкту.
+    </footer>
+    <section id="new17">
+        <h2><i class="fa-solid fa-star"></i> Нове у версіях 17+</h2>
+        <p>Повна історія змін з технічними подробицями — <a href="docs/CHANGELOG.md">docs/CHANGELOG.md</a> і розділи «Що нового» в <a href="test_app/README.md">test_app/README.md</a>. Коротко: папка даних і settings.ini (17), пристрої в мережі (17), супер-анімації іконок (17), вхід у чужий акаунт (17), відбиток і MAC (17.1), вхід після зміни IP сервера (застосунок 2.1), попередження про вихід з Wi-Fi (2.2), браузер не засинає (17.2), зміна без застосунку і заряд телефона (17.3, 2.3), відключення світла (17.4), історія пристроїв і плашка дей-оффу лише з дозволу (17.5).</p>
+    </section>
+
+    <section id="docs">
+        <h2><i class="fa-solid fa-book"></i> Інші документи</h2>
+        <ul class="feature-list">
+            <li><a href="docs/README.md">docs/</a> — встановлення, керівництва адміна й працівника, правила, зміни й гроші, дані й бекапи, Android, безпека, для розробника, FAQ.</li>
+            <li><a href="docs/11-code-map.md">docs/11-code-map.md</a> — карта коду: кожен файл, кожна функція й маршрут з номерами рядків.</li>
+            <li><a href="test_app/README.md">test_app/README.md</a> — сервер і історія всіх версій з технічними подробицями.</li>
+            <li><a href="android/README.md">android/README.md</a> — збірка APK і демо.</li>
+        </ul>
+    </section>
+</main>
+
+<script>
+    const links = document.querySelectorAll('nav a');
+    links.forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            window.scrollTo({ top: target.offsetTop - 15, behavior: 'smooth' });
+        });
+    });
+    // Підсвічування активного розділу при прокручуванні
+    const sections = [...document.querySelectorAll('main section')];
+    const byId = id => document.querySelector('nav a[href="#' + id + '"]');
+    const obs = new IntersectionObserver((entries) => {
+        entries.forEach(en => {
+            if (en.isIntersecting) {
+                links.forEach(a => a.classList.remove('active'));
+                const a = byId(en.target.id);
+                if (a) a.classList.add('active');
+            }
+        });
+    }, { rootMargin: '-10% 0px -80% 0px' });
+    sections.forEach(s => obs.observe(s));
+</script>
+
 </body>
 </html>

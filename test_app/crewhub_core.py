@@ -289,6 +289,13 @@ create table if not exists meta (key text primary key, value text not null);
 create table if not exists devices (id integer primary key, user_id integer not null references users(id) on delete cascade,
   device_key text not null, name text, first_ip text, last_ip text, created_at integer not null, last_seen_at integer,
   unique(user_id, device_key));
+-- Хто з якого пристрою заходив (вхід, реєстрація, пінги). Не стирається при виході з акаунта: за нею сервер
+-- знає, чий це телефон, навіть якщо його ніде не прив'язано. phone = 1 — телефон (застосунок чи мобільний браузер)
+create table if not exists device_history (id integer primary key, user_id integer not null references users(id) on delete cascade,
+  device_key text not null, mac text, fingerprint text, phone integer not null default 0, last_ip text,
+  first_at integer not null, last_at integer not null, unique(user_id, device_key));
+create index if not exists device_history_key on device_history(device_key);
+create index if not exists device_history_mac on device_history(mac);
 -- Довгоживучий токен «запам'ятати мене»: видається після входу, лежить у cookie на телефоні/в браузері.
 -- За ним людина входить автоматично, навіть якщо IP телефона чи сервера змінився. Не прив'язаний до IP (IP ненадійний).
 create table if not exists remember_tokens (id integer primary key, user_id integer not null references users(id) on delete cascade,
@@ -574,6 +581,14 @@ def init_db(seed=True):
         for c in ("fingerprint", "mac"):
             if c not in tcols:
                 conn.execute(f"alter table {table} add column {c} text")
+    if not conn.execute("select 1 from device_history limit 1").fetchone() and not meta_get(conn, "device_history_seeded"):
+        # Версія 17.5: історія пристроїв з того, що вже відомо — прив'язані телефони і токени входу
+        conn.execute("insert or ignore into device_history(user_id, device_key, mac, fingerprint, phone, first_at, last_at)"
+                     " select user_id, device_key, mac, fingerprint, 1, created_at, coalesce(last_seen_at, created_at) from devices")
+        conn.execute("insert or ignore into device_history(user_id, device_key, mac, fingerprint, phone, first_at, last_at)"
+                     " select user_id, device, mac, fingerprint, device like 'app-%', created_at, coalesce(last_used_at, created_at)"
+                     " from remember_tokens where device is not null")
+        meta_set(conn, "device_history_seeded", 1)
     lcols = [r[1] for r in conn.execute("pragma table_info(locations)")]
     for c in ("wifi_ssid", "wifi_password"):  # Wi-Fi, прикріплений до точки (назва й пароль для QR підключення)
         if c not in lcols:
@@ -881,6 +896,82 @@ def client_mac(ip, cached_only=False):
     return _mac_cache["table"].get(ip)
 
 
+PHONE_UA = re.compile(r"CrewHubApp/|Android|iPhone|iPad|iPod|Mobile")
+
+
+def is_phone(ua=None):
+    """Телефон (застосунок або мобільний браузер), а не комп'ютер. Спільний ПК в офісі — нічий не «свій телефон»."""
+    if ua is None:
+        ua = (request.headers.get("User-Agent") or "") if has_request_context() else ""
+    return bool(PHONE_UA.search(ua))
+
+
+def note_usage(conn, user_id, key, fp=None, mac=None, phone=None, ip=None):
+    """Цим пристроєм користувався цей акаунт: історія (переживає вихід з акаунта) і MAC з відбитком прив'язаного
+    телефона. Кличемо при вході, реєстрації й пінгах; часто однаковий запис не переписуємо (раз на 5 хв)."""
+    if not key:
+        return
+    t = now()
+    ip = ip or (client_ip() if has_request_context() else None)
+    conn.execute("insert into device_history(user_id, device_key, mac, fingerprint, phone, last_ip, first_at, last_at)"
+                 " values (?, ?, ?, ?, ?, ?, ?, ?) on conflict(user_id, device_key) do update set last_at = excluded.last_at,"
+                 " last_ip = coalesce(excluded.last_ip, device_history.last_ip),"
+                 " mac = coalesce(excluded.mac, device_history.mac), fingerprint = coalesce(excluded.fingerprint, device_history.fingerprint),"
+                 " phone = max(device_history.phone, excluded.phone)"
+                 " where device_history.last_at < excluded.last_at - 300 or device_history.mac is not coalesce(excluded.mac, device_history.mac)"
+                 " or device_history.fingerprint is not coalesce(excluded.fingerprint, device_history.fingerprint)"
+                 " or device_history.phone < excluded.phone or device_history.last_ip is not coalesce(excluded.last_ip, device_history.last_ip)",
+                 (user_id, key, mac, fp, int(is_phone() if phone is None else phone), ip, t, t))
+    note_device(conn, user_id, key, fp, mac)
+
+
+def _device_where(key, fp, mac):
+    """Умова «той самий пристрій» для SQL ({key} — назва колонки коду): той самий код, або (код новий —
+    очистили браузер) той самий MAC, якщо відбиток не суперечить (як у версії 17.1): Wi-Fi-підсилювач
+    підставляє свій MAC за всі телефони за ним — тоді MAC однаковий, а відбитки різні."""
+    conds, args = [], []
+    if key:
+        conds.append("x.{key} = ?")
+        args.append(key)
+    if mac:
+        conds.append("(x.mac = ? and (? is null or x.fingerprint is null or x.fingerprint = ?))")
+        args += [mac, fp, fp]
+    return " or ".join(conds), args
+
+
+def first_user(conn, key, fp=None, mac=None):
+    """Хто першим користувався пристроєм (з історії device_history), або None. Керівники й звільнені не
+    рахуються: керівник часто налаштовує застосунок на чужому телефоні, а телефон звільненого переходить новій людині."""
+    where, args = _device_where(key, fp, mac)
+    if not where:
+        return None
+    return conn.execute(f"select u.id, u.full_name from device_history x join users u on u.id = x.user_id"
+                        f" where ({where.format(key='device_key')}) and u.status != 'dismissed' and u.role not in ('moderator', 'admin')"
+                        " order by x.first_at, x.id limit 1", args).fetchone()
+
+
+def device_owner(conn, key, fp=None, mac=None, other_than=None):
+    """Чий це пристрій (users-рядок id, full_name), якщо не людини other_than; None — її або нічий.
+    1) кому прив'язаний («Телефон людини»); 2) людина other_than сама першою ним користувалась — її;
+    3) хто зараз увійшов з нього («запам'ятати мене», як у версії 17); 4) хто першим ним користувався
+    (історія, яку не стирає вихід з акаунта)."""
+    where, args = _device_where(key, fp, mac)
+    if not where:
+        return None
+    skip = other_than if other_than is not None else -1
+    bound = conn.execute(f"select u.id, u.full_name from devices x join users u on u.id = x.user_id"
+                         f" where ({where.format(key='device_key')}) and u.id != ? order by x.created_at, x.id limit 1",
+                         (*args, skip)).fetchone()
+    if bound:
+        return bound
+    first = first_user(conn, key, fp, mac)
+    if first and first["id"] == skip:
+        return None
+    return conn.execute(f"select u.id, u.full_name from remember_tokens x join users u on u.id = x.user_id"
+                        f" where ({where.format(key='device')}) and u.id != ? order by x.last_used_at desc, x.id desc limit 1",
+                        (*args, skip)).fetchone() or first
+
+
 def note_device(conn, user_id, key, fp=None, mac=None):
     """Запам'ятовує відбиток і MAC пристрою людини (лише якщо цей пристрій уже її)."""
     if key and (fp or mac):
@@ -916,40 +1007,29 @@ def device_name():
 
 
 def foreign_device(conn, user_id, key, fp=None, mac=None):
-    """Чи це пристрій не цієї людини. Звіряємо код пристрою (застосунок / браузер), MAC у мережі точки і відбиток.
-    ('other', власник) — телефон прив'язаний до іншої людини або з нього вже входили в інший акаунт (за кодом чи MAC);
-    ('new', None) — у людини є свій телефон, а цей сервер бачить уперше; None — свій або порівнювати нема з чим.
-    Відбиток сам нічого не вирішує: у двох однакових телефонів він однаковий. Лише разом з MAC він упізнає
-    свій телефон, на якому очистили браузер чи перевстановили застосунок (код пристрою тоді новий)."""
+    """Чи це пристрій не цієї людини (вхід, старт зміни, пінги). Логіка версії 17, лише доповнена:
+    ('other', власник) — пристрій прив'язаний до іншої людини або з нього зараз увійшла інша людина (як у v17),
+    або ним першою користувалась інша людина (історія — вихід з акаунта її не стирає);
+    ('new', None) — у людини є свій прив'язаний телефон, а цей сервер бачить уперше (як у v17);
+    None — свій або порівнювати нема з чим. Свій телефон з новим кодом (очистили браузер) упізнається за
+    MAC і відбитком, але лише ПІСЛЯ перевірки на чужий: «свій» ніколи не ховає чужий вхід."""
     if not key and not mac:
         return None
-    rows = conn.execute("select device_key, fingerprint, mac from devices where user_id = ?", (user_id,)).fetchall()
-    mine = [r["device_key"] for r in rows]
+    mine = [r[0] for r in conn.execute("select device_key from devices where user_id = ?", (user_id,))]
     if key and key in mine:
         return None
-    if mac and fp and any(r["mac"] == mac and r["fingerprint"] == fp for r in rows):
-        return None
-    owner = None
-    # За кодом — однозначно; за MAC — лише коли відбиток не суперечить: Wi-Fi-підсилювач буває підставляє
-    # свій MAC за всі телефони за ним, і тоді в різних людей той самий MAC, але різні відбитки
-    for col, val, extra in (("device_key", key, ""), ("mac", mac, " and (? is null or x.fingerprint is null or x.fingerprint = ?)")):
-        if owner or not val:
-            continue
-        args = (val, user_id) + ((fp, fp) if extra else ())
-        owner = conn.execute(f"select u.id, u.full_name from devices x join users u on u.id = x.user_id"
-                             f" where x.{col} = ? and x.user_id != ?{extra} order by x.last_seen_at desc limit 1", args).fetchone()
-        if not owner:  # не прив'язаний, але з нього вже входили в інший акаунт («запам'ятати мене»)
-            owner = conn.execute(f"select u.id, u.full_name from remember_tokens x join users u on u.id = x.user_id"
-                                 f" where x.{'device' if col == 'device_key' else 'mac'} = ? and x.user_id != ?{extra}"
-                                 " order by x.last_used_at desc limit 1", args).fetchone()
-    if owner:
+    if owner := device_owner(conn, key, fp, mac, other_than=user_id):
         return "other", owner
+    where, args = _device_where(key, fp, mac)
+    for table in ("devices", "device_history"):
+        if conn.execute(f"select 1 from {table} x where x.user_id = ? and ({where.format(key='device_key')})", (user_id, *args)).fetchone():
+            return None  # свій (у т. ч. той самий телефон з новим кодом після очищення браузера)
     if mine and key and not (key.startswith("app-") and all(k.startswith("web-") for k in mine)):
         return "new", None  # (зареєструвався в браузері, а тепер увійшов у застосунку — це той самий телефон)
     return None
 
 
-def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None):
+def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repeats=False):
     """Пише підозрілий вхід чи зміну в журнал і повідомляє: власнику акаунта — завжди, керівникам — якщо
     акаунт відкрили на телефоні іншої людини. what = foreign_device(...). Сповіщення — не частіше раз на 30 хв."""
     kind, owner = what
@@ -967,6 +1047,8 @@ def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None):
     loc = match_location(conn, ip)
     recent = conn.execute("select 1 from conn_log where user_id = ? and event = ? and device = ? and created_at > ?",
                           (user["id"], event, key, now() - 1800)).fetchone()
+    if recent and quiet_repeats:
+        return  # пінги йдуть щохвилини: одного запису за пів години досить
     log_clock(conn, user["id"], None, event, ip, loc["id"] if loc else None, False, key, details)
     if recent:
         return
@@ -1008,6 +1090,8 @@ def device_allowed(conn, user_id, key, ip):
         # Зареєструвався в браузері телефона, а працює в застосунку: застосунок стає «своїм» телефоном
         conn.execute("delete from devices where user_id = ?", (user_id,))
         keys = []
+    if not keys and conn.execute("select 1 from devices where device_key = ? and user_id != ?", (key, user_id)).fetchone():
+        return False  # «свій» телефон не може бути телефоном, уже прив'язаним до іншої людини
     return remember_device(conn, user_id, key, ip, bind=not keys)
 
 
@@ -1713,6 +1797,11 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
                 # Людина точно не на своїй точці: пауза з останнього пінгу з точки
                 start_wifi_pause(conn, shift, shift["last_seen_at"], "left", ip)
             return state()
+        if device:
+            # Чужу зміну тримає живою телефон колеги (Ольга почала зміну, а пінгує телефон Івана) — підозріло
+            fp, mac = clean_fp((extra or {}).get("fp")), client_mac(ip, cached_only=True)
+            if (what := foreign_device(conn, user["id"], device, fp, mac)) and what[0] == "other":
+                flag_foreign(conn, user, device, ip, "shift_other_device", what, fp, mac, quiet_repeats=True)
         away = _away(conn, shift, t, extra)
         b = conn.execute("select * from breaks where shift_id = ? and ended_at is null", (shift["id"],)).fetchone()
         if b and b["kind"] == "wifi_loss":
@@ -2127,15 +2216,17 @@ def migrate_legacy_data():
     return f"Дані перенесено з папки програми в {DATA_DIR}"
 
 
-def list_backups():
-    if not os.path.isdir(BACKUP_DIR):
+def list_backups(manual=False):
+    """Щоденні копії (від найсвіжішої); manual=True — копії «Завантажити зараз» (окрема папка backups/manual)."""
+    folder = MANUAL_BACKUP_DIR if manual else BACKUP_DIR
+    if not os.path.isdir(folder):
         return []
     out = []
-    for f in sorted(os.listdir(BACKUP_DIR), reverse=True):
+    for f in sorted(os.listdir(folder), reverse=True):
         if f.startswith("crewhub_") and f.endswith((".zip", ".db")):
-            st = os.stat(os.path.join(BACKUP_DIR, f))
+            st = os.stat(os.path.join(folder, f))
             out.append({"name": f, "size": f"{st.st_size / 1048576:.1f} МБ" if st.st_size > 1048576 else f"{st.st_size // 1024} КБ",
-                        "mtime": int(st.st_mtime)})
+                        "mtime": int(st.st_mtime), "manual": manual})
     return out
 
 
@@ -2254,20 +2345,32 @@ def presence_step():
 
 def presence_starters(conn, t):
     """Хто може почати зміну сам, без застосунку й відкритої сторінки: автостарт увімкнено, людина активна, зміни
-    немає, зараз її робочий час і в цьому вікні вона ще не працювала, а MAC її телефона відомий (свій телефон,
-    з якого вона вже заходила в робочій мережі). Повертає [{user_id, device_key, mac, ips}] — куди стукати."""
+    немає, зараз її робочий час і в цьому вікні вона ще не працювала, а MAC її телефона відомий (свій телефон —
+    прив'язаний або той, з якого вона заходила першою). Повертає [{user_id, device_key, mac, ips}] — куди стукати."""
     if setting("auto_start", conn) != "1":
         return []
     early = setting_int("auto_early_minutes", conn) * 60
-    out = []
-    for d in conn.execute("select d.user_id, d.device_key, d.mac, d.last_ip, ld.ip as lan_ip from devices d"
-                          " join users u on u.id = d.user_id left join lan_devices ld on ld.mac = d.mac"
-                          " where d.mac is not null and u.status = 'active'"
-                          " and not exists (select 1 from shifts s where s.user_id = d.user_id and s.status != 'closed')"):
-        w = work_window(conn, d["user_id"], t)
-        if not w or conn.execute("select 1 from shifts where user_id = ? and started_at >= ? and started_at < ?",
-                                 (d["user_id"], w[0] - early, w[1])).fetchone():
+    out, windows = [], {}
+    for d in conn.execute(
+            # прив'язані телефони (як у версії 17.3) і телефони з історії входів
+            "select d.user_id, d.device_key, d.mac, d.fingerprint, d.last_ip, ld.ip as lan_ip, 1 as bound from devices d"
+            " join users u on u.id = d.user_id left join lan_devices ld on ld.mac = d.mac"
+            " where d.mac is not null and u.status = 'active'"
+            " and not exists (select 1 from shifts s where s.user_id = d.user_id and s.status != 'closed')"
+            " union all select h.user_id, h.device_key, h.mac, h.fingerprint, h.last_ip, ld.ip, 0 from device_history h"
+            " join users u on u.id = h.user_id left join lan_devices ld on ld.mac = h.mac"
+            " where h.mac is not null and h.phone = 1 and u.status = 'active'"
+            " and not exists (select 1 from shifts s where s.user_id = h.user_id and s.status != 'closed')"
+            " order by bound desc"):
+        if d["user_id"] not in windows:
+            w = work_window(conn, d["user_id"], t)
+            done = w and conn.execute("select 1 from shifts where user_id = ? and started_at >= ? and started_at < ?",
+                                      (d["user_id"], w[0] - early, w[1])).fetchone()
+            windows[d["user_id"]] = w if w and not done else None
+        if not windows[d["user_id"]]:
             continue
+        if not d["bound"] and device_owner(conn, d["device_key"], d["fingerprint"], d["mac"], other_than=d["user_id"]):
+            continue  # телефон колеги, з якого людина колись заходила, зміну їй не починає
         ips = [ip for ip in {d["last_ip"], d["lan_ip"]} if ip]
         if ips:
             out.append({"user_id": d["user_id"], "device_key": d["device_key"], "mac": d["mac"], "ips": ips})
@@ -2976,7 +3079,7 @@ def login():
                         flag_foreign(conn, u, key, ip, "login_other_device" if what[0] == "other" else "login_new_device", what, fp, mac)
                     else:
                         adopt_device(conn, u["id"], key, fp, mac, ip)
-                    note_device(conn, u["id"], key, fp, mac)
+                    note_usage(conn, u["id"], key, fp, mac)
                     val = issue_remember(conn, u["id"], key, device_name(), client_ip(), fp, mac)
                     conn.commit()
                 return set_remember_cookie(resp, val)
@@ -3026,9 +3129,10 @@ def register():
                     audit(conn, None, "INSERT", "users", cur.lastrowid, cur.lastrowid,
                           {"registration": [None, f"{name} {format_phone(phone)}"], "ip": [None, client_ip()]})
                     # Телефон, з якого зареєструвались, стає телефоном людини: з нього вмикається автозміна
-                    reg_key = device_key(form.get("device_id"))
-                    remember_device(conn, cur.lastrowid, reg_key, client_ip())
-                    note_device(conn, cur.lastrowid, reg_key, clean_fp(form.get("fp")), reg_mac)
+                    reg_key, reg_fp = device_key(form.get("device_id")), clean_fp(form.get("fp"))
+                    if not conn.execute("select 1 from devices where device_key = ?", (reg_key,)).fetchone():
+                        remember_device(conn, cur.lastrowid, reg_key, client_ip())  # прив'язаний телефон колеги — не прив'язуємо
+                    note_usage(conn, cur.lastrowid, reg_key, reg_fp, reg_mac)
                     notify_staff(conn, "Нова реєстрація", f"{name}, {format_phone(phone)} чекає підтвердження")
                     conn.commit()
                     return render_template("register.html", done=True, name=name)
@@ -3124,7 +3228,7 @@ def api_clock(action):
         conn = db()
         key = device_key(body.get("device_id"))
         res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
-        note_device(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
+        note_usage(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
         if mac and res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
             conn.execute("update shifts set mac = ? where id = ? and mac is not ?", (mac, res["shift"]["id"], mac))
         if res.get("shift"):
@@ -3176,6 +3280,7 @@ def me():
             ctx["mgrid"] = month_grid(conn, parse_month(request.args.get("month")), viewer=None if u["role"] in STAFF_ROLES else u)
         ctx["today_iso"] = today.isoformat()
         ctx["dayoff_full"] = dayoff_full_days(conn, u["id"], today, today + timedelta(days=45))
+        ctx["dayoff_open_until"] = dayoff_campaign_until(conn)  # картка «Дей-офф» — лише коли збір відкрито
         ctx["dayoff_limits"] = (setting_int("dayoff_per_day", conn), setting_int("dayoff_per_month", conn), setting("dayoff_paid", conn) == "1")
         ctx["dayoff_req"] = conn.execute("select * from requests where user_id = ? and type = 'day_off' and status in ('pending', 'granted')"
                                          " order by id desc limit 1", (u["id"],)).fetchone()
@@ -3333,6 +3438,9 @@ def admin_device_delete(uid, did):
         conn = db()
         d = conn.execute("select * from devices where id = ? and user_id = ?", (did, uid)).fetchone() or abort(404)
         conn.execute("delete from devices where id = ?", (did,))
+        # І з історії: цей телефон більше не її (віддала, продала) — новий власник не буде «на чужому телефоні»
+        conn.execute("delete from device_history where user_id = ? and (device_key = ? or (mac = ? and fingerprint = ?))",
+                     (uid, d["device_key"], d["mac"], d["fingerprint"]))
         audit(conn, current_user()["id"], "DELETE", "devices", did, uid, {"device": [f"{d['name']} ({d['device_key']})", None]})
         conn.commit()
     flash("Телефон відв'язано")
@@ -3884,7 +3992,8 @@ def admin():
         ctx.update(nav=month_nav(d_from), month=d_from.strftime("%Y-%m"), rows=payroll(conn, d_from, d_to), d_from=d_from, d_to=d_to)
     elif tab == "settings":
         ctx["settings"] = {k: setting(k) for k in DEFAULT_SETTINGS}
-        ctx.update(backups=list_backups()[:10], backup_dir=BACKUP_DIR, backup_keep=BACKUP_KEEP, people_dir=PEOPLE_DIR,
+        # У списку — і щоденні копії, і зроблені кнопкою «Завантажити зараз» (як в оригінальній версії)
+        ctx.update(backups=sorted(list_backups()[:10] + list_backups(manual=True), key=lambda b: -b["mtime"]), backup_dir=BACKUP_DIR, backup_keep=BACKUP_KEEP, people_dir=PEOPLE_DIR,
                    data_dir=DATA_DIR, settings_file=SETTINGS_FILE, db_path=DB_PATH,
                    backup_mirror=backup_mirror_dir() or "", mirror_error=RECOVERED.get("mirror_error"),
                    mirror_env=bool(os.environ.get("CREWHUB_BACKUP_MIRROR")))

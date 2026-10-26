@@ -175,6 +175,8 @@
   {{ month_table(mgrid, editable=me.role in DAYOFF_ROLES, me_id=me.id) }}
 </div>
 {% endif %}
+{# Плашка дей-оффу — лише коли керівник відкрив збір заявок або дав дозвіл, чи людина вже чекає на рішення #}
+{% if dayoff_req or dayoff_open_until %}
 <div class="card">
   <div class="card-head"><h3>{{ icon('calendar') }} Дей-офф</h3></div>
   {% if dayoff_req and dayoff_req.status == 'granted' %}
@@ -196,6 +198,7 @@
     </form>
   {% endif %}
 </div>
+{% endif %}
 <div class="grid-2">
   <div class="card">
     <div class="card-head"><h3>{{ icon('alert') }} Попросити відсутність</h3></div>
