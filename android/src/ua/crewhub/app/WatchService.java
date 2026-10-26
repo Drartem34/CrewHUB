@@ -57,7 +57,10 @@ import java.util.Map;
  */
 public class WatchService extends Service {
     static final String CHANNEL = "watch";
+    static final String ALERT_CHANNEL = "wifi_alert";
     static final int NOTIF_ID = 7;
+    static final int ALERT_ID = 8;
+    static final long ALERT_AFTER_MS = 60_000;  // коротші обриви (перехід між точками доступу) сервер не рахує — і ми мовчимо
     static final long PERIOD_MS = 60_000;
 
     private Handler handler;
@@ -71,6 +74,10 @@ public class WatchService extends Service {
     private volatile Network verified;  // мережа, в якій сервер уже підтвердив свій server_id
     private int failures;               // скільки разів поспіль сервер не відповів (пауза росте)
     private long searchedAt;            // коли востаннє шукали сервер у мережі (не частіше раз на 10 хв)
+    private volatile boolean onBreak;   // зараз обід / пауза, натиснуті людиною: вийти з Wi-Fi можна, не попереджаємо
+    private volatile boolean alerted;   // висить попередження «Телефон відключився від робочого Wi-Fi»
+    private volatile long lostAt;       // коли телефон вийшов з Wi-Fi (с)
+    private PowerManager.WakeLock alertLock;  // хвилину після виходу з Wi-Fi: дочекатися, чи це не короткий обрив
 
     static SharedPreferences prefs(Context c) {
         return c.getSharedPreferences("crewhub", Context.MODE_PRIVATE);
@@ -139,6 +146,9 @@ public class WatchService extends Service {
             ch.setDescription("Автоматичний початок і кінець зміни");
             ch.setShowBadge(false);
             ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(ch);
+            NotificationChannel alert = new NotificationChannel(ALERT_CHANNEL, "Вихід з робочого Wi-Fi", NotificationManager.IMPORTANCE_HIGH);
+            alert.setDescription("Телефон відключився від робочого Wi-Fi під час зміни");
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(alert);
         }
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(NOTIF_ID, notification("Стежу за робочим Wi-Fi"), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
@@ -148,6 +158,8 @@ public class WatchService extends Service {
         wakeLock.setReferenceCounted(false);
         waitLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "crewhub:start");
         waitLock.setReferenceCounted(false);
+        alertLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "crewhub:alert");
+        alertLock.setReferenceCounted(false);
 
         cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         callback = new ConnectivityManager.NetworkCallback() {
@@ -155,6 +167,8 @@ public class WatchService extends Service {
             public void onAvailable(Network n) {
                 wifi = n;
                 failures = 0;
+                handler.removeCallbacks(wifiGone);  // повернувся за хвилину — це був короткий обрив
+                if (alertLock.isHeld()) alertLock.release();
                 handler.removeCallbacks(tick);
                 handler.postDelayed(tick, 1500); // даємо мережі видати IP
             }
@@ -164,6 +178,12 @@ public class WatchService extends Service {
                 if (n.equals(wifi)) {
                     wifi = null;
                     if (onShift) leftWifi(n);
+                    if (onShift && !onBreak) {
+                        lostAt = System.currentTimeMillis() / 1000;
+                        alertLock.acquire(ALERT_AFTER_MS + 10_000L);
+                        handler.removeCallbacks(wifiGone);
+                        handler.postDelayed(wifiGone, ALERT_AFTER_MS);
+                    }
                     handler.post(new Runnable() {
                         public void run() { offWifi(); }
                     });
@@ -193,6 +213,54 @@ public class WatchService extends Service {
             if (Build.VERSION.SDK_INT >= 23) am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
             else am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
         } catch (Exception ignored) {
+        }
+    }
+
+    /** Хвилину після виходу з Wi-Fi телефон так і не повернувся в мережу — попереджаємо людину. */
+    private final Runnable wifiGone = new Runnable() {
+        public void run() {
+            if (wifi == null && onShift && !onBreak) wifiAlert(lostAt);
+            if (alertLock.isHeld()) alertLock.release();
+        }
+    };
+
+    /** Помітне сповіщення (зі звуком): телефон поза робочим Wi-Fi, зміна на паузі. Людина могла й не помітити —
+     *  Wi-Fi вимкнувся сам, телефон перескочив на мобільний інтернет чи на іншу мережу. */
+    private void wifiAlert(long since) {
+        if (alerted) return;
+        alerted = true;
+        String at = time(since > 0 ? since : System.currentTimeMillis() / 1000);
+        alert(ALERT_CHANNEL, "Телефон відключився від робочого Wi-Fi",
+                "З " + at + " телефон поза мережею точки, тому зміна на паузі. Поверніться в робочий Wi-Fi — зміна продовжиться сама.", false);
+    }
+
+    /** Знову в робочій мережі (або зміну закрито): прибираємо попередження, тихо кажемо, що все гаразд. */
+    private void wifiBack(boolean resumed) {
+        if (!alerted) return;
+        alerted = false;
+        if (resumed) alert(CHANNEL, "Знову в робочому Wi-Fi", "Зміну продовжено о " + time(System.currentTimeMillis() / 1000), true);
+        else ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(ALERT_ID);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void alert(String channel, String title, String text, boolean quiet) {
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, channel) : new Notification.Builder(this);
+        Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        b.setSmallIcon(R.drawable.icon)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setAutoCancel(true)
+                .setContentIntent(PendingIntent.getActivity(this, 2, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        if (quiet && Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(15 * 60_000L);  // «усе гаразд» само зникне
+        if (Build.VERSION.SDK_INT < 26) {
+            b.setPriority(quiet ? Notification.PRIORITY_LOW : Notification.PRIORITY_HIGH);
+            if (!quiet) b.setDefaults(Notification.DEFAULT_ALL);
+        }
+        try {
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(ALERT_ID, b.build());
+        } catch (Exception ignored) {
+            // Android 13+ без дозволу на сповіщення — нічого не покажемо, зміна рахується й так
         }
     }
 
@@ -280,7 +348,7 @@ public class WatchService extends Service {
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json");
         c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL
-                + ") CrewHubApp/2.1 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
+                + ") CrewHubApp/2.2 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
         String cookie = prefs(this).getString("cookie", null);
         if (cookie != null) c.setRequestProperty("Cookie", cookie);
         return c;
@@ -318,7 +386,8 @@ public class WatchService extends Service {
         handler.removeCallbacks(tick);
         if (wakeLock.isHeld()) wakeLock.release();
         if (waitLock.isHeld()) waitLock.release();
-        update("Поза Wi-Fi. Зміна почнеться сама, коли підключитесь до робочої мережі");
+        update(onShift && !onBreak ? "Поза робочим Wi-Fi — зміна на паузі, поки не повернетесь у мережу точки"
+                : "Поза Wi-Fi. Зміна почнеться сама, коли підключитесь до робочої мережі");
     }
 
     /** Один пінг через саме Wi-Fi (не мобільний інтернет). Повертає, через скільки мс пінгувати знову. */
@@ -342,6 +411,8 @@ public class WatchService extends Service {
             }
             if (check == SERVER_OTHER) {
                 if (waitLock.isHeld()) waitLock.release();
+                long nowS = System.currentTimeMillis() / 1000;
+                if (onShift && !onBreak) wifiAlert(nowS - lostAt < 3600 ? lostAt : nowS);  // під час зміни перескочив на чужу Wi-Fi
                 update("Цей Wi-Fi не робочий. Стежу далі");
                 return PERIOD_MS * 30;  // інша мережа з іншим пристроєм за цією адресою: до зміни мережі не турбуємо
             }
@@ -372,6 +443,13 @@ public class WatchService extends Service {
             String place = res.optString("location", "");
             if (res.isNull("location")) place = "";
             onShift = shift != null;
+            JSONObject br = shift == null ? null : shift.optJSONObject("open_break");
+            onBreak = br != null && !"wifi_loss".equals(br.optString("kind"));
+            // Під час зміни телефон в іншій Wi-Fi (не точки) — попереджаємо так само, як при відключенні;
+            // повернувся в робочу мережу чи зміну закрито — попередження прибираємо
+            boolean onNet = res.optBoolean("on_work_network");
+            if (shift != null && !onNet && !onBreak) wifiAlert(away > 0 ? away : System.currentTimeMillis() / 1000);
+            else wifiBack(shift != null && onNet);
             if (shift != null) {
                 if (waitLock.isHeld()) waitLock.release();  // зміна почалась — далі звичайний сон між пінгами
                 boolean paused = "paused".equals(shift.optString("status"));
@@ -607,6 +685,7 @@ public class WatchService extends Service {
         }
         if (wakeLock.isHeld()) wakeLock.release();
         if (waitLock.isHeld()) waitLock.release();
+        if (alertLock.isHeld()) alertLock.release();
         super.onDestroy();
     }
 
