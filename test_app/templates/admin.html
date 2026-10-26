@@ -431,6 +431,8 @@
       <div><label>Допустима втрата Wi-Fi, хв (браузер)</label><input name="wifi_grace_minutes" type="number" min="1" value="{{ settings.wifi_grace_minutes }}"></div>
       <div><label>Те саме для застосунку, хв</label><input name="sleep_grace_minutes" type="number" min="1" value="{{ settings.sleep_grace_minutes }}" title="Телефон, який лежить без дотиків, засинає і пінгує рідше"></div>
       <div class="full"><label>Застосунок замовк (телефон заснув), але потім озвався з робочого Wi-Fi: рахувати цей час як роботу, якщо пауза не довша, хв (браузеру не прощається)</label><input name="silence_forgive_minutes" type="number" min="0" value="{{ settings.silence_forgive_minutes }}"></div>
+      <div><label>Телефон розрядився, якщо замовк із зарядом не більше, %</label><input name="battery_dead_pct" type="number" min="0" max="50" value="{{ settings.battery_dead_pct }}" title="0 — не зважати на заряд"></div>
+      <div><label>Розряджений телефон: зміна рахується ще, хв</label><input name="battery_keep_minutes" type="number" min="0" max="1440" value="{{ settings.battery_keep_minutes }}" title="До кінця робочого часу, але не довше цього. 0 — вимкнено: звичайна пауза"></div>
       <div><label>Що робити при втраті</label><select name="wifi_loss_action">
         <option value="pause" {{ 'selected' if settings.wifi_loss_action == 'pause' }}>Ставити на паузу</option>
         <option value="close" {{ 'selected' if settings.wifi_loss_action == 'close' }}>Закривати зміну</option></select></div>
@@ -452,7 +454,7 @@
     <div class="card-head"><h3>{{ icon('shield') }} Дисципліна і доступ</h3></div>
     <label class="check"><input type="checkbox" name="registration_open" {{ 'checked' if settings.registration_open == '1' }}>Дозволити самостійну реєстрацію (з підтвердженням)</label>
     <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_scan" {{ 'checked' if settings.lan_scan == '1' }}><span><b>Шукати всі пристрої в мережі сервера.</b> Раз на 5 хв: IP, назва, модель, чий телефон — блок унизу «Огляду»</span></label>
-    <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_presence" {{ 'checked' if settings.lan_presence == '1' }}><span><b>Бачити телефон у робочому Wi-Fi, коли браузер спить.</b> Зміна в браузері не стає на паузу, поки телефон людини в мережі точки (сервер перевіряє його MAC раз на пів хвилини). Застосунку не потрібно — він повідомляє сам</span></label>
+    <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_presence" {{ 'checked' if settings.lan_presence == '1' }}><span><b>Бачити телефон у робочому Wi-Fi без застосунку.</b> Сервер раз на пів хвилини перевіряє MAC телефонів людей: телефон у мережі точки в робочий час — зміна починається сама (якщо ввімкнено автостарт), поки він у мережі — йде, навіть коли браузер спить, пропав — пауза й закриття, як із застосунком. MAC сервер знає після першого входу з телефона в робочому Wi-Fi</span></label>
     <div class="form-grid" style="margin-top:10px">
       <div><label>Спізнення після, хв</label><input name="late_threshold_minutes" type="number" min="0" value="{{ settings.late_threshold_minutes }}"></div>
       <div><label>Максимальна зміна, год</label><input name="max_shift_hours" type="number" min="1" value="{{ settings.max_shift_hours }}"></div>
@@ -537,7 +539,7 @@
     w.document.close(); w.focus(); setTimeout(() => w.print(), 300);
   }
 </script>
-{% elif tab == 'live' %}<script>window.CURRENCY = {{ currency|tojson }};</script><script src="{{ url_for('static', filename='live.js') }}?v=4"></script>
+{% elif tab == 'live' %}<script>window.CURRENCY = {{ currency|tojson }};</script><script src="{{ url_for('static', filename='live.js') }}?v=5"></script>
 {% elif tab == 'employees' %}
 <script>
   // Роль змінюється одразу, без збереження форми; сервер не дасть прибрати останнього адміністратора

@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from unittest import mock
 
 from test_crewhub import WORK_IP, CrewHubBase, core, settings_file  # noqa: F401 — test_crewhub налаштовує оточення
@@ -692,6 +693,40 @@ class PresenceTest(CrewHubBase):
         self.step({WORK_IP: self.MAC}).assert_not_called()
         self.assertEqual(self.status(), "paused")
 
+    def test_phone_in_wifi_starts_shift_without_app_or_page(self):
+        real_now = core.now
+        wed10 = int(datetime(2026, 10, 21, 10, 0).timestamp())  # середа, робочий час 09:00–18:00
+        core.now = lambda: wed10
+        try:
+            with core.connect() as c:
+                c.execute("update settings set value = '1' where key = 'auto_start'")
+                uid = c.execute("select id from users where username = 'ivan'").fetchone()[0]
+                core.remember_device(c, uid, "web-0aa11bb2", WORK_IP)
+                core.note_device(c, uid, "web-0aa11bb2", None, self.MAC)
+                c.commit()
+            p = self.step({WORK_IP: self.MAC})  # телефон у Wi-Fi точки, нічого не відкривали
+            p.assert_called_once_with([WORK_IP])
+            row = self.sql("select status, note, mac, device from shifts where user_id = ?", uid)[0]
+            self.assertEqual(tuple(row), ("active", "Автостарт по Wi-Fi", self.MAC, "web-0aa11bb2"))
+            self.assertIn("Зміну розпочато автоматично", [r[0] for r in self.sql("select title from notifications where user_id = ?", uid)])
+            core.now = lambda: wed10 + 300  # телефон пішов з мережі
+            self.step({})
+            with core.connect() as c:
+                core.meta_set(c, "alive_at", core.now() - 5)
+                core.sweep(c)
+                c.commit()
+            self.assertEqual(self.status(), "paused")
+            # поза робочим часом сервер навіть не стукає
+            with core.connect() as c:
+                c.execute("delete from breaks")
+                c.execute("delete from shifts")
+                c.commit()
+            core.now = lambda: int(datetime(2026, 10, 21, 21, 0).timestamp())
+            self.step({WORK_IP: self.MAC}).assert_not_called()
+            self.assertEqual(self.sql("select count(*) from shifts")[0][0], 0)
+        finally:
+            core.now = real_now
+
     def test_present_reads_only_fresh_entries(self):
         lan = __import__("lan")
         neigh = ("192.168.1.23 dev wlan0 lladdr da:a1:19:00:00:01 REACHABLE\n"
@@ -708,6 +743,106 @@ class PresenceTest(CrewHubBase):
         with mock.patch.object(lan, "knock"), mock.patch.object(lan, "neighbour_states", return_value=None), \
                 mock.patch.object(lan, "neighbours", return_value={"192.168.1.40": "5e:66:77:88:99:00"}):
             self.assertEqual(lan.present(["192.168.1.40"], wait=0), {"192.168.1.40": "5e:66:77:88:99:00"})
+
+
+class BatteryTest(CrewHubBase):
+    """Телефон розрядився — людина нікуди не ділась: зміна не стає на паузу і не закривається одразу."""
+    WED10 = int(datetime(2026, 10, 21, 10, 0).timestamp())  # середа, робочий час 09:00–18:00
+
+    def setUp(self):
+        super().setUp()
+        self._real_now = core.now
+        core.now = lambda: self.WED10
+        self.addCleanup(setattr, core, "now", self._real_now)
+
+    def start(self, **battery):
+        self.login("ivan")
+        self.assertTrue(self.clock("start", device_id="web-0aa11bb2", **battery)["ok"])
+
+    def silent(self, sec):
+        with core.connect() as c:
+            c.execute("update shifts set started_at = started_at - ? - 600, last_seen_at = last_seen_at - ?,"
+                      " battery_at = battery_at - ?", (sec, sec, sec))
+            c.commit()
+
+    def sweep(self):
+        with core.connect() as c:
+            core.meta_set(c, "alive_at", core.now() - 5)
+            n = core.sweep(c)
+            c.commit()
+        return n
+
+    def shift(self):
+        return self.sql("select * from shifts")[0]
+
+    def test_dead_phone_keeps_shift_counting(self):
+        self.start(battery=4, charging=False)
+        self.assertEqual((self.shift()["battery"], self.shift()["charging"]), (4, 0))
+        self.silent(600)  # 10 хв тиші після 4 %
+        self.sweep()
+        self.assertEqual(self.shift()["status"], "active")
+        self.assertIsNotNone(self.shift()["power_lost_at"])
+        self.assertIn(("battery_dead",), [tuple(r) for r in self.sql("select event from conn_log")])
+        self.assertIn("Телефон розрядився", [r[0] for r in self.sql("select title from notifications")])
+        self.sweep()  # повторно не пишемо
+        self.assertEqual(self.sql("select count(*) from conn_log where event = 'battery_dead'")[0][0], 1)
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        row = [r for r in admin.get("/api/live").get_json()["rows"] if r["name"] == "Іван Петренко"][0]
+        self.assertTrue(row["power_lost"])
+        # зарядив і відкрив сторінку — далі як завжди
+        self.assertTrue(self.clock("heartbeat", device_id="web-0aa11bb2", battery=31, charging=True)["ok"])
+        self.assertEqual((self.shift()["power_lost_at"], self.shift()["battery"], self.shift()["status"]), (None, 31, "active"))
+
+    def test_dead_phone_shift_closes_after_limit(self):
+        self.start(battery=2)
+        with core.connect() as c:
+            c.execute("update settings set value = '60' where key = 'battery_keep_minutes'")
+            c.commit()
+        self.silent(2 * 3600)
+        last = self.shift()["last_seen_at"]
+        self.sweep()
+        s = self.shift()
+        self.assertEqual(s["status"], "closed")
+        self.assertLessEqual(s["ended_at"], last + 3600)
+        self.assertIn("battery_dead", self.sql("select details from conn_log where event = 'auto_close'")[0][0])
+
+    def test_dead_after_work_hours_closes_at_work_end(self):
+        core.now = lambda: self.WED10 + 7 * 3600 + 1800  # 17:30
+        self.start(battery=3)
+        core.now = lambda: self.WED10 + 9 * 3600  # 19:00, телефон мовчить з 17:30
+        self.sweep()
+        s = self.shift()
+        self.assertEqual((s["status"], s["ended_at"]), ("closed", self.WED10 + 8 * 3600))  # кінець робочого часу 18:00
+
+    def test_not_dead_means_normal_pause(self):
+        for battery, charging, extra in ((3, True, 0), (40, False, 0), (3, False, 3600)):
+            with self.subTest(battery=battery, charging=charging, stale=extra):
+                with core.connect() as c:
+                    c.execute("delete from breaks")
+                    c.execute("delete from shifts")
+                    c.commit()
+                self.start(battery=battery, charging=charging)
+                if extra:  # заряд повідомлено задовго до останнього зв'язку — його могли зарядити
+                    with core.connect() as c:
+                        c.execute("update shifts set battery_at = battery_at - ?", (extra,))
+                        c.commit()
+                self.silent(600)
+                self.sweep()
+                self.assertEqual(self.shift()["status"], "paused")
+
+    def test_setting_off_and_bad_values(self):
+        self.start(battery="багато")  # сміття замість числа — ігноруємо
+        self.assertIsNone(self.shift()["battery"])
+        self.assertTrue(self.clock("heartbeat", device_id="web-0aa11bb2", battery=150)["ok"])
+        self.assertIsNone(self.shift()["battery"])
+        self.assertTrue(self.clock("heartbeat", device_id="web-0aa11bb2", battery=1, shutdown=True)["ok"])  # застосунок вимикається
+        self.assertEqual(self.shift()["battery"], 1)
+        with core.connect() as c:
+            c.execute("update settings set value = '0' where key = 'battery_dead_pct'")
+            c.commit()
+        self.silent(600)
+        self.sweep()
+        self.assertEqual(self.shift()["status"], "paused")
 
 
 if __name__ == "__main__":

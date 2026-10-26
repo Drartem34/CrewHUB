@@ -10,17 +10,29 @@
       return id;  // той самий id, що надіслала реєстрація: за ним сервер упізнає телефон людини
     } catch (e) { return "web"; }
   })();
+  // Заряд телефона (Chrome на Android дає його, Safari — ні): сервер відрізнить «розрядився» від «пішов»
+  let battery = null, batteryReady = Promise.resolve();
+  try {
+    if (navigator.getBattery) batteryReady = navigator.getBattery().then((b) => {
+      const read = () => { battery = { battery: Math.round(b.level * 100), charging: b.charging }; };
+      read();
+      b.addEventListener("levelchange", read);
+      b.addEventListener("chargingchange", read);
+    }).catch(() => {});
+  } catch (e) {}
   const money = (v) => v.toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + CREWHUB.currency;
   const pad = (n) => String(n).padStart(2, "0");
   const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
 
   // Запит з таймаутом: зависле з'єднання не блокує кнопки назавжди
-  function post(action, extra) {
+  async function post(action, extra) {
+    // Перший пінг не чекає довше пів секунди, поки браузер скаже заряд
+    await Promise.race([batteryReady, new Promise((r) => setTimeout(r, 500))]);
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 15000);
     return fetch("/api/clock/" + action, {
       method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
-      body: JSON.stringify(Object.assign({ device_id: deviceId, fp: window.crewFingerprint ? window.crewFingerprint() : undefined }, extra || {})),
+      body: JSON.stringify(Object.assign({ device_id: deviceId, fp: window.crewFingerprint ? window.crewFingerprint() : undefined }, battery || {}, extra || {})),
     }).finally(() => clearTimeout(t));
   }
 

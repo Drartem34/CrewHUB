@@ -128,6 +128,8 @@ DEFAULT_SETTINGS = {
     "registration_open": "1",        # чи можна зареєструватися самому (акаунт чекає підтвердження)
     "lan_scan": "1",                 # шукати всі пристрої в мережі сервера (блок «Пристрої в мережі» в «Огляді»)
     "lan_presence": "1",             # зміна йде, поки телефон у робочому Wi-Fi, навіть якщо браузер заснув (за MAC)
+    "battery_dead_pct": "5",         # телефон замовк із зарядом ≤ стільки % і не на зарядці — вважаємо, що розрядився
+    "battery_keep_minutes": "240",   # розряджений телефон: зміна рахується до кінця робочого часу, але не довше (0 — вимкнено)
 }
 
 # Правила для кожного налаштування: (тип, межі, назва для повідомлень). Неприпустиме значення не зберігається,
@@ -168,7 +170,9 @@ SETTING_RULES = {
     "dayoff_paid": ("bool", "Оплачуваний дей-офф"),
     "registration_open": ("bool", "Відкрита реєстрація"),
     "lan_scan": ("bool", "Пошук пристроїв у мережі"),
-    "lan_presence": ("bool", "Бачити телефон у Wi-Fi, коли браузер спить"),
+    "lan_presence": ("bool", "Бачити телефон у Wi-Fi без застосунку"),
+    "battery_dead_pct": ("int", 0, 50, "Телефон розрядився, якщо заряд не більше, %"),
+    "battery_keep_minutes": ("int", 0, 1440, "Розряджений телефон: зміна рахується ще"),
 }
 
 
@@ -237,7 +241,7 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "server_downtime": "Сервер не працював", "auto_start": "Зміна почалась автоматично",
           "auto_close": "Зміна закрилась автоматично", "login_other_device": "Вхід у чужий акаунт",
           "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна з чужого телефона",
-          "device_recognised": "Свій телефон упізнано"}
+          "device_recognised": "Свій телефон упізнано", "battery_dead": "Телефон розрядився"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні»
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device")
 
@@ -549,9 +553,13 @@ def init_db(seed=True):
         conn.execute("alter table breaks add column reason text")
     if "notified" not in bcols:  # для wifi_loss: 1 — людині й модераторам уже повідомили (пауза не коротка)
         conn.execute("alter table breaks add column notified integer not null default 0")
-    if "mac" not in [r[1] for r in conn.execute("pragma table_info(shifts)")]:
+    scols = [r[1] for r in conn.execute("pragma table_info(shifts)")]
+    if "mac" not in scols:
         # MAC телефона в робочому Wi-Fi (версія 17.2): за ним сервер бачить, що телефон на точці, коли браузер спить
         conn.execute("alter table shifts add column mac text")
+    for c in ("battery", "charging", "battery_at", "power_lost_at"):
+        if c not in scols:  # заряд телефона з останнього пінгу і коли він розрядився (версія 17.3)
+            conn.execute(f"alter table shifts add column {c} integer")
     if "bg_ok" not in [r[1] for r in conn.execute("pragma table_info(shifts)")]:
         # 1 = застосунок працює без обмежень батареї і пінгує щохвилини навіть у сні: тиша = справжня втрата Wi-Fi
         conn.execute("alter table shifts add column bg_ok integer not null default 0")
@@ -1724,6 +1732,27 @@ def clock_action(conn, user, action, ip, device=None, kind=None, extra=None):
     return {"ok": False, "error": "Невідома дія"}
 
 
+def note_battery(conn, shift_id, body):
+    """Заряд з пінгу (застосунок шле завжди, браузер — якщо дає navigator.getBattery). Телефон озвався — отже, живий."""
+    try:
+        pct = int(body.get("battery"))
+    except (TypeError, ValueError):
+        pct = None
+    if pct is not None and 0 <= pct <= 100:
+        conn.execute("update shifts set battery = ?, charging = ?, battery_at = ?, power_lost_at = null where id = ?",
+                     (pct, int(bool(body.get("charging"))), now(), shift_id))
+    else:
+        conn.execute("update shifts set power_lost_at = null where id = ? and power_lost_at is not null", (shift_id,))
+
+
+def battery_dead(conn, s):
+    """Телефон замовк, бо розрядився: останній відомий заряд ≤ battery_dead_pct, не на зарядці, і цей заряд
+    повідомлено не раніше ніж за 30 хв до останнього зв'язку (старе «5 %» нічого не каже — телефон могли зарядити)."""
+    pct = setting_int("battery_dead_pct", conn)
+    return bool(pct and s["battery"] is not None and s["battery"] <= pct and not s["charging"]
+                and s["battery_at"] and s["battery_at"] >= s["last_seen_at"] - 1800)
+
+
 def sleepy_shift(shift):
     """Зміна з застосунку: телефон засинає і пінгує рідше (служба не тримає процесор увімкненим — бережемо батарею),
     тож його тишу можна простити. Вихід з Wi-Fi застосунок повідомляє окремо, з точним часом (away_since)."""
@@ -1769,6 +1798,31 @@ def sweep(conn):
         if sleepy_shift(s) and s["last_seen_at"] >= t - sleep:
             # застосунок: телефон міг просто заснути, у сні Android будить службу раз на 5–15 хв.
             # Вихід з Wi-Fi служба повідомляє сама (away_since), тож тут чекаємо лише на випадок, що телефон вимкнули
+            continue
+        keep_dead = setting_int("battery_keep_minutes", conn) * 60
+        if keep_dead and battery_dead(conn, s):
+            # Телефон розрядився — людина ж нікуди не ділась: зміна рахується далі до кінця робочого часу
+            # (але не довше battery_keep_minutes від останнього зв'язку), потім закривається сама
+            if not s["power_lost_at"]:
+                changed += 1
+                conn.execute("update shifts set power_lost_at = ? where id = ?", (s["last_seen_at"], s["id"]))
+                log_clock(conn, s["user_id"], s["id"], "battery_dead", s["last_seen_ip"], s["location_id"], True, None,
+                          {"заряд": f"{s['battery']}%"})
+                notify_staff(conn, "Телефон розрядився",
+                             f"{s['full_name']}: телефон вимкнувся о {datetime.fromtimestamp(s['last_seen_at']):%H:%M} "
+                             f"(заряд {s['battery']}%). Зміна рахується далі до кінця робочого часу")
+            w = work_window(conn, s["user_id"], s["started_at"])
+            until = s["last_seen_at"] + keep_dead
+            if w:
+                until = min(until, max(w[1], s["last_seen_at"]))
+            if t < until:
+                continue
+            changed += 1
+            close_shift(conn, s["id"], until, "auto_close")
+            log_clock(conn, s["user_id"], s["id"], "auto_close", s["last_seen_ip"], s["location_id"], True, None,
+                      {"ended_at": until, "battery_dead": True})
+            notify(conn, s["user_id"], "Зміну закрито автоматично",
+                   f"Телефон розрядився о {datetime.fromtimestamp(s['last_seen_at']):%H:%M}; кінець зміни — {datetime.fromtimestamp(until):%H:%M}")
             continue
         w = work_window(conn, s["user_id"], s["started_at"]) if keep else None
         if w:
@@ -2102,17 +2156,27 @@ def presence_step():
                 " and s.last_seen_at < ? and (s.status = 'active' or exists (select 1 from breaks b where b.shift_id = s.id"
                 " and b.ended_at is null and b.kind = 'wifi_loss'))", (now() - PRESENCE_SILENT,))
                 if not (s["status"] == "paused" and sleepy_shift(s))]
+            starters = presence_starters(conn, now())
         finally:
             conn.close()
-    if not cands:
+    if not cands and not starters:
         return
-    seen = lan.present(sorted({c["last_seen_ip"] for c in cands}))  # кілька секунд — поза _lock
+    ips = {c["last_seen_ip"] for c in cands} | {ip for st in starters for ip in st["ips"]}
+    seen = lan.present(sorted(ips))  # кілька секунд — поза _lock
     where = {}
     for ip, mac in seen.items():
         where.setdefault(mac, ip)
     with _lock:
         conn = connect()
         try:
+            for st in starters:  # телефон з'явився в мережі точки в робочий час — зміна починається сама
+                ip = where.get(st["mac"])
+                user = conn.execute("select * from users where id = ?", (st["user_id"],)).fetchone()
+                if not ip or not user or open_shift(conn, user["id"]):
+                    continue
+                res = try_auto_start(conn, user, match_location(conn, ip), ip, st["device_key"], now())
+                if res and res.get("auto_started"):
+                    conn.execute("update shifts set mac = ? where user_id = ? and status != 'closed'", (st["mac"], user["id"]))
             for c in cands:
                 ip = c["last_seen_ip"] if seen.get(c["last_seen_ip"]) == c["mac"] else where.get(c["mac"])
                 if not ip or not ip_in_location(conn, ip, c["location_id"]):
@@ -2122,9 +2186,32 @@ def presence_step():
                     continue  # тим часом зміну закрили або телефон пінганув сам
                 user = conn.execute("select * from users where id = ?", (c["user_id"],)).fetchone()
                 clock_action(conn, user, "heartbeat", ip, None, None, {"via": "lan"})
+                conn.execute("update shifts set power_lost_at = null where id = ?", (c["id"],))  # відповів — отже, живий
             conn.commit()
         finally:
             conn.close()
+
+
+def presence_starters(conn, t):
+    """Хто може почати зміну сам, без застосунку й відкритої сторінки: автостарт увімкнено, людина активна, зміни
+    немає, зараз її робочий час і в цьому вікні вона ще не працювала, а MAC її телефона відомий (свій телефон,
+    з якого вона вже заходила в робочій мережі). Повертає [{user_id, device_key, mac, ips}] — куди стукати."""
+    if setting("auto_start", conn) != "1":
+        return []
+    early = setting_int("auto_early_minutes", conn) * 60
+    out = []
+    for d in conn.execute("select d.user_id, d.device_key, d.mac, d.last_ip, ld.ip as lan_ip from devices d"
+                          " join users u on u.id = d.user_id left join lan_devices ld on ld.mac = d.mac"
+                          " where d.mac is not null and u.status = 'active'"
+                          " and not exists (select 1 from shifts s where s.user_id = d.user_id and s.status != 'closed')"):
+        w = work_window(conn, d["user_id"], t)
+        if not w or conn.execute("select 1 from shifts where user_id = ? and started_at >= ? and started_at < ?",
+                                 (d["user_id"], w[0] - early, w[1])).fetchone():
+            continue
+        ips = [ip for ip in {d["last_ip"], d["lan_ip"]} if ip]
+        if ips:
+            out.append({"user_id": d["user_id"], "device_key": d["device_key"], "mac": d["mac"], "ips": ips})
+    return out
 
 
 def start_presence(interval=PRESENCE_EVERY):
@@ -2979,6 +3066,8 @@ def api_clock(action):
         note_device(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
         if mac and res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
             conn.execute("update shifts set mac = ? where id = ? and mac is not ?", (mac, res["shift"]["id"], mac))
+        if res.get("shift"):
+            note_battery(conn, res["shift"]["id"], body)
         conn.commit()
     return jsonify(res)
 
@@ -3598,6 +3687,8 @@ def _live_payload(conn):
             "sched_start": sc["starts_at"] if sc else None, "sched_end": sc["ends_at"] if sc else None,
             "seen": r["presence"]["t"] if r.get("presence") else None, "seen_ip": r["presence"]["ip"] if r.get("presence") else None,
             "why": r["presence"]["why"] if r.get("presence") else None,
+            "battery": s["battery"] if s else None, "charging": bool(s["charging"]) if s else False,
+            "power_lost": s["power_lost_at"] if s else None,
         })
     counts = {k: sum(1 for r in rows if r["state"] == k) for k in LIVE_STATES}
     return {"rows": out, "counts": counts, "stats": dashboard_stats(conn), "now": now()}

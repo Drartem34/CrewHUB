@@ -19,6 +19,8 @@
       p.push("з " + hhmm(r.started_at) + " · " + dur(w));
     }
     if (r.last_seen) p.push("пінг " + hhmm(r.last_seen) + " · " + esc(r.ip));
+    if (r.power_lost) p.push('<span style="color:var(--warn-text)">телефон розрядився о ' + hhmm(r.power_lost) + ", зміна рахується</span>");
+    else if (r.battery != null) p.push("заряд " + r.battery + "%" + (r.charging ? " ⚡" : ""));
     if (r.sched_start) p.push("за графіком " + hhmm(r.sched_start) + "–" + hhmm(r.sched_end));
     if (r.seen && !r.last_seen) p.push("пінг " + hhmm(r.seen) + " · " + esc(r.seen_ip));
     const line = p.join(" · ");

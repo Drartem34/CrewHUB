@@ -7,7 +7,9 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
@@ -15,6 +17,7 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -78,6 +81,7 @@ public class WatchService extends Service {
     private volatile boolean alerted;   // висить попередження «Телефон відключився від робочого Wi-Fi»
     private volatile long lostAt;       // коли телефон вийшов з Wi-Fi (с)
     private PowerManager.WakeLock alertLock;  // хвилину після виходу з Wi-Fi: дочекатися, чи це не короткий обрив
+    private BroadcastReceiver shutdown;       // телефон вимикається (сів заряд чи вимкнули) — останній пінг із зарядом
 
     static SharedPreferences prefs(Context c) {
         return c.getSharedPreferences("crewhub", Context.MODE_PRIVATE);
@@ -191,6 +195,53 @@ public class WatchService extends Service {
             }
         };
         cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), callback);
+
+        // Телефон вимикається (зокрема коли сів заряд): встигаємо сказати серверу останній заряд. Тоді сервер знає,
+        // що телефон розрядився, а не людина пішла, і не закриває зміну (див. battery_keep_minutes на сервері)
+        shutdown = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                final Network n = wifi;
+                if (!onShift || n == null) return;
+                final PendingResult done = goAsync();
+                new Thread(new Runnable() {
+                    public void run() {
+                        HttpURLConnection h = null;
+                        try {
+                            h = open(n, "api/clock/heartbeat");
+                            h.setConnectTimeout(2_000);
+                            h.setReadTimeout(2_000);
+                            OutputStream out = h.getOutputStream();
+                            out.write(("{\"device_id\":\"app-" + deviceId(WatchService.this) + "\",\"shutdown\":true"
+                                    + battery(WatchService.this) + "}").getBytes("UTF-8"));
+                            out.close();
+                            h.getResponseCode();
+                        } catch (Exception ignored) {
+                        } finally {
+                            if (h != null) h.disconnect();
+                            done.finish();
+                        }
+                    }
+                }).start();
+            }
+        };
+        IntentFilter f = new IntentFilter(Intent.ACTION_SHUTDOWN);
+        f.addAction("android.intent.action.QUICKBOOT_POWEROFF");  // деякі Xiaomi/HTC
+        // Android 13+: явно «з інших застосунків» — QUICKBOOT_POWEROFF шле системний застосунок виробника
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(shutdown, f, Context.RECEIVER_EXPORTED);
+        else registerReceiver(shutdown, f);
+    }
+
+    /** «,"battery":37,"charging":false» для тіла пінгу або "", якщо система не каже заряд. */
+    static String battery(Context c) {
+        try {
+            BatteryManager bm = (BatteryManager) c.getSystemService(BATTERY_SERVICE);
+            int pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+            if (pct < 0 || pct > 100) return "";
+            return ",\"battery\":" + pct + ",\"charging\":" + bm.isCharging();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     @Override
@@ -348,7 +399,7 @@ public class WatchService extends Service {
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json");
         c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL
-                + ") CrewHubApp/2.2 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
+                + ") CrewHubApp/2.3 background CrewHubDevice/" + deviceId(this) + deviceInfo(this));
         String cookie = prefs(this).getString("cookie", null);
         if (cookie != null) c.setRequestProperty("Cookie", cookie);
         return c;
@@ -426,7 +477,7 @@ public class WatchService extends Service {
             long away = p.getLong("away_since", 0);
             // unrestricted: чи дозволено роботу без обмежень батареї (сервер показує це в картці зміни)
             boolean unrestricted = ((PowerManager) getSystemService(POWER_SERVICE)).isIgnoringBatteryOptimizations(getPackageName());
-            out.write(("{\"device_id\":\"app-" + deviceId(this) + "\",\"unrestricted\":" + unrestricted
+            out.write(("{\"device_id\":\"app-" + deviceId(this) + "\",\"unrestricted\":" + unrestricted + battery(this)
                     + (away > 0 ? ",\"away_since\":" + away : "") + "}").getBytes("UTF-8"));
             out.close();
             int code = c.getResponseCode();
@@ -681,6 +732,10 @@ public class WatchService extends Service {
         handler.removeCallbacksAndMessages(null);
         try {
             cm.unregisterNetworkCallback(callback);
+        } catch (Exception ignored) {
+        }
+        try {
+            unregisterReceiver(shutdown);
         } catch (Exception ignored) {
         }
         if (wakeLock.isHeld()) wakeLock.release();
