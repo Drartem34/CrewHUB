@@ -434,6 +434,11 @@ def scan(conn=None):
     before = [ip for ip in neighbours() if ours(ip)]
     names = probe(nets, before) if nets else {}
     seen = {ip: mac for ip, mac in neighbours().items() if ours(ip)}
+    try:  # підтверджені щойно записи — запам'ятати, на яких IP який MAC (так видно підсилювач Wi-Fi, 17.15)
+        states = neighbour_states() or {}
+        core.note_mac_ips({ip: mac for ip, (mac, st) in states.items() if st == "REACHABLE" and ours(ip)})
+    except Exception:  # noqa: BLE001 — лише підказка
+        pass
     if nets:
         ips_wo_dns = [ip for ip in seen if ip not in names and ip not in before]
         if ips_wo_dns:  # пристрої, що з'явились лише після «стуку», — питаємо DNS роутера про них окремо

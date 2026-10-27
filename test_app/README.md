@@ -46,6 +46,8 @@
 - `assign_mac()`: новий MAC — телефон людини (`/admin/lan/assign` «Це телефон працівника?», `lan.recognise_by_name` за
   особистою назвою, `lan.generic_name`); `lan_devices.how`; у `lan.devices()` — `dev_key`, `dev_fp`.
 - `session["dev"]` з токена автовходу → `CREWHUB.device` → `clock.js` повертає код пристрою, якщо Safari стер `localStorage`.
+- Роутер не тримає змін: `mark_shared()`; у `different_devices` знову «телефони різних людей»; у `presence_step` — «кілька
+  людей на зміні з одним MAC» і підсилювач (`note_mac_ips`, `repeater_macs`, `mark_repeaters`); `pause_close_note()` в «Огляді».
 
 ## Що нового у версії 17.14: блокування в одному місці, впізнавання з новими IP і MAC
 

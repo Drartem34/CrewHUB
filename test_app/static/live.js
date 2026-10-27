@@ -31,6 +31,8 @@
     if (r.seen && !r.last_seen) p.push("пінг " + hhmm(r.seen) + " · " + esc(r.seen_ip));
     // Чому сервер не бачить телефон зміни, коли сторінку закрито (iPhone без застосунку): MAC невідомий чи спільний
     if (r.net_note) p.push('<span style="color:var(--warn-text)">' + esc(r.net_note) + "</span>");
+    // Пішов з Wi-Fi: коли сервер закриє зміну і до котрої її оплачено (зміна на паузі ще не закрита — це видно)
+    if (r.close_note) p.push('<span style="color:var(--warn-text)">' + esc(r.close_note) + "</span>");
     const line = alarm + p.join(" · ");  // alarm — блок: сам переносить рядок
     // Чому зміна не почалась сама — окремим рядком, щоб адмін одразу бачив, що виправити
     return r.why ? (line ? line + "<br>" : "") + '<span style="color:var(--warn-text)">Автозміна не почалась: ' + esc(r.why) + "</span>" : line;

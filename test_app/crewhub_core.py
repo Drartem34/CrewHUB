@@ -590,6 +590,7 @@ def init_db(seed=True):
     _shared.update(at=0.0, set=set())
     _mac_seen.clear()
     _mac_pending.clear()
+    _mac_ips.clear()
     _blocked["at"] = 0.0
     conn = connect()
     conn.executescript(SCHEMA)
@@ -948,8 +949,10 @@ _shared = {"at": 0.0, "set": set()}
 _mac_seen = {}  # MAC → {код пристрою: (відбиток, коли, хто, система, браузер)} за 15 хв — щоб помітити кілька пристроїв за одним MAC
 SHARED_WINDOW = 900     # с: два різні пристрої з одного MAC за цей час — MAC спільний
 SHARED_KEEP = 7 * 86400  # с: без нових доказів MAC перестає вважатись спільним
-SHARED_LEGACY_KEEP = 3600  # с: позначка 17.13–17.14 без причини (могла бути помилковою) — лише година без нових доказів
-SHARED_ACTIVE = "last_at > ? and (why is not null or last_at > ?)"  # умова SQL «MAC зараз спільний»
+# с: позначка 17.13–17.14 без причини, де за MAC була одна людина (її iPhone з двома браузерами — помилкова), діє лише
+# годину без нових доказів. Позначки, де за MAC різні люди («Іван, Ольга»), — як і раніше, 7 днів: це справжній роутер
+SHARED_LEGACY_KEEP = 3600
+SHARED_ACTIVE = "last_at > ? and (why is not null or note like '%, %' or last_at > ?)"  # умова SQL «MAC зараз спільний»
 
 
 def shared_args():
@@ -998,13 +1001,15 @@ def browser_sig(ua):
     return re.sub(r"\d+(\.\d+)+", "", re.sub(r"CrewHub\S*", "", ua or "")).strip() or None
 
 
-def different_devices(k1, fp1, k2, fp2, p1=None, p2=None, b1=None, b2=None):
+def different_devices(k1, fp1, k2, fp2, p1=None, p2=None, b1=None, b2=None, u1=None, u2=None):
     """Чи це точно два різні фізичні пристрої — причина («iPhone і Android») або None. Різні системи (iPhone і
     Android) чи різні моделі Android — так. Два різні коди застосунку — так (код — одна установка на телефоні). Два
     браузери з різними відбитками — так, але лише той самий браузер не на iPhone (17.15): один телефон буває з двома
     браузерами (Chrome і Samsung Internet, Safari і браузер усередині Viber) — у кожного свій код і свій відбиток, а
     Safari в нових iOS сам трохи змінює відбиток, захищаючи від стеження. Застосунок і браузер однієї моделі — не
-    відомо: це може бути один телефон (у WebView і Chrome відбитки різні). Без відбитка й моделі — не відомо."""
+    відомо: це може бути один телефон (у WebView і Chrome відбитки різні). Без відбитка й моделі — не відомо.
+    Два браузери з різними відбитками в акаунтах різних людей — так, і на iPhone (як у 17.13): інакше другий роутер, за
+    яким лише iPhone, не ставав би спільним — і тримав би зміни людей, які вже пішли (17.15)."""
     if k1 == k2:
         return None
     if p1 and p2 and {p1[0], p2[0]} == {"ios", "android"}:
@@ -1014,8 +1019,10 @@ def different_devices(k1, fp1, k2, fp2, p1=None, p2=None, b1=None, b2=None):
     if k1.startswith("app-") and k2.startswith("app-"):
         return "два застосунки CrewHub"
     if fp1 and fp2 and fp1 != fp2 and k1[:4] == k2[:4]:
+        if u1 and u2 and u1 != u2:
+            return "телефони різних людей"
         if "ios" in ((p1 or (None,))[0], (p2 or (None,))[0]) or (b1 and b2 and b1 != b2):
-            return None
+            return None  # одна людина: iPhone чи два браузери одного телефона
         return "два браузери з різними відбитками"
     return None
 
@@ -1033,7 +1040,7 @@ def observe_mac(conn, user_id, key, fp, ip):
     old = seen.get(key) or (None,) * 5
     why, other = None, None
     for k, v in seen.items():
-        if why := different_devices(key, fp, k, v[0], plat, v[3], sig, v[4] if len(v) > 4 else None):
+        if why := different_devices(key, fp, k, v[0], plat, v[3], sig, v[4] if len(v) > 4 else None, user_id, v[2]):
             other = (k, v)
             break
     seen[key] = (fp or old[0], t, user_id, plat or old[3], sig or (old[4] if len(old) > 4 else None))
@@ -1042,7 +1049,14 @@ def observe_mac(conn, user_id, key, fp, ip):
         _mac_seen.clear()
     if not other:
         return
-    names = [r[0] for r in conn.execute("select full_name from users where id in (?, ?)", (user_id, other[1][2]))]
+    mark_shared(conn, mac, why, [user_id, other[1][2]], ip, key)
+
+
+def mark_shared(conn, mac, why, user_ids, ip=None, key=None):
+    """MAC спільний (за ним кілька телефонів): у shared_macs з причиною; уперше — MAC стирається з усіх записів
+    (він не впізнає жоден телефон і не тримає нічию зміну), подія в журнал і пояснення адмінам."""
+    names = [r[0] for r in conn.execute(f"select full_name from users where id in ({','.join('?' * len(user_ids))})", user_ids)] \
+        or ["телефони за ним"]
     first = mac not in shared_macs()  # нова позначка (або стара 17.13–17.14, що вже не діяла)
     conn.execute("insert into shared_macs(mac, first_at, last_at, note, why) values (?, ?, ?, ?, ?) on conflict(mac) do update"
                  " set last_at = excluded.last_at, why = excluded.why, note = case when ? then excluded.note else note end",
@@ -1092,6 +1106,7 @@ def neighbour_mac(ip, cached_only=False):
                 table.pop(i)
             if ip in doubtful:
                 lan.knock([ip])
+            note_mac_ips({i: m for i, m in table.items() if i in states})  # лише підтверджені: де видно підсилювач
         _mac_cache.update(at=t, table=table)
     return _mac_cache["table"].get(ip)
 
@@ -2458,6 +2473,33 @@ def start_wifi_pause(conn, shift, since, reason, ip=None, log=True):
         log_clock(conn, shift["user_id"], shift["id"], "wifi_lost", ip, shift["location_id"], False, None, {"reason": reason, "since": since})
 
 
+def pause_deadline(conn, b, user_id, shift_start, outage_end, pause_limit, after_end, forgive):
+    """Коли sweep закриє зміну на Wi-Fi-паузі b: (пішов після кінця робочого часу, час закриття). Закривається вона
+    часом початку паузи — очікування не оплачується."""
+    # Пішов після кінця зміни: чекаємо auto_close_minutes (раптом повернеться), у робочий час — wifi_pause_close_minutes.
+    w = work_window(conn, user_id, shift_start)
+    ended = w is not None and b["started_at"] >= w[1] - 15 * 60
+    # Телефон лише замовк (міг заснути) — чекаємо довше: озветься з точки, і час зарахується
+    limit = after_end if ended else (max(pause_limit, forgive) if b["reason"] == "silence" and sleepy_shift(b) else pause_limit)
+    # Пауза через відключення світла: чекаємо від появи світла, а не від початку відключення —
+    # інакше довге відключення одразу закрило б зміну людині, яка нікуди не йшла
+    since = max(b["started_at"], outage_end) if b["reason"] == "outage" else b["started_at"]
+    return ended, since + limit
+
+
+def pause_close_note(conn, s):
+    """Для «Огляду»: зміна на Wi-Fi-паузі — коли людина пішла, коли зміну закриє сервер і до котрої її оплачено (17.15)."""
+    b = conn.execute("select b.started_at, b.reason, s.device from breaks b join shifts s on s.id = b.shift_id where b.shift_id = ?"
+                     " and b.kind = 'wifi_loss' and b.ended_at is null order by b.id desc limit 1", (s["id"],)).fetchone()
+    if not b:
+        return None
+    _ended, at = pause_deadline(conn, b, s["user_id"], s["started_at"], int(meta_get(conn, "outage_end", 0)),
+                                setting_int("wifi_pause_close_minutes", conn) * 60, setting_int("auto_close_minutes", conn) * 60,
+                                setting_int("silence_forgive_minutes", conn) * 60)
+    hm = lambda x: f"{datetime.fromtimestamp(x):%H:%M}"  # noqa: E731
+    return f"зв'язку з робочим Wi-Fi немає з {hm(b['started_at'])} — сервер закриє зміну о {hm(at)}, оплата до {hm(b['started_at'])}"
+
+
 def sweep(conn):
     """Фонова перевірка (кожні 15 с): втрата Wi-Fi, затягнута Wi-Fi пауза, забуті зміни."""
     t = now()
@@ -2550,15 +2592,8 @@ def sweep(conn):
                           " s.location_id, s.device, s.bg_ok from breaks b join shifts s on s.id = b.shift_id"
                           " where b.kind = 'wifi_loss' and b.ended_at is null and s.status = 'paused' and b.started_at < ?",
                           (t - min(pause_limit, after_end),)).fetchall():
-        # Пішов після кінця зміни: чекаємо auto_close_minutes (раптом повернеться), у робочий час — wifi_pause_close_minutes.
-        w = work_window(conn, b["user_id"], b["shift_start"])
-        ended = w is not None and b["started_at"] >= w[1] - 15 * 60
-        # Телефон лише замовк (міг заснути) — чекаємо довше: озветься з точки, і час зарахується
-        limit = after_end if ended else (max(pause_limit, forgive) if b["reason"] == "silence" and sleepy_shift(b) else pause_limit)
-        # Пауза через відключення світла: чекаємо від появи світла, а не від початку відключення —
-        # інакше довге відключення одразу закрило б зміну людині, яка нікуди не йшла
-        since = max(b["started_at"], outage_end) if b["reason"] == "outage" else b["started_at"]
-        if t - since < limit:
+        ended, deadline = pause_deadline(conn, b, b["user_id"], b["shift_start"], outage_end, pause_limit, after_end, forgive)
+        if t < deadline:
             continue
         changed += 1
         conn.execute("delete from breaks where id = ?", (b["id"],))
@@ -2872,6 +2907,37 @@ PRESENCE_SILENT = 40  # с без пінгу, після яких зміну п�
 PRESENCE_RETRY = (2, 4)
 MAC_PENDING_TTL = 180  # с: стільки чекаємо підтвердження MAC після запиту з телефона
 BLIND_MAX_AGE = 600  # с: зміні без MAC шукаємо його за адресою, з якої телефон озивався не раніше
+MULTI_IP_CONFIRM = 60  # с: стільки один MAC має бути на кількох IP одночасно, щоб стати спільним (підсилювач)
+MAC_IPS_KEEP = 1800  # с: стільки пам'ятаємо, на яких IP бачили MAC
+_mac_ips = {}  # MAC → {IP: [коли вперше, коли востаннє]} — з підтверджених записів таблиці сусідів (17.15)
+
+
+def note_mac_ips(table, t=None):
+    """Запам'ятовує, на яких IP який MAC (лише підтверджені записи): так видно підсилювач Wi-Fi, що підставляє свій MAC
+    за всі телефони за ним, — навіть коли зараз за ним лишився один телефон."""
+    t = t or now()
+    for ip, mac in table.items():
+        span = _mac_ips.setdefault(mac, {}).setdefault(ip, [t, t])
+        span[1] = max(span[1], t)
+    if len(_mac_ips) > 5000:
+        _mac_ips.clear()
+
+
+def repeater_macs(t=None):
+    """MAC, які були на двох IP одночасно довше MULTI_IP_CONFIRM: телефон міняє IP (DHCP) — старий запис живе ще до
+    хвилини, а два IP разом довше — це підсилювач Wi-Fi (за ним кілька телефонів)."""
+    t = t or now()
+    out = set()
+    for mac, spans in list(_mac_ips.items()):
+        for ip in [ip for ip, (_a, b) in spans.items() if b < t - MAC_IPS_KEEP]:
+            spans.pop(ip, None)
+        if not spans:
+            _mac_ips.pop(mac, None)
+            continue
+        xs = list(spans.values())
+        if any(min(a[1], b[1]) - max(a[0], b[0]) >= MULTI_IP_CONFIRM for i, a in enumerate(xs) for b in xs[i + 1:]):
+            out.add(mac)
+    return out
 _mac_pending = {}  # IP → (хто, код пристрою, коли): запит з цього IP був, а його MAC система ще не підтвердила (17.15)
 
 
@@ -2894,7 +2960,7 @@ def known_mac(conn, user_id, key):
     for (mac,) in conn.execute("select mac from device_history where user_id = ? and device_key = ? and mac is not null union all"
                                " select mac from devices where user_id = ? and device_key = ? and mac is not null",
                                (user_id, key, user_id, key)):
-        if mac not in shared_macs():
+        if mac not in shared_macs() and not mac_taken(conn, user_id, mac):
             return mac
     return None
 
@@ -2941,6 +3007,14 @@ def assign_mac(conn, user_id, mac, how, ip=None):
     return key
 
 
+def mark_repeaters(conn):
+    """Підсилювачі Wi-Fi (repeater_macs) — спільні MAC: за ними сервер не тримає нічию зміну."""
+    for mac in repeater_macs() - shared_macs():
+        ids = [r[0] for r in conn.execute("select distinct user_id from shifts where mac = ? and status != 'closed' union"
+                                          " select user_id from device_history where mac = ?", (mac, mac))]
+        mark_shared(conn, mac, "один MAC на кількох IP (підсилювач Wi-Fi)", ids or [0])
+
+
 def presence_step():
     import lan
     with _lock:
@@ -2948,6 +3022,14 @@ def presence_step():
         try:
             if setting("lan_presence", conn) != "1":
                 return
+            # Один MAC у відкритих змінах кількох людей — це не телефон, а другий роутер чи підсилювач (він відповідає
+            # завжди): за ним сервер вважав би на місці всіх, хто вже пішов. Позначаємо спільним і не беремо (17.15)
+            for mac, ids in conn.execute("select mac, group_concat(distinct user_id) from shifts where status != 'closed'"
+                                         " and mac is not null group by mac having count(distinct user_id) > 1").fetchall():
+                if mac not in shared_macs():
+                    mark_shared(conn, mac, "на зміні кілька людей з одним MAC", [int(x) for x in ids.split(",")])
+            mark_repeaters(conn)
+            conn.commit()
             # Відкриті зміни, що мовчать: активні або на паузі через Wi-Fi. Паузу зміни з застосунку не чіпаємо —
             # застосунок сам знає, коли телефон вийшов з мережі, і поверне зміну точніше.
             cands = [dict(s) for s in conn.execute(
@@ -3013,6 +3095,15 @@ def presence_step():
             seen.setdefault(ip, mac)
             where.setdefault(mac, ip)
         late = [ip for ip in late if ip not in seen]
+    # Один MAC зараз на кількох IP — підсилювач Wi-Fi підставляє свій MAC за всі телефони за ним: за таким MAC «на місці»
+    # будь-хто з них, тож присутність за ним не рахуємо. Тримається довше хвилини — MAC спільний (на мить так буває, коли
+    # телефон щойно отримав новий IP, а старий запис ще не застарів) (17.15)
+    note_mac_ips(seen)
+    ips_of = {}
+    for ip, mac in seen.items():
+        ips_of.setdefault(mac, set()).add(ip)
+    multi = {mac for mac, xs in ips_of.items() if len(xs) > 1} | repeater_macs()
+    where = {mac: ip for mac, ip in where.items() if mac not in multi}
     if soft:  # м'який облік: чий телефон не знайшовся — далі щопівхвилини, знайшовся — знову раз на вікно
         for c in cands:
             if c["status"] == "active":
@@ -3020,7 +3111,8 @@ def presence_step():
     with _lock:
         conn = connect()
         try:
-            shared = shared_macs()
+            mark_repeaters(conn)
+            shared = shared_macs() | multi
             for ip, (uid, key, _t) in pending.items():  # пристрій щойно робив запит з цього IP — це його MAC
                 mac = seen.get(ip)
                 cur = _mac_pending.get(ip)
@@ -3044,6 +3136,8 @@ def presence_step():
                 if res and res.get("auto_started"):
                     conn.execute("update shifts set mac = ? where user_id = ? and status != 'closed'", (st["mac"], user["id"]))
             for c in cands:
+                if c["mac"] in shared:
+                    continue  # підсилювач чи роутер: за ним «на місці» хтось, а не обов'язково ця людина
                 ip = c["last_seen_ip"] if seen.get(c["last_seen_ip"]) == c["mac"] else where.get(c["mac"])
                 if not ip or not ip_in_location(conn, ip, c["location_id"]):
                     continue
@@ -4976,6 +5070,7 @@ def _live_payload(conn):
             "device_flag": s["device_flag"] if s else None,
             "device": shift_device(conn, s) if s else None, "start_ip": s["start_ip"] if s else None,
             "net_note": net_note(conn, s) if s else None,
+            "close_note": pause_close_note(conn, s) if s and r["state"] == "wifi_lost" else None,
         })
     counts = {k: sum(1 for r in rows if r["state"] == k) for k in LIVE_STATES}
     return {"rows": out, "counts": counts, "stats": dashboard_stats(conn), "now": now()}

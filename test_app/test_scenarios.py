@@ -1170,17 +1170,20 @@ class IPhoneWebPresence1715Test(ScenarioBase):
         self.assertEqual([r[0] for r in self.sql("select why from shared_macs")], ["iPhone і Android"])
 
     def test_old_mark_without_reason_lasts_an_hour(self):
-        with core.connect() as c:  # позначка 17.13–17.14: могла бути помилковою (один iPhone з двома браузерами)
-            c.execute("insert into shared_macs(mac, first_at, last_at, note) values (?, ?, ?, 'Іван, Іван')",
+        with core.connect() as c:  # позначка 17.13–17.14 з однією людиною: помилкова (один iPhone з двома браузерами)
+            c.execute("insert into shared_macs(mac, first_at, last_at, note) values (?, ?, ?, 'Іван Петренко')",
                       (self.iphone.mac, self.at(8), self.at(8)))
             c.execute("insert into shared_macs(mac, first_at, last_at, note, why) values ('da:00:00:00:00:77', ?, ?, 'x', 'iPhone і Android')",
                       (self.at(8), self.at(8)))
+            # позначка 17.13–17.14 з різними людьми — справжній роутер: як і раніше, 7 днів
+            c.execute("insert into shared_macs(mac, first_at, last_at, note) values ('da:00:00:00:00:78', ?, ?, 'Іван Петренко, Ольга Коваль')",
+                      (self.at(8), self.at(8)))
             c.commit()
         core._shared.update(at=0.0)
-        self.assertEqual(core.shared_macs(), {"da:00:00:00:00:77"})
+        self.assertEqual(core.shared_macs(), {"da:00:00:00:00:77", "da:00:00:00:00:78"})
         self.tick(8, 30)
         core._shared.update(at=0.0)
-        self.assertEqual(core.shared_macs(), {"da:00:00:00:00:77", self.iphone.mac})
+        self.assertEqual(core.shared_macs(), {"da:00:00:00:00:77", "da:00:00:00:00:78", self.iphone.mac})
 
     def test_not_a_router_button(self):
         android = Phone(self.net, 47)
@@ -1310,6 +1313,99 @@ class IPhoneSeenWithoutSite1715Test(ScenarioBase):
         page = fresh.get("/me?tab=clock", headers={"User-Agent": self.IPHONE},
                          environ_base={"REMOTE_ADDR": self.iphone.ip}).get_data(as_text=True)
         self.assertIn(f'device: "{self.iphone.key}"', page)
+
+class LeftWorkBehindRouter1715Test(ScenarioBase):
+    """17.15: люди пішли з роботи, а зміни не закрились. Другий роутер чи підсилювач Wi-Fi відповідає за всіх, хто за
+    ним, і завжди «в мережі» — за його MAC сервер вважав на місці людей, які вже пішли. Тепер такий MAC не тримає зміну:
+    різні люди з різних телефонів за ним, кілька людей на зміні з одним MAC, один MAC на кількох IP — MAC спільний."""
+    IPHONE = IPhoneWebPresence1715Test.IPHONE
+
+    def setUp(self):
+        super().setUp()
+        core._mac_seen.clear()
+        core._shared.update(at=0.0, set=set())
+        self.addCleanup(core._shared.update, at=0.0, set=set())
+        # таблиця сусідів зі станами, як `ip neigh`: хто в мережі — щойно підтверджений
+        states = lambda: {ip: (p.mac, "REACHABLE") for ip, p in self.net.items() if p.online}  # noqa: E731
+        patcher = mock.patch.object(lan, "neighbour_states", states)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tick(17, 50)
+
+    def behind(self, first, n, ua=None):
+        p = Phone(self.net, n, ua=ua)
+        del self.net[p.ip]
+        p.ip, p.mac = first.ip, first.mac
+        return p
+
+    def leave_and_wait(self, *phones):
+        """Пінг о 17:59, далі люди йдуть додому; роутер (його IP і MAC) лишається в мережі."""
+        self.tick(17, 59)
+        for p in phones:
+            p.clock("heartbeat")
+        self.live_until(20)
+
+    def assert_closed(self, *users):
+        for u in users:
+            s = self.shift(u)
+            self.assertEqual(s["status"], "closed", u)
+            self.assertLessEqual(s["ended_at"], self.at(18, 10), u)  # оплата — до останнього зв'язку, не до 20:00
+
+    def test_two_iphones_behind_router(self):
+        ivan = Phone(self.net, 80, ua=self.IPHONE)
+        olha = self.behind(ivan, 81, ua=self.IPHONE)
+        ivan.login(IVAN)
+        olha.login(OLHA)
+        self.assertTrue(ivan.clock("start")["ok"])
+        self.assertTrue(olha.clock("start")["ok"])
+        self.assertEqual([r[0] for r in self.sql("select why from shared_macs")], ["телефони різних людей"])
+        self.leave_and_wait(ivan, olha)
+        self.assert_closed("ivan", "olha")
+
+    def test_same_phones_behind_router_both_on_shift(self):
+        # двоє однакових телефонів (той самий відбиток) — за запитами не розрізнити; але одночасно на зміні двоє людей
+        # з одним MAC — це не телефон
+        ivan = Phone(self.net, 82)
+        olha = self.behind(ivan, 83)
+        olha.fp = ivan.fp
+        ivan.login(IVAN)
+        olha.login(OLHA)
+        self.assertTrue(ivan.clock("start")["ok"])
+        self.assertTrue(olha.clock("start")["ok"])
+        self.tick(17, 52)
+        core.presence_step()
+        self.assertEqual([r[0] for r in self.sql("select why from shared_macs")], ["на зміні кілька людей з одним MAC"])
+        self.leave_and_wait(ivan, olha)
+        self.assert_closed("ivan", "olha")
+
+    def test_repeater_same_mac_on_two_ips(self):
+        # підсилювач Wi-Fi: у кожного телефона свій IP, але MAC підсилювача; Іван пішов, а за підсилювачем ще хтось
+        ivan = Phone(self.net, 84, ua=self.IPHONE)
+        stranger = Phone(self.net, 85)
+        stranger.mac = ivan.mac
+        ivan.login(IVAN)
+        self.assertTrue(ivan.clock("start")["ok"])
+        self.tick(17, 59)
+        ivan.clock("heartbeat")
+        ivan.online = False  # Іван пішов; підсилювач і далі відповідає за телефон незнайомця
+        self.live_until(20)
+        self.assert_closed("ivan")
+        self.assertEqual([r[0] for r in self.sql("select why from shared_macs")], ["один MAC на кількох IP (підсилювач Wi-Fi)"])
+
+    def test_own_phone_left_is_closed_and_overview_says_when(self):
+        ivan = Phone(self.net, 86, ua=self.IPHONE)
+        ivan.login(IVAN)
+        self.assertTrue(ivan.clock("start")["ok"])
+        self.tick(17, 59)
+        ivan.clock("heartbeat")
+        ivan.online = False
+        self.live_until(18, 30)
+        self.assertEqual(self.shift("ivan")["status"], "paused")
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        row = [r for r in admin.req("get", "/api/live").get_json()["rows"] if r["name"] == "Іван Петренко"][0]
+        self.assertIn("сервер закриє зміну о", row["close_note"])
+        self.live_until(20)
+        self.assert_closed("ivan")
 
 if __name__ == "__main__":
     unittest.main()
