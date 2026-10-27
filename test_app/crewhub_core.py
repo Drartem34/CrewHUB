@@ -954,12 +954,39 @@ def shared_macs():
     return _shared["set"]
 
 
-def different_devices(k1, fp1, k2, fp2):
-    """Чи це точно два різні фізичні пристрої. Два різні коди застосунку — так (код — одна установка на телефоні).
-    Два браузери (чи два застосунки) з різними відбитками — так. Застосунок і браузер — не відомо: це може бути
-    один телефон (у WebView і Chrome відбитки різні). Без відбитка — не відомо."""
+def ua_platform(ua):
+    """(система, модель) з User-Agent: ("ios", None), ("android", "SM-A515F"), ("windows", None)… Модель Android —
+    лише справжня (Chrome з урізаним User-Agent пише «K» — тоді None). Невідомо — None."""
+    ua = ua or ""
+    if re.search(r"iPhone|iPad|iPod", ua):
+        return ("ios", None)
+    if "Android" in ua:
+        import lan
+        model = lan.ua_info(ua)[0]
+        return ("android", model if model and model != "Android" else None)
+    for k, v in (("Windows", "windows"), ("Macintosh", "mac"), ("CrOS", "chromeos"), ("Linux", "linux")):
+        if k in ua:
+            return (v, None)
+    return None
+
+
+def same_model(a, b):
+    """«samsung SM-A515F» (від застосунку) і «SM-A515F» (з Chrome) — одна модель."""
+    a, b = a.lower().strip(), b.lower().strip()
+    return a == b or a.endswith(" " + b) or b.endswith(" " + a)
+
+
+def different_devices(k1, fp1, k2, fp2, p1=None, p2=None):
+    """Чи це точно два різні фізичні пристрої. Різні системи (iPhone і Android) чи різні моделі Android — так. Два
+    різні коди застосунку — так (код — одна установка на телефоні). Два браузери (чи два застосунки) з різними
+    відбитками — так. Застосунок і браузер однієї моделі — не відомо: це може бути один телефон (у WebView і Chrome
+    відбитки різні). Без відбитка й моделі — не відомо."""
     if k1 == k2:
         return False
+    if p1 and p2 and {p1[0], p2[0]} == {"ios", "android"}:
+        return True  # (Linux чи Mac не порівнюємо: так себе показує телефон у режимі «версія для ПК»)
+    if p1 and p2 and p1[0] == p2[0] == "android" and p1[1] and p2[1] and not same_model(p1[1], p2[1]):
+        return True
     if k1.startswith("app-") and k2.startswith("app-"):
         return True
     return bool(fp1 and fp2 and fp1 != fp2 and k1[:4] == k2[:4])
@@ -972,9 +999,10 @@ def observe_mac(conn, user_id, key, fp, ip):
     if not (mac and key):
         return
     t = time.time()
+    plat = ua_platform(request.headers.get("User-Agent")) if has_request_context() else None
     seen = {k: v for k, v in _mac_seen.get(mac, {}).items() if t - v[1] < SHARED_WINDOW}
-    other = next(((k, v) for k, v in seen.items() if different_devices(key, fp, k, v[0])), None)
-    seen[key] = (fp or (seen.get(key) or (None,))[0], t, user_id)
+    other = next(((k, v) for k, v in seen.items() if different_devices(key, fp, k, v[0], plat, v[3])), None)
+    seen[key] = (fp or (seen.get(key) or (None,))[0], t, user_id, plat or (seen.get(key) or (None,) * 4)[3])
     _mac_seen[mac] = seen
     if len(_mac_seen) > 5000:
         _mac_seen.clear()

@@ -894,6 +894,48 @@ class SharedMacTest(ScenarioBase):
         app.login(IVAN)
         self.assertEqual(self.shared(), [])
 
+    def test_iphone_and_android_same_ip_and_mac(self):
+        # Випадок з життя: два профілі — один з iPhone, другий з Android, а MAC і IP однакові. Навіть з однаковим
+        # відбитком (чи без нього) iPhone і Android — точно два різні телефони
+        iphone = Phone(self.net, 69, ua="Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 "
+                                           "(KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1")
+        iphone.login(IVAN)
+        android = self.behind(iphone, 70)
+        android.fp = iphone.fp  # відбиток не допомагає — допомагає система
+        android.login(OLHA)
+        self.assertEqual(self.shared(), [iphone.mac])
+        self.assertEqual(self.events("olha", "login_other_device"), [])
+
+    def test_android_app_and_iphone(self):
+        app = Phone(self.net, 71, app="olhaapp001")
+        app.login(OLHA)
+        iphone = self.behind(app, 72)
+        iphone.ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) Version/17.4 Mobile/15E148 Safari/604.1"
+        iphone.login(IVAN)
+        self.assertEqual(self.shared(), [app.mac])
+
+    def test_two_android_models(self):
+        a = Phone(self.net, 73, model="SM-A515F")
+        a.login(IVAN)
+        b = self.behind(a, 74)
+        b.ua = CHROME.format(model="Pixel 7")
+        b.fp = a.fp
+        b.login(OLHA)
+        self.assertEqual(self.shared(), [a.mac])
+
+    def test_same_phone_app_and_chrome_and_desktop_mode(self):
+        # Один телефон: застосунок пише модель «samsung SM-A515F», Chrome — «SM-A515F», а в режимі «версія для ПК»
+        # браузер показує себе як Linux — це не різні пристрої
+        web = Phone(self.net, 75, model="SM-A515F")
+        web.login(IVAN)
+        app = self.behind(web, 76, app="ivanapp075")
+        app.ua += " CrewHubModel/samsung%20SM-A515F"
+        app.login(IVAN)
+        desk = self.behind(web, 77)
+        desk.ua, desk.fp = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", None
+        desk.login(OLHA)
+        self.assertEqual(self.shared(), [])
+
     def test_shared_mac_is_not_blocked(self):
         ivan = Phone(self.net, 67)
         ivan.login(IVAN)
