@@ -221,7 +221,7 @@ class Dashboard:
         net = self.server_net()
         if net:  # сервер в одній мережі з телефонами — чи вона прив'язана до точки
             t.add_row("Wi-Fi точки", Text(f"{net['cidr']} → {net['location']['name']}", style="#22c55e") if net["location"] else
-                      Text(f"{net['cidr']} не додано: телефони «не в робочій мережі» — «Точки і Wi-Fi»", style="bold #ef4444"))
+                      Text(f"{net['cidr']} не в жодній точці: телефони «не в робочій мережі» — в адмінці «Створити точку»", style="bold #ef4444"))
         return Panel(t, title="[bold white]Підключення[/]", title_align="left", box=box.ROUNDED, border_style="#3f3f46")
 
     def server_net(self):

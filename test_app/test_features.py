@@ -764,6 +764,40 @@ class ServerNetworkTest(CrewHubBase):
             self.assertEqual(core.server_network(c)["location"]["id"], 1)
             self.assertIsNotNone(core.match_location(c, "192.168.0.16"))  # телефон у мережі сервера — на точці
 
+    def test_create_point_from_offer(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        page = admin.get("/admin?tab=live").get_data(as_text=True)
+        self.assertIn("Створити точку", page)
+        r = admin.post("/admin/zones", data={"action": "new_point", "cidr": "192.168.0.0/24", "name": "  ", "back": "live"})
+        self.assertIn("/admin?tab=live", r.headers["Location"])
+        self.assertIn("Вкажіть назву точки", admin.get("/admin?tab=live").get_data(as_text=True))
+        r = admin.post("/admin/zones", data={"action": "new_point", "cidr": "192.168.0.0/24", "name": "Кав'ярня на Подолі", "back": "live"})
+        page = admin.get("/admin?tab=live").get_data(as_text=True)
+        self.assertIn("Точку «Кав&#39;ярня на Подолі» створено", page)
+        self.assertNotIn('id="serverNet"', page)
+        with core.connect() as c:
+            self.assertEqual(core.match_location(c, "192.168.0.16")["name"], "Кав'ярня на Подолі")
+        r = admin.post("/admin/zones", data={"action": "new_point", "cidr": "192.168.0.0/24", "name": "Ще одна"})
+        self.assertIn("уже прив&#39;язана", admin.get("/admin?tab=zones").get_data(as_text=True))
+        self.assertEqual(self.sql("select count(*) from locations where name = 'Ще одна'")[0][0], 0)
+        moder = self.login("moder", "moder123", client=core.app.test_client())
+        self.assertEqual(moder.post("/admin/zones", data={"action": "new_point", "cidr": "10.0.5.0/24", "name": "X"}).status_code, 403)
+
+    def test_admin_phone_in_new_network(self):
+        admin = core.app.test_client()
+        admin.post("/login", data={"username": "admin", "password": "admin123"}, environ_base={"REMOTE_ADDR": "192.168.7.16"})
+        page = admin.get("/me?tab=clock", environ_base={"REMOTE_ADDR": "192.168.7.16"}).get_data(as_text=True)
+        self.assertIn('id="netOffer"', page)
+        self.assertIn("192.168.7.0/24", page)
+        self.assertNotIn('id="netOffer"', admin.get("/me?tab=clock", environ_base={"REMOTE_ADDR": WORK_IP}).get_data(as_text=True))
+        r = admin.post("/admin/zones", data={"action": "new_point", "cidr": "192.168.7.0/24", "name": "Склад", "back": "clock"},
+                       environ_base={"REMOTE_ADDR": "192.168.7.16"})
+        self.assertIn("/me?tab=clock", r.headers["Location"])
+        self.assertNotIn('id="netOffer"', admin.get("/me?tab=clock", environ_base={"REMOTE_ADDR": "192.168.7.16"}).get_data(as_text=True))
+        ivan = core.app.test_client()  # працівнику пропозиції немає
+        ivan.post("/login", data={"username": "0671234567", "password": "1234"}, environ_base={"REMOTE_ADDR": "192.168.9.5"})
+        self.assertNotIn('id="netOffer"', ivan.get("/me?tab=clock", environ_base={"REMOTE_ADDR": "192.168.9.5"}).get_data(as_text=True))
+
     def test_no_local_network(self):
         core.get_local_ip.return_value = "127.0.0.1"
         with core.connect() as c:

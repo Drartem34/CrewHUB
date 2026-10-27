@@ -25,17 +25,9 @@
 {% endif %}
 {% endmacro %}
 {% block body %}
-{% if server_net and not server_net.location and active_locations %}
-<form method="post" action="{{ url_for('admin_zones') }}" class="banner bad" style="flex-wrap:wrap" id="serverNet">
-  {{ icon('wifi') }}<div style="flex:1 1 260px"><b>Сервер зараз у мережі <span class="mono">{{ server_net.cidr }}</span></b> (його IP {{ server_net.ip }}), але її немає
-    в жодній точці — телефони в цій мережі бачать «Не в робочій мережі» і не можуть почати зміну. Мабуть, сервер перенесли
-    чи змінився роутер. Якщо сервер стоїть на точці — додайте мережу:</div>
-  <input type="hidden" name="action" value="network"><input type="hidden" name="cidr" value="{{ server_net.cidr }}">
-  <input type="hidden" name="label" value="Мережа сервера">
-  <select name="location_id" style="flex:0 1 180px">{% for l in active_locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
-  <button class="sm primary">{{ icon('plus', 'sm') }}Додати мережу</button>
-</form>
-{% endif %}
+{% if server_net and not server_net.location %}<div id="serverNet">
+{% with offer = {'ip': server_net.ip, 'cidr': server_net.cidr, 'where': 'server'}, back = tab %}{% include "_net_offer.html" %}{% endwith %}
+</div>{% endif %}
 
 {% if tab == 'live' %}
 <div id="liveAlarm"></div>{# live.js: «⚠ Чужий акаунт на зміні» — поки хтось на зміні, розпочатій з телефона іншої людини #}

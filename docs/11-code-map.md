@@ -1,13 +1,13 @@
 # Карта коду
 
-Кожен файл, кожна функція / маршрут / метод / вкладка — з номером рядка (стан коду: коміт `b3ca410`, плюс незакомічені зміни, якщо були). Згенеровано `python docs/make_code_map.py`: після змін у коді перезапустіть, щоб рядки були точними.
+Кожен файл, кожна функція / маршрут / метод / вкладка — з номером рядка (стан коду: коміт `50edc93`, плюс незакомічені зміни, якщо були). Згенеровано `python docs/make_code_map.py`: після змін у коді перезапустіть, щоб рядки були точними.
 Огляд того, як усе пов'язано, — [09-developer.md](09-developer.md) і розділ «Сервер: що робить кожен файл» у `readme.html`.
 
 ## Файли
 
 | Файл | Рядків | Що робить |
 |---|---:|---|
-| [`test_app/crewhub_core.py`](#test_appcrewhub_corepy) | 5020 | Усе ядро сервера: схема й міграції бази, налаштування, логіка змін і Wi-Fi, пристрої, зарплата, графік, дей-оффи, бекапи, фонові потоки, усі веб-маршрути Flask і фільтри шаблонів. |
+| [`test_app/crewhub_core.py`](#test_appcrewhub_corepy) | 5056 | Усе ядро сервера: схема й міграції бази, налаштування, логіка змін і Wi-Fi, пристрої, зарплата, графік, дей-оффи, бекапи, фонові потоки, усі веб-маршрути Flask і фільтри шаблонів. |
 | [`test_app/start.py`](#test_appstartpy) | 291 | Запуск сервера одним файлом: перенесення даних, перевірка бази, settings.ini, фонові потоки, тунель, Waitress. |
 | [`test_app/profiles.py`](#test_appprofilespy) | 669 | Особові папки працівників (people/<Ім'я>/): запис з бази, ручні правки profile.json, відновлення, імпорт. |
 | [`test_app/settings_file.py`](#test_appsettings_filepy) | 330 | settings.ini у папці даних ↔ «Правила» й точки в базі: запис, читання, трьохстороннє злиття. |
@@ -16,7 +16,7 @@
 | [`test_app/recover_admin.py`](#test_apprecover_adminpy) | 75 | Скидання пароля адміна з самого сервера (термінал). |
 | [`test_app/test_crewhub.py`](#test_apptest_crewhubpy) | 1192 | Основні автотести: вхід, зміни, Wi-Fi, гроші, графік, папки, бекапи. |
 | [`test_app/test_hardening.py`](#test_apptest_hardeningpy) | 755 | Тест на кожну виправлену дірку й баг версії 16 і фаз-тест форм. |
-| [`test_app/test_features.py`](#test_apptest_featurespy) | 1170 | Тести функцій версії 17+: settings.ini, пристрої, MAC, заряд, світло, плашка дей-оффу. |
+| [`test_app/test_features.py`](#test_apptest_featurespy) | 1204 | Тести функцій версії 17+: settings.ini, пристрої, MAC, заряд, світло, плашка дей-оффу. |
 | [`test_app/test_scenarios.py`](#test_apptest_scenariospy) | 664 | Сценарії з життя: кілька телефонів в одній Wi-Fi, робочий день, світло, усі сторінки для всіх ролей. |
 | [`test_app/static/app.js`](#test_appstaticappjs) | 279 | Спільна поведінка сторінок: тема, тости, діалоги, CSRF, гортання таблиць, відбиток пристрою. |
 | [`test_app/static/clock.js`](#test_appstaticclockjs) | 241 | Екран «Зміна»: кнопки, кругова шкала, лічильник, фонові пінги (з відбитком і зарядом). |
@@ -26,8 +26,8 @@
 | [`test_app/static/qrcode.js`](#test_appstaticqrcodejs) | 2297 | Генерація QR-коду підключення (бібліотека qrcode-generator, MIT). |
 | [`test_app/templates/base.html`](#test_apptemplatesbasehtml) | 101 | Каркас сторінки: меню, шапка, тема, підключення скриптів. |
 | [`test_app/templates/_ui.html`](#test_apptemplates_uihtml) | 145 | Макроси: іконки (SVG-спрайт), аватари, таблиця місяця, плашки станів. |
-| [`test_app/templates/me.html`](#test_apptemplatesmehtml) | 471 | Кабінет працівника: зміна, табель, графік, запити, колеги, дей-оффи (тімлід), профіль, налаштування. |
-| [`test_app/templates/admin.html`](#test_apptemplatesadminhtml) | 594 | Пульт керування: огляд, працівники, запити, графік, точки й Wi-Fi, підключення, журнал, зарплата, правила. |
+| [`test_app/templates/me.html`](#test_apptemplatesmehtml) | 472 | Кабінет працівника: зміна, табель, графік, запити, колеги, дей-оффи (тімлід), профіль, налаштування. |
+| [`test_app/templates/admin.html`](#test_apptemplatesadminhtml) | 586 | Пульт керування: огляд, працівники, запити, графік, точки й Wi-Fi, підключення, журнал, зарплата, правила. |
 | [`test_app/templates/employee.html`](#test_apptemplatesemployeehtml) | 222 | Картка працівника для керівника. |
 | [`test_app/templates/login.html`](#test_apptemplatesloginhtml) | 36 | Сторінка входу. |
 | [`test_app/templates/register.html`](#test_apptemplatesregisterhtml) | 47 | Самостійна реєстрація. |
@@ -37,7 +37,7 @@
 | [`android/src/ua/crewhub/app/WatchService.java`](#androidsrcuacrewhubappwatchservicejava) | 751 | Фонова служба: Wi-Fi, пінги, вихід з Wi-Fi, сповіщення, пошук сервера, заряд. |
 | [`android/src/ua/crewhub/app/ScanActivity.java`](#androidsrcuacrewhubappscanactivityjava) | 231 | Сканер QR (ZXing). |
 | [`android/src/ua/crewhub/app/BootReceiver.java`](#androidsrcuacrewhubappbootreceiverjava) | 13 | Запуск служби після перезавантаження телефона. |
-| [`android/demo/build_demo.py`](#androiddemobuild_demopy) | 146 | Збирає знімки сторінок сервера для демо-застосунку. |
+| [`android/demo/build_demo.py`](#androiddemobuild_demopy) | 149 | Збирає знімки сторінок сервера для демо-застосунку. |
 | [`android/demo/demo.js`](#androiddemodemojs) | 136 | Підміна запитів у демо-застосунку. |
 | [`android/demo/src/ua/crewhub/demo/DemoActivity.java`](#androiddemosrcuacrewhubdemodemoactivityjava) | 130 | Демо-застосунок: віддає знімки сторінок з APK. |
 | [`android/build.sh`](#androidbuildsh) | 38 | Збірка CrewHub.apk без Android Studio. |
@@ -308,59 +308,60 @@
 | 3417 | `index` | функція | GET / |  |
 | 3423 | `notifications_read` | функція | POST /notifications/read |  |
 | 3435 | `api_clock` | функція | POST /api/clock/<action> | --------------------------------------------------------------------------- Працівник --------------------------------------------------------------------------- |
-| 3453 | `me` | функція | GET /me |  |
-| 3536 | `me_request` | функція | POST /me/request | Система не помітила, що людина працювала: просить додати зміну, модератор перевіряє |
-| 3619 | `me_dayoff_pick` | функція | POST /me/dayoff/<int:rid> | Людина з дозволом обирає день дей-оффу (лише протягом DAYOFF_PICK_DAYS днів після дозволу). |
-| 3646 | `admin_device_delete` | функція | POST /admin/employee/<int:uid>/device/<int:did>/delete | Відв'язати телефон (людина змінила телефон): наступний телефон, з якого прийде автопінг, прив'яжеться сам. |
-| 3663 | `admin_device_rewrite` | функція | POST /admin/employee/<int:uid>/device/rewrite | Перезаписати код пристрою: у людини новий телефон. Код — з «Пристроїв, з яких заходив(ла)» (pick) або введений вручну з «Налаштувань додатку» нового телефона (code). Старі прив'язки знімаються, як «Відв'язати» (і з історії: старий телефон більше не її), новий код стає «Телефоном людини» — з нього вм |
-| 3705 | `admin_device_history` | функція | POST /admin/employee/<int:uid>/history/<int:hid>/<action> | Пристрій з історії входів людини: «bind» — прив'язати як її телефон (напр., керівник налаштовував його працівнику й сервер вважав телефон керівника), «forget» — забути (не її пристрій, позичала). |
-| 3729 | `admin_logout_all` | функція | POST /admin/employee/<int:uid>/logout_all | Відкликати постійний вхід на всіх пристроях людини: наступного разу знадобиться логін і пароль. |
-| 3744 | `team_swap` | функція | POST /team/swap | Тімлід передає зміну за графіком іншій людині (працівники самі не міняються). |
-| 3767 | `schedule_toggle` | функція | POST /schedule/toggle | Клітинка місячної сітки: є зміна в цей день — прибрати, немає — поставити стандартну. |
-| 3802 | `schedule_dayoff` | функція | POST /schedule/dayoff | Клітинка місячної сітки в режимі «Дей-офи»: поставити або зняти дей-офф людині на день (тімлід ставить одразу, без заявки). |
-| 3844 | `schedule_fill` | функція | POST /schedule/fill | Розставити всім робочі дні місяця (Пн–Пт, або й вихідні, якщо так у правилах), крім днів відсутності і вже заповнених. |
-| 3872 | `team_dayoff` | функція | POST /team/dayoff | Тімлід (і модератор/адмін): дозволити чи відхилити запит, дати дозвіл сам, перенести або зняти дей-офф. |
-| 3935 | `dayoff_campaign` | функція | POST /dayoffs/campaign | Модератор відкриває збір заявок на дей-офф: у всіх на головному екрані з'являється кнопка «Запросити дей-офф» на DAYOFF_PICK_DAYS днів. |
-| 3959 | `me_request_action` | функція | POST /me/request/<int:rid>/<action> |  |
-| 3983 | `me_profile` | функція | POST /me/profile | Номер телефону — це логін, його змінює адміністратор |
-| 3998 | `me_password` | функція | POST /me/password | зміна пароля вихід на інших пристроях |
-| 4027 | `STATS_TTL` | константа |  | --------------------------------------------------------------------------- Адмінка --------------------------------------------------------------------------- Години за сьогодні й фонд за місяць — найважча частина «Огляду» (зарплата всіх людей). Панель у терміналі питає їх кожні 2 с, live-сторінка  |
-| 4031 | `dashboard_stats` | функція |  | лічильники для значків — завжди свіжі (вони дешеві) |
-| 4061 | `hello` | функція | GET /api/hello | Хто тут: застосунок звіряє server_id, перш ніж надіслати cookie входу. Без входу і без сесії. З n (випадкове число від застосунку) і s (selector його токена «запам'ятати мене») сервер ще й доводить, що він справжній: proof = HMAC-SHA256(ключ — хеш токена з бази, «n:server_id»). Хеш знає лише справжн |
-| 4079 | `health` | функція | GET /health | Для моніторингу і скрипта автозапуску: сервер живий, база відповідає, фонові потоки працюють. |
-| 4093 | `_too_big` | функція |  | /admin/employee/99999999999999999999: такого id не буває, SQLite не вміщує число — це «не знайдено», а не збій |
-| 4101 | `_server_error` | функція |  | Помилка в одному запиті не валить сервер; людина бачить зрозумілий текст замість трасування |
-| 4111 | `api_live` | функція | GET /api/live | Дані для live-моніторингу без перезавантаження сторінки. Кешуємо на 3 с: скільки б модераторів не тримали відкритий «Огляд», база рахує його не частіше. |
-| 4122 | `_live_payload` | функція |  |  |
-| 4147 | `upload_photo` | функція | POST /photo/<int:uid> |  |
-| 4165 | `avatar` | функція | GET /avatar/<int:uid> | Спершу з бази (джерело правди), далі — старий файл у папці (сумісність зі старими аватарками) |
-| 4180 | `admin_employee_folder` | функція | GET /admin/employee/<int:uid>/folder.zip | Особова папка людини одним архівом. |
-| 4201 | `admin` | функція | GET /admin |  |
-| 4289 | `admin_employee` | функція | GET /admin/employee/<int:uid> |  |
-| 4310 | `admin_employee_csv` | функція | GET /admin/employee/<int:uid>/timesheet.csv |  |
-| 4333 | `EDITABLE_USER_FIELDS` | константа |  | photo_url сюди не входить: його ставить лише завантаження фото (інакше в «аватарку» можна вписати /logout чи адресу чужого сайту, і кожен, хто бачить список людей, мимоволі туди звертався б) |
-| 4339 | `admin_employee_save` | функція | POST /admin/employee/<int:uid> |  |
-| 4407 | `admin_employee_new` | функція | POST /admin/employee/new |  |
-| 4440 | `admins_left` | функція |  | Скільки ще діючих адміністраторів, крім except_id (звільнені й непідтверджені не рахуються). |
-| 4448 | `admin_employee_role` | функція | POST /admin/employee/<int:uid>/role | Адмін сам вирішує, хто адміністратор, модератор чи працівник (швидкий вибір у списку людей). |
-| 4479 | `admin_registration` | функція | POST /admin/registration/<int:uid>/<decision> |  |
-| 4508 | `admin_reset_password` | функція | POST /admin/employee/<int:uid>/reset_password | старі токени «запам'ятати мене» більше не діють |
-| 4524 | `admin_employee_delete` | функція | POST /admin/employee/<int:uid>/delete |  |
-| 4541 | `delete_user` | функція |  | Видаляє акаунт з усіма змінами. Особова папка переїжджає в backups/видалені (на випадок помилки); якщо людину видалили саме видаленням папки, її вже немає. Повертає кількість змін. |
-| 4568 | `admin_rates` | функція | POST /admin/rates | Загальна ставка: зберігається для нових працівників і за бажанням застосовується до всіх. |
-| 4600 | `admin_shift_save` | функція | POST /admin/shift/save | Ручне редагування або додавання зміни модератором (з аудитом). |
-| 4640 | `admin_adjustment` | функція | POST /admin/adjustment | Відсоток рахується від заробітку людини за той місяць, у якому стоїть бонус (години + дей-офи, без інших бонусів/штрафів). |
-| 4682 | `admin_adjustment_delete` | функція | POST /admin/adjustment/<int:aid>/delete | Скасувати (видалити) помилково доданий бонус або штраф. |
-| 4700 | `admin_request` | функція | POST /admin/request/<int:rid>/<decision> |  |
-| 4760 | `admin_absence` | функція | POST /admin/absence | Модератор сам позначає лікарняний, дей-офф чи відпустку (одразу схвалено) або знімає позначку. |
-| 4798 | `admin_schedule` | функція | POST /admin/schedule | Копіює графік попереднього тижня на поточний (без дублікатів) |
-| 4845 | `admin_lan_scan` | функція | POST /admin/lan/scan | «Сканувати зараз» у блоці «Пристрої в мережі» (інакше сканування — раз на 5 хв у фоні). |
-| 4855 | `admin_zones` | функція | POST /admin/zones | вимкнена точка вимикає всі її Wi-Fi зони, а їх змінює лише адмін |
-| 4929 | `CHECKBOX_SETTINGS` | константа |  |  |
-| 4936 | `admin_backup_mirror` | функція | POST /admin/backup_mirror |  |
-| 4966 | `admin_settings` | функція | POST /admin/settings | порожнє поле — лишаємо як було |
-| 4999 | `admin_backup_download` | функція | GET /admin/backup.zip | щоб у знімок не потрапила напівзаписана папка |
-| 5009 | `admin_payroll_csv` | функція | GET /admin/payroll.csv | BOM, щоб Excel правильно відкрив кирилицю |
+| 3453 | `me` | функція | GET /me | Телефон адміна в локальній мережі, якої немає в жодній точці: одразу пропонуємо створити точку |
+| 3542 | `me_request` | функція | POST /me/request | Система не помітила, що людина працювала: просить додати зміну, модератор перевіряє |
+| 3625 | `me_dayoff_pick` | функція | POST /me/dayoff/<int:rid> | Людина з дозволом обирає день дей-оффу (лише протягом DAYOFF_PICK_DAYS днів після дозволу). |
+| 3652 | `admin_device_delete` | функція | POST /admin/employee/<int:uid>/device/<int:did>/delete | Відв'язати телефон (людина змінила телефон): наступний телефон, з якого прийде автопінг, прив'яжеться сам. |
+| 3669 | `admin_device_rewrite` | функція | POST /admin/employee/<int:uid>/device/rewrite | Перезаписати код пристрою: у людини новий телефон. Код — з «Пристроїв, з яких заходив(ла)» (pick) або введений вручну з «Налаштувань додатку» нового телефона (code). Старі прив'язки знімаються, як «Відв'язати» (і з історії: старий телефон більше не її), новий код стає «Телефоном людини» — з нього вм |
+| 3711 | `admin_device_history` | функція | POST /admin/employee/<int:uid>/history/<int:hid>/<action> | Пристрій з історії входів людини: «bind» — прив'язати як її телефон (напр., керівник налаштовував його працівнику й сервер вважав телефон керівника), «forget» — забути (не її пристрій, позичала). |
+| 3735 | `admin_logout_all` | функція | POST /admin/employee/<int:uid>/logout_all | Відкликати постійний вхід на всіх пристроях людини: наступного разу знадобиться логін і пароль. |
+| 3750 | `team_swap` | функція | POST /team/swap | Тімлід передає зміну за графіком іншій людині (працівники самі не міняються). |
+| 3773 | `schedule_toggle` | функція | POST /schedule/toggle | Клітинка місячної сітки: є зміна в цей день — прибрати, немає — поставити стандартну. |
+| 3808 | `schedule_dayoff` | функція | POST /schedule/dayoff | Клітинка місячної сітки в режимі «Дей-офи»: поставити або зняти дей-офф людині на день (тімлід ставить одразу, без заявки). |
+| 3850 | `schedule_fill` | функція | POST /schedule/fill | Розставити всім робочі дні місяця (Пн–Пт, або й вихідні, якщо так у правилах), крім днів відсутності і вже заповнених. |
+| 3878 | `team_dayoff` | функція | POST /team/dayoff | Тімлід (і модератор/адмін): дозволити чи відхилити запит, дати дозвіл сам, перенести або зняти дей-офф. |
+| 3941 | `dayoff_campaign` | функція | POST /dayoffs/campaign | Модератор відкриває збір заявок на дей-офф: у всіх на головному екрані з'являється кнопка «Запросити дей-офф» на DAYOFF_PICK_DAYS днів. |
+| 3965 | `me_request_action` | функція | POST /me/request/<int:rid>/<action> |  |
+| 3989 | `me_profile` | функція | POST /me/profile | Номер телефону — це логін, його змінює адміністратор |
+| 4004 | `me_password` | функція | POST /me/password | зміна пароля вихід на інших пристроях |
+| 4033 | `STATS_TTL` | константа |  | --------------------------------------------------------------------------- Адмінка --------------------------------------------------------------------------- Години за сьогодні й фонд за місяць — найважча частина «Огляду» (зарплата всіх людей). Панель у терміналі питає їх кожні 2 с, live-сторінка  |
+| 4037 | `dashboard_stats` | функція |  | лічильники для значків — завжди свіжі (вони дешеві) |
+| 4067 | `hello` | функція | GET /api/hello | Хто тут: застосунок звіряє server_id, перш ніж надіслати cookie входу. Без входу і без сесії. З n (випадкове число від застосунку) і s (selector його токена «запам'ятати мене») сервер ще й доводить, що він справжній: proof = HMAC-SHA256(ключ — хеш токена з бази, «n:server_id»). Хеш знає лише справжн |
+| 4085 | `health` | функція | GET /health | Для моніторингу і скрипта автозапуску: сервер живий, база відповідає, фонові потоки працюють. |
+| 4099 | `_too_big` | функція |  | /admin/employee/99999999999999999999: такого id не буває, SQLite не вміщує число — це «не знайдено», а не збій |
+| 4107 | `_server_error` | функція |  | Помилка в одному запиті не валить сервер; людина бачить зрозумілий текст замість трасування |
+| 4117 | `api_live` | функція | GET /api/live | Дані для live-моніторингу без перезавантаження сторінки. Кешуємо на 3 с: скільки б модераторів не тримали відкритий «Огляд», база рахує його не частіше. |
+| 4128 | `_live_payload` | функція |  |  |
+| 4153 | `upload_photo` | функція | POST /photo/<int:uid> |  |
+| 4171 | `avatar` | функція | GET /avatar/<int:uid> | Спершу з бази (джерело правди), далі — старий файл у папці (сумісність зі старими аватарками) |
+| 4186 | `admin_employee_folder` | функція | GET /admin/employee/<int:uid>/folder.zip | Особова папка людини одним архівом. |
+| 4207 | `admin` | функція | GET /admin |  |
+| 4295 | `admin_employee` | функція | GET /admin/employee/<int:uid> |  |
+| 4316 | `admin_employee_csv` | функція | GET /admin/employee/<int:uid>/timesheet.csv |  |
+| 4339 | `EDITABLE_USER_FIELDS` | константа |  | photo_url сюди не входить: його ставить лише завантаження фото (інакше в «аватарку» можна вписати /logout чи адресу чужого сайту, і кожен, хто бачить список людей, мимоволі туди звертався б) |
+| 4345 | `admin_employee_save` | функція | POST /admin/employee/<int:uid> |  |
+| 4413 | `admin_employee_new` | функція | POST /admin/employee/new |  |
+| 4446 | `admins_left` | функція |  | Скільки ще діючих адміністраторів, крім except_id (звільнені й непідтверджені не рахуються). |
+| 4454 | `admin_employee_role` | функція | POST /admin/employee/<int:uid>/role | Адмін сам вирішує, хто адміністратор, модератор чи працівник (швидкий вибір у списку людей). |
+| 4485 | `admin_registration` | функція | POST /admin/registration/<int:uid>/<decision> |  |
+| 4514 | `admin_reset_password` | функція | POST /admin/employee/<int:uid>/reset_password | старі токени «запам'ятати мене» більше не діють |
+| 4530 | `admin_employee_delete` | функція | POST /admin/employee/<int:uid>/delete |  |
+| 4547 | `delete_user` | функція |  | Видаляє акаунт з усіма змінами. Особова папка переїжджає в backups/видалені (на випадок помилки); якщо людину видалили саме видаленням папки, її вже немає. Повертає кількість змін. |
+| 4574 | `admin_rates` | функція | POST /admin/rates | Загальна ставка: зберігається для нових працівників і за бажанням застосовується до всіх. |
+| 4606 | `admin_shift_save` | функція | POST /admin/shift/save | Ручне редагування або додавання зміни модератором (з аудитом). |
+| 4646 | `admin_adjustment` | функція | POST /admin/adjustment | Відсоток рахується від заробітку людини за той місяць, у якому стоїть бонус (години + дей-офи, без інших бонусів/штрафів). |
+| 4688 | `admin_adjustment_delete` | функція | POST /admin/adjustment/<int:aid>/delete | Скасувати (видалити) помилково доданий бонус або штраф. |
+| 4706 | `admin_request` | функція | POST /admin/request/<int:rid>/<decision> |  |
+| 4766 | `admin_absence` | функція | POST /admin/absence | Модератор сам позначає лікарняний, дей-офф чи відпустку (одразу схвалено) або знімає позначку. |
+| 4804 | `admin_schedule` | функція | POST /admin/schedule | Копіює графік попереднього тижня на поточний (без дублікатів) |
+| 4851 | `admin_lan_scan` | функція | POST /admin/lan/scan | «Сканувати зараз» у блоці «Пристрої в мережі» (інакше сканування — раз на 5 хв у фоні). |
+| 4861 | `admin_zones` | функція | POST /admin/zones | вимкнена точка вимикає всі її Wi-Fi зони, а їх змінює лише адмін |
+| 4960 | `_zones_back` | функція |  | Куди повернутись після дії з точками: пропозиція «створити точку» є і в «Огляді», і на екрані «Зміна». |
+| 4965 | `CHECKBOX_SETTINGS` | константа |  |  |
+| 4972 | `admin_backup_mirror` | функція | POST /admin/backup_mirror |  |
+| 5002 | `admin_settings` | функція | POST /admin/settings | порожнє поле — лишаємо як було |
+| 5035 | `admin_backup_download` | функція | GET /admin/backup.zip | щоб у знімок не потрапила напівзаписана папка |
+| 5045 | `admin_payroll_csv` | функція | GET /admin/payroll.csv | BOM, щоб Excel правильно відкрив кирилицю |
 
 ## `test_app/start.py`
 
@@ -754,49 +755,51 @@ settings.ini у папці даних ↔ «Правила» й точки в б
 | 740 | `ServerNetworkTest` | клас |  | Сервер перенесли в іншу мережу (інший роутер, приміщення), а в «Точки і Wi-Fi» лишилась стара: телефони бачать «Не в робочій мережі». Адмінка (і консоль) нагадує додати мережу сервера — однією кнопкою. |
 | 744 | `ServerNetworkTest.setUp` | метод |  |  |
 | 752 | `ServerNetworkTest.test_banner_and_one_click_add` | метод |  | додати мережу може лише адмін |
-| 767 | `ServerNetworkTest.test_no_local_network` | метод |  | тест: no local network |
-| 773 | `PresenceTest` | клас |  | Браузер на телефоні з вимкненим екраном не пінгує, але телефон у Wi-Fi: сервер бачить його MAC сам. |
-| 778 | `PresenceTest.start` | метод |  | MAC з мережі точки запам'ятовано |
-| 786 | `PresenceTest.silent` | метод |  |  |
-| 791 | `PresenceTest.step` | метод |  |  |
-| 796 | `PresenceTest.sweep` | метод |  |  |
-| 802 | `PresenceTest.status` | метод |  |  |
-| 805 | `PresenceTest.test_sleeping_browser_phone_in_wifi_keeps_shift` | метод |  | екран вимкнено 5 хв — браузер мовчить |
-| 814 | `PresenceTest.test_phone_left_wifi_pauses_and_comes_back` | метод |  | телефон не відповів — його немає в мережі |
-| 824 | `PresenceTest.test_other_phone_or_other_network_does_not_count` | метод |  | за цим IP тепер інший телефон |
-| 832 | `PresenceTest.test_nothing_to_check` | метод |  | щойно пінгував — перевіряти нема чого |
-| 841 | `PresenceTest.test_app_pause_is_left_to_the_app` | метод |  | застосунок повідомив: телефон вийшов |
-| 850 | `PresenceTest.test_phone_in_wifi_starts_shift_without_app_or_page` | метод |  | середа, робочий час 09:00–18:00 |
-| 884 | `PresenceTest.test_present_reads_only_fresh_entries` | метод |  | система не дає станів (macOS) — уся таблиця |
-| 902 | `BatteryTest` | клас |  | Телефон розрядився — людина нікуди не ділась: зміна не стає на паузу і не закривається одразу. |
-| 906 | `BatteryTest.setUp` | метод |  |  |
-| 912 | `BatteryTest.start` | метод |  |  |
-| 916 | `BatteryTest.silent` | метод |  |  |
-| 922 | `BatteryTest.sweep` | метод |  |  |
-| 929 | `BatteryTest.shift` | метод |  |  |
-| 932 | `BatteryTest.test_dead_phone_keeps_shift_counting` | метод |  | 10 хв тиші після 4 % |
-| 950 | `BatteryTest.test_dead_phone_shift_closes_after_limit` | метод |  | тест: dead phone shift closes after limit |
-| 963 | `BatteryTest.test_dead_after_work_hours_closes_at_work_end` | метод |  | 17:30 |
-| 971 | `BatteryTest.test_not_dead_means_normal_pause` | метод |  | заряд повідомлено задовго до останнього зв'язку — його могли зарядити |
-| 987 | `BatteryTest.test_setting_off_and_bad_values` | метод |  | сміття замість числа — ігноруємо |
-| 1002 | `OutageTest` | клас |  | Зникло світло: сервер і роутер вимкнулись. Коли світло з'явилось, сервер рахує, скільки його не було, і зараховує цей час людям, а не ставить їх на паузу. |
-| 1007 | `OutageTest.at` | метод |  |  |
-| 1010 | `OutageTest.setUp` | метод |  |  |
-| 1015 | `OutageTest.tick` | метод |  |  |
-| 1018 | `OutageTest.sweep` | метод |  |  |
-| 1024 | `OutageTest.alive` | метод |  | Сервер працював до цієї миті (останній запис alive_at перед тим, як зникло світло), браузер пінгував. |
-| 1031 | `OutageTest.wait_until` | метод |  | Сервер працює: фонова перевірка щохвилини від поточної миті до hh:mm (без пінгів телефонів). |
-| 1039 | `OutageTest.shift` | метод |  |  |
-| 1042 | `OutageTest.worked` | метод |  |  |
-| 1046 | `OutageTest.test_outage_hours_are_credited_and_shift_continues` | метод |  | об 11:00 зникло світло |
-| 1066 | `OutageTest.test_nobody_returned_after_outage` | метод |  | за 10 хв після відновлення телефон так і не озвався |
-| 1077 | `OutageTest.test_work_ended_during_outage` | метод |  | світло з'явилось о 20:00, робочий час скінчився о 18:00 |
-| 1089 | `OutageTest.test_app_wifi_loss_during_outage_is_not_a_break` | метод |  | застосунок у сні пінгував о 10:50; о 11:00 зникло світло |
-| 1105 | `OutageTest.test_arrived_while_there_was_no_power` | метод |  | світла немає з 08:00 до 09:40, робочий час з 09:00 |
-| 1119 | `OutageTest.test_late_after_power_returned_is_not_credited` | метод |  | прийшов через пів години після появи світла |
-| 1131 | `OutageTest.test_credit_off_pauses_from_outage_start` | метод |  | з початку відключення минуло понад 30 хв, але рахуємо від появи світла — не закрито |
-| 1149 | `DayoffBannerTest` | клас |  | Плашка дей-оффу з'являється лише після дозволу керівника (відкритий збір заявок або дозвіл людині). |
-| 1152 | `DayoffBannerTest.test_banner_only_after_permission` | метод |  | модератор відкрив збір — плашка є |
+| 767 | `ServerNetworkTest.test_create_point_from_offer` | метод |  | тест: create point from offer |
+| 786 | `ServerNetworkTest.test_admin_phone_in_new_network` | метод |  | працівнику пропозиції немає |
+| 801 | `ServerNetworkTest.test_no_local_network` | метод |  | тест: no local network |
+| 807 | `PresenceTest` | клас |  | Браузер на телефоні з вимкненим екраном не пінгує, але телефон у Wi-Fi: сервер бачить його MAC сам. |
+| 812 | `PresenceTest.start` | метод |  | MAC з мережі точки запам'ятовано |
+| 820 | `PresenceTest.silent` | метод |  |  |
+| 825 | `PresenceTest.step` | метод |  |  |
+| 830 | `PresenceTest.sweep` | метод |  |  |
+| 836 | `PresenceTest.status` | метод |  |  |
+| 839 | `PresenceTest.test_sleeping_browser_phone_in_wifi_keeps_shift` | метод |  | екран вимкнено 5 хв — браузер мовчить |
+| 848 | `PresenceTest.test_phone_left_wifi_pauses_and_comes_back` | метод |  | телефон не відповів — його немає в мережі |
+| 858 | `PresenceTest.test_other_phone_or_other_network_does_not_count` | метод |  | за цим IP тепер інший телефон |
+| 866 | `PresenceTest.test_nothing_to_check` | метод |  | щойно пінгував — перевіряти нема чого |
+| 875 | `PresenceTest.test_app_pause_is_left_to_the_app` | метод |  | застосунок повідомив: телефон вийшов |
+| 884 | `PresenceTest.test_phone_in_wifi_starts_shift_without_app_or_page` | метод |  | середа, робочий час 09:00–18:00 |
+| 918 | `PresenceTest.test_present_reads_only_fresh_entries` | метод |  | система не дає станів (macOS) — уся таблиця |
+| 936 | `BatteryTest` | клас |  | Телефон розрядився — людина нікуди не ділась: зміна не стає на паузу і не закривається одразу. |
+| 940 | `BatteryTest.setUp` | метод |  |  |
+| 946 | `BatteryTest.start` | метод |  |  |
+| 950 | `BatteryTest.silent` | метод |  |  |
+| 956 | `BatteryTest.sweep` | метод |  |  |
+| 963 | `BatteryTest.shift` | метод |  |  |
+| 966 | `BatteryTest.test_dead_phone_keeps_shift_counting` | метод |  | 10 хв тиші після 4 % |
+| 984 | `BatteryTest.test_dead_phone_shift_closes_after_limit` | метод |  | тест: dead phone shift closes after limit |
+| 997 | `BatteryTest.test_dead_after_work_hours_closes_at_work_end` | метод |  | 17:30 |
+| 1005 | `BatteryTest.test_not_dead_means_normal_pause` | метод |  | заряд повідомлено задовго до останнього зв'язку — його могли зарядити |
+| 1021 | `BatteryTest.test_setting_off_and_bad_values` | метод |  | сміття замість числа — ігноруємо |
+| 1036 | `OutageTest` | клас |  | Зникло світло: сервер і роутер вимкнулись. Коли світло з'явилось, сервер рахує, скільки його не було, і зараховує цей час людям, а не ставить їх на паузу. |
+| 1041 | `OutageTest.at` | метод |  |  |
+| 1044 | `OutageTest.setUp` | метод |  |  |
+| 1049 | `OutageTest.tick` | метод |  |  |
+| 1052 | `OutageTest.sweep` | метод |  |  |
+| 1058 | `OutageTest.alive` | метод |  | Сервер працював до цієї миті (останній запис alive_at перед тим, як зникло світло), браузер пінгував. |
+| 1065 | `OutageTest.wait_until` | метод |  | Сервер працює: фонова перевірка щохвилини від поточної миті до hh:mm (без пінгів телефонів). |
+| 1073 | `OutageTest.shift` | метод |  |  |
+| 1076 | `OutageTest.worked` | метод |  |  |
+| 1080 | `OutageTest.test_outage_hours_are_credited_and_shift_continues` | метод |  | об 11:00 зникло світло |
+| 1100 | `OutageTest.test_nobody_returned_after_outage` | метод |  | за 10 хв після відновлення телефон так і не озвався |
+| 1111 | `OutageTest.test_work_ended_during_outage` | метод |  | світло з'явилось о 20:00, робочий час скінчився о 18:00 |
+| 1123 | `OutageTest.test_app_wifi_loss_during_outage_is_not_a_break` | метод |  | застосунок у сні пінгував о 10:50; о 11:00 зникло світло |
+| 1139 | `OutageTest.test_arrived_while_there_was_no_power` | метод |  | світла немає з 08:00 до 09:40, робочий час з 09:00 |
+| 1153 | `OutageTest.test_late_after_power_returned_is_not_credited` | метод |  | прийшов через пів години після появи світла |
+| 1165 | `OutageTest.test_credit_off_pauses_from_outage_start` | метод |  | з початку відключення минуло понад 30 хв, але рахуємо від появи світла — не закрито |
+| 1183 | `DayoffBannerTest` | клас |  | Плашка дей-оффу з'являється лише після дозволу керівника (відкритий збір заявок або дозвіл людині). |
+| 1186 | `DayoffBannerTest.test_banner_only_after_permission` | метод |  | модератор відкрив збір — плашка є |
 
 ## `test_app/test_scenarios.py`
 
@@ -1090,29 +1093,30 @@ settings.ini у папці даних ↔ «Правила» й точки в б
 | 3 | `title` | block |  |  |
 | 4 | `body` | block |  |  |
 | 6 | `clock` | вкладка |  | вкладка «Зміна» |
-| 7 | `#net` | блок |  |  |
-| 11 | `#ring` | блок |  |  |
-| 13 | `#timer` | блок |  |  |
-| 13 | `#ringSub` | блок |  |  |
-| 15 | `#error` | блок |  |  |
-| 18 | `#breakRow` | блок |  |  |
-| 65 | `#dayoffReqDlg` | блок |  |  |
-| 77 | `#closeConfirm` | блок |  |  |
-| 85 | `#ccOff` | блок |  |  |
-| 90 | `#editReq` | блок |  |  |
-| 103 | `timesheet` | вкладка |  | вкладка «Табель» |
-| 140 | `#editReq` | блок |  |  |
-| 152 | `#addReq` | блок |  |  |
-| 164 | `schedule` | вкладка |  | вкладка «Графік» |
-| 250 | `requests` | вкладка |  | вкладка «Запити» |
-| 284 | `dayoffs` | вкладка |  | вкладка «Дей-оффи й обміни» (тімлід) |
-| 351 | `team` | вкладка |  | вкладка «Колеги» |
-| 353 | `#teamGrid` | блок |  |  |
-| 369 | `profile` | вкладка |  | вкладка «Профіль» |
-| 411 | `app` | вкладка |  | вкладка «Налаштування додатку» |
-| 461 | `scripts` | block |  |  |
-| 462 | `clock` | вкладка |  | вкладка «Зміна» |
-| 465 | `team` | вкладка |  | вкладка «Колеги» |
+| 7 | `"_net_offer.html"` | include |  |  |
+| 8 | `#net` | блок |  |  |
+| 12 | `#ring` | блок |  |  |
+| 14 | `#timer` | блок |  |  |
+| 14 | `#ringSub` | блок |  |  |
+| 16 | `#error` | блок |  |  |
+| 19 | `#breakRow` | блок |  |  |
+| 66 | `#dayoffReqDlg` | блок |  |  |
+| 78 | `#closeConfirm` | блок |  |  |
+| 86 | `#ccOff` | блок |  |  |
+| 91 | `#editReq` | блок |  |  |
+| 104 | `timesheet` | вкладка |  | вкладка «Табель» |
+| 141 | `#editReq` | блок |  |  |
+| 153 | `#addReq` | блок |  |  |
+| 165 | `schedule` | вкладка |  | вкладка «Графік» |
+| 251 | `requests` | вкладка |  | вкладка «Запити» |
+| 285 | `dayoffs` | вкладка |  | вкладка «Дей-оффи й обміни» (тімлід) |
+| 352 | `team` | вкладка |  | вкладка «Колеги» |
+| 354 | `#teamGrid` | блок |  |  |
+| 370 | `profile` | вкладка |  | вкладка «Профіль» |
+| 412 | `app` | вкладка |  | вкладка «Налаштування додатку» |
+| 462 | `scripts` | block |  |  |
+| 463 | `clock` | вкладка |  | вкладка «Зміна» |
+| 466 | `team` | вкладка |  | вкладка «Колеги» |
 
 ## `test_app/templates/admin.html`
 
@@ -1126,32 +1130,33 @@ settings.ini у папці даних ↔ «Правила» й точки в б
 | 7 | `payroll` | вкладка |  | вкладка «Зарплата» |
 | 9 | `registrations` | macro |  |  |
 | 27 | `body` | block |  |  |
-| 29 | `#serverNet` | блок |  |  |
-| 40 | `live` | вкладка |  | вкладка «Огляд» |
-| 41 | `#liveAlarm` | блок |  |  |
-| 52 | `#chips` | блок |  |  |
-| 57 | `#liveList` | блок |  |  |
-| 82 | `#lan` | блок |  |  |
-| 112 | `employees` | вкладка |  | вкладка «Працівники» |
-| 138 | `#newEmp` | блок |  |  |
-| 153 | `requests` | вкладка |  | вкладка «Запити» |
-| 200 | `schedule` | вкладка |  | вкладка «Графік» |
-| 212 | `schedule` | вкладка |  | вкладка «Графік» |
-| 228 | `#absDlg` | блок |  |  |
-| 240 | `#addSlot` | блок |  |  |
-| 240 | `#slotForm` | блок |  |  |
-| 254 | `zones` | вкладка |  | вкладка «Точки і Wi-Fi» |
-| 261 | `#connectGrid` | блок |  |  |
-| 343 | `logs` | вкладка |  | вкладка «Підключення» |
-| 363 | `audit` | вкладка |  | вкладка «Журнал редагувань» |
-| 378 | `payroll` | вкладка |  | вкладка «Зарплата» |
-| 402 | `settings` | вкладка |  | вкладка «Правила» |
-| 531 | `#rateDlg` | блок |  |  |
-| 547 | `scripts` | block |  |  |
-| 548 | `zones` | вкладка |  | вкладка «Точки і Wi-Fi» |
-| 563 | `live` | вкладка |  | вкладка «Огляд» |
-| 564 | `employees` | вкладка |  | вкладка «Працівники» |
-| 581 | `schedule` | вкладка |  | вкладка «Графік» |
+| 28 | `#serverNet` | блок |  |  |
+| 29 | `"_net_offer.html"` | include |  |  |
+| 32 | `live` | вкладка |  | вкладка «Огляд» |
+| 33 | `#liveAlarm` | блок |  |  |
+| 44 | `#chips` | блок |  |  |
+| 49 | `#liveList` | блок |  |  |
+| 74 | `#lan` | блок |  |  |
+| 104 | `employees` | вкладка |  | вкладка «Працівники» |
+| 130 | `#newEmp` | блок |  |  |
+| 145 | `requests` | вкладка |  | вкладка «Запити» |
+| 192 | `schedule` | вкладка |  | вкладка «Графік» |
+| 204 | `schedule` | вкладка |  | вкладка «Графік» |
+| 220 | `#absDlg` | блок |  |  |
+| 232 | `#addSlot` | блок |  |  |
+| 232 | `#slotForm` | блок |  |  |
+| 246 | `zones` | вкладка |  | вкладка «Точки і Wi-Fi» |
+| 253 | `#connectGrid` | блок |  |  |
+| 335 | `logs` | вкладка |  | вкладка «Підключення» |
+| 355 | `audit` | вкладка |  | вкладка «Журнал редагувань» |
+| 370 | `payroll` | вкладка |  | вкладка «Зарплата» |
+| 394 | `settings` | вкладка |  | вкладка «Правила» |
+| 523 | `#rateDlg` | блок |  |  |
+| 539 | `scripts` | block |  |  |
+| 540 | `zones` | вкладка |  | вкладка «Точки і Wi-Fi» |
+| 555 | `live` | вкладка |  | вкладка «Огляд» |
+| 556 | `employees` | вкладка |  | вкладка «Працівники» |
+| 573 | `schedule` | вкладка |  | вкладка «Графік» |
 
 ## `test_app/templates/employee.html`
 
@@ -1402,10 +1407,10 @@ _(без окремих функцій)_
 | 30 | `ROLES` | константа |  |  |
 | 31 | `MAX_PAGES` | константа |  |  |
 | 34 | `key` | функція |  | Адреса сторінки сервера → ім'я збереженого файлу (лише літери, цифри, «_» — так їх упізнає nav.js), або None. |
-| 56 | `prepare` | функція |  |  |
-| 73 | `snapshot` | функція |  |  |
-| 103 | `rewrite` | функція |  | Демо-скрипт — першим: він має підмінити запити до сервера ще до того, як їх зроблять сторінки |
-| 118 | `main` | функція |  |  |
+| 56 | `prepare` | функція |  | «Сервер» демо — у тій самій мережі точки, що й телефони: без цього адмінка показала б плашку «мережу сервера |
+| 76 | `snapshot` | функція |  |  |
+| 106 | `rewrite` | функція |  | Демо-скрипт — першим: він має підмінити запити до сервера ще до того, як їх зроблять сторінки |
+| 121 | `main` | функція |  |  |
 
 ## `android/demo/demo.js`
 

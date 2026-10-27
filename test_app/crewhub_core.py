@@ -3473,6 +3473,12 @@ def me():
         if ctx["next_shift"]:
             ctx["shift_target"] = ctx["next_shift"]["ends_at"] - ctx["next_shift"]["starts_at"]
         ctx["absence_today"] = absence_on(conn, u["id"], today)
+        if u["role"] == "admin":
+            # Телефон адміна в локальній мережі, якої немає в жодній точці: одразу пропонуємо створити точку
+            addr = work_ip(client_ip())
+            if addr and addr.version == 4 and addr.is_private and not match_location(conn, client_ip()):
+                ctx["net_offer"] = {"ip": client_ip(), "cidr": suggest_cidr(client_ip()), "where": "phone"}
+                ctx["active_locations"] = conn.execute("select id, name from locations where is_active = 1 order by name").fetchall()
         ctx["break_rules"] = {k: {"enabled": setting(k + "_enabled", conn) == "1", "paid": setting(k + "_is_paid", conn) == "1",
                                   "pct": setting(k + "_rate_pct", conn)} for k in ("lunch", "rest")}
         ctx["pay_rules"] = pay_rules(conn)
@@ -4891,6 +4897,31 @@ def admin_zones():
                     audit(conn, actor["id"], "INSERT", "networks", cur.lastrowid, None, {"cidr": [None, cidr]})
                 except sqlite3.IntegrityError:
                     flash("Ця мережа вже додана")
+            elif f.get("action") == "new_point":
+                # Сервер (чи телефон адміна) у мережі, якої немає в жодній точці: нова точка одразу з цією мережею —
+                # телефони в ній можуть почати зміну, щойно точку створено
+                name = " ".join(f.get("name", "").split())[:80]
+                try:
+                    net = ipaddress.ip_network(f.get("cidr", "").strip(), strict=False)
+                except ValueError:
+                    flash("Невірний формат IP або підмережі")
+                    return redirect(_zones_back(f))
+                if not name:
+                    flash("Вкажіть назву точки")
+                    return redirect(_zones_back(f))
+                if err := zone_error(net):
+                    flash(err)
+                    return redirect(_zones_back(f))
+                if conn.execute("select 1 from networks where cidr = ?", (str(net),)).fetchone():
+                    flash(f"Мережа {net} уже прив'язана до точки")
+                    return redirect(_zones_back(f))
+                if conn.execute("select 1 from locations where name = ?", (name,)).fetchone():
+                    flash(f"Точка «{name}» вже є — виберіть її в «додати до точки» або дайте іншу назву")
+                    return redirect(_zones_back(f))
+                cur = conn.execute("insert into locations(name, address) values (?, ?)", (name, f.get("address") or None))
+                conn.execute("insert into networks(location_id, cidr, label) values (?, ?, ?)", (cur.lastrowid, str(net), "Мережа точки"))
+                audit(conn, actor["id"], "INSERT", "locations", cur.lastrowid, None, {"name": [None, name], "cidr": [None, str(net)]})
+                flash(f"Точку «{name}» створено з мережею {net}: телефони в цій мережі вже можуть почати зміну")
             elif f.get("action") == "bind_current":
                 # Прив'язка мережі, з якої адмін зараз відкрив сторінку: у локальній мережі вся підмережа /24,
                 # в інтернеті — точний публічний IP роутера
@@ -4923,7 +4954,12 @@ def admin_zones():
                     audit(conn, actor["id"], "DELETE", "networks", old["id"], None, {"cidr": [old["cidr"], None]})
         conn.commit()
         config_changed(conn)
-    return redirect(url_for("admin", tab="zones"))
+    return redirect(_zones_back(f))
+
+
+def _zones_back(f):
+    """Куди повернутись після дії з точками: пропозиція «створити точку» є і в «Огляді», і на екрані «Зміна»."""
+    return {"live": url_for("admin", tab="live"), "clock": url_for("me", tab="clock")}.get(f.get("back"), url_for("admin", tab="zones"))
 
 
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",

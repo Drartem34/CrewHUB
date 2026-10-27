@@ -1,0 +1,25 @@
+{% from "_ui.html" import icon with context %}
+{# Пропозиція адміну: мережа, якої немає в жодній точці (мережа сервера — в адмінці, мережа телефона — на «Зміні»).
+   Змінні: offer = {ip, cidr, where: 'server' | 'phone'}, back = 'live' | 'clock' | 'zones', active_locations. #}
+<div class="card" id="netOffer" style="border-color:var(--bad)">
+  <div class="card-head"><h3>{{ icon('wifi') }} Нова мережа <span class="mono">{{ offer.cidr }}</span></h3><span class="muted small">видно лише адміністратору</span></div>
+  <p class="muted small" style="margin-top:0">
+    {% if offer.where == 'server' %}Сервер зараз у цій мережі (його IP {{ offer.ip }}), але її немає в жодній точці — телефони в ній бачать
+    «Не в робочій мережі» і не можуть почати зміну. Мабуть, сервер перенесли чи змінився роутер.
+    {% else %}Ваш телефон зараз у цій мережі (IP {{ offer.ip }}), але її немає в жодній точці — тут не можна почати зміну.{% endif %}
+    Якщо це Wi-Fi вашої точки — створіть точку з цією мережею або додайте мережу до існуючої.</p>
+  <form method="post" action="{{ url_for('admin_zones') }}" class="row" style="flex-wrap:wrap">
+    <input type="hidden" name="action" value="new_point"><input type="hidden" name="cidr" value="{{ offer.cidr }}"><input type="hidden" name="back" value="{{ back }}">
+    <input name="name" required maxlength="80" placeholder="Назва точки, напр. «Кав'ярня на Подолі»" style="flex:1 1 220px">
+    <button class="primary">{{ icon('plus', 'sm') }}Створити точку</button>
+  </form>
+  {% if active_locations %}
+  <form method="post" action="{{ url_for('admin_zones') }}" class="row" style="flex-wrap:wrap;margin-top:8px">
+    <input type="hidden" name="action" value="network"><input type="hidden" name="cidr" value="{{ offer.cidr }}"><input type="hidden" name="back" value="{{ back }}">
+    <input type="hidden" name="label" value="{{ 'Мережа сервера' if offer.where == 'server' else "Прив'язано з телефона адміна" }}">
+    <span class="muted small">або додати до точки</span>
+    <select name="location_id" style="flex:0 1 200px">{% for l in active_locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
+    <button class="sm">{{ icon('plus', 'sm') }}Додати мережу</button>
+  </form>
+  {% endif %}
+</div>

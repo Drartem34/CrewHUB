@@ -4,6 +4,7 @@
 {% block body %}
 
 {% if tab == 'clock' %}
+{% if net_offer %}{% with offer = net_offer, back = 'clock' %}{% include "_net_offer.html" %}{% endwith %}{% endif %}
 <div id="net" class="banner info">{{ icon('wifi') }}<span>Перевіряємо підключення…</span><span class="spacer"></span><button class="sm" id="refresh">{{ icon('refresh', 'sm') }}Оновити</button></div>
 <div class="grid-2">
   <div class="card clock-card">
