@@ -103,6 +103,14 @@
         {% set sub = [d.model if d.model != d.label else None, d.vendor if d.vendor != d.label else None]|select|join(' · ') %}
         {% if sub %}<small>{{ sub }}</small>{% endif %}
         <small><span class="mono">{{ d.ip or 'IP змінився' }} · {{ d.mac }}</span>{% if d.private %} <span class="tag" title="Телефон ховає справжній MAC: виробника за ним не визначити">приватний</span>{% endif %}</small>
+        {% if d.dev_key %}<small title="Код пристрою і відбиток, які сервер запам'ятав, коли з цього телефона заходили в CrewHub: за ними й за MAC він бачить телефон у мережі без відкритого сайту"><span class="mono">код {{ d.dev_key }}{% if d.dev_fp %} · відбиток {{ d.dev_fp }}…{% endif %}</span>{% if d.how %} · упізнано {{ d.how }}{% endif %}</small>{% endif %}
+        {% if not d.user_id and not d.shared and lan_people %}
+        <details class="small"><summary>Це телефон працівника?</summary>
+          <form method="post" action="{{ url_for('admin_lan_assign') }}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">
+            <input type="hidden" name="mac" value="{{ d.mac }}">
+            <select name="user_id" required><option value="">— чий телефон —</option>{% for p in lan_people %}<option value="{{ p.id }}">{{ p.full_name }}</option>{% endfor %}</select>
+            <button class="sm" title="Напр., iPhone змінив «приватну адресу Wi-Fi»: далі сервер бачитиме його в мережі сам, без відкритого CrewHub">Це його/її телефон</button></form>
+        </details>{% endif %}
       </div>
       {% if d.user_id %}<a class="pill ok" href="{{ url_for('admin_employee', uid=d.user_id) }}">{{ d.full_name }}</a>
       {% else %}<span class="pill warn">не в CrewHub</span>{% endif %}
@@ -114,7 +122,10 @@
   {% elif lan.scan_at %}{{ empty('Нікого не знайдено. Сервер бачить лише свою мережу: ' ~ (lan.nets|join(', ') or 'немає'), 'wifi') }}{% endif %}
   <p class="muted small" style="margin:10px 0 0">Список — усі, хто в одній мережі із сервером ({{ lan.nets|join(', ') or 'мережу не знайдено' }}), не лише працівники.
     Назву показують роутер, Windows, iPhone чи застосунок CrewHub; модель — якщо пристрій відкривав CrewHub.
-    «Приватний MAC» — телефон ховає справжню адресу, тож виробника за нею не визначити. Вимкнути пошук — у «Правилах».</p>
+    «Приватний MAC» — телефон ховає справжню адресу, тож виробника за нею не визначити. Вимкнути пошук — у «Правилах».
+    Телефон працівника сервер бачить тут і без відкритого CrewHub: один раз людина заходить (сервер запам'ятовує код
+    пристрою, відбиток і MAC), далі він сам питає мережу, чи є цей MAC (як роутер — не пінгом, телефон не прокидається).
+    iPhone змінив MAC — сервер упізнає його за назвою в мережі, або вкажіть «Це телефон працівника?» біля нового пристрою.</p>
 </div>
 {% endif %}
 

@@ -1207,5 +1207,109 @@ class IPhoneWebPresence1715Test(ScenarioBase):
         row = [r for r in admin.req("get", "/api/live").get_json()["rows"] if r["name"] == "Іван Петренко"][0]
         self.assertIsNone(row["net_note"])  # MAC підтверджено — сервер бачить телефон
 
+class IPhoneSeenWithoutSite1715Test(ScenarioBase):
+    """17.15: iPhone один раз увійшов — далі сервер бачить його в мережі сам, сайт відкривати не треба: за MAC, який
+    запам'ятав разом з кодом пристрою й відбитком (питає мережу, як роутер, — не пінгом). Змінив MAC — сервер упізнає
+    його за назвою в мережі, або адмін вказує «Це телефон працівника?» у «Пристроях у мережі»."""
+    IPHONE = IPhoneWebPresence1715Test.IPHONE
+
+    def setUp(self):
+        super().setUp()
+        core._mac_seen.clear()
+        core._shared.update(at=0.0, set=set())
+        self.tick(8)
+        self.iphone = Phone(self.net, 50, ua=self.IPHONE)
+        self.iphone.login(IVAN)  # один раз, о 8:00; далі сторінку не відкривають
+
+    def rotate(self, n):
+        """iPhone змінив «приватну адресу Wi-Fi»: новий MAC і новий IP."""
+        del self.net[self.iphone.ip]
+        self.iphone.ip, self.iphone.mac = f"192.168.1.{n}", f"da:00:00:00:01:{n:02x}"
+        self.net[self.iphone.ip] = self.iphone
+
+    def record(self, names=None):
+        with core.connect() as c:
+            lan.record(c, {ip: p.mac for ip, p in self.net.items() if p.online}, names or {})
+
+    def history_macs(self):
+        return [r[0] for r in self.sql("select mac from device_history h join users u on u.id = h.user_id where u.username = 'ivan'")]
+
+    def test_shift_without_opening_site(self):
+        self.live_until(12)  # жодного запиту з iPhone після входу
+        s = self.shift("ivan")
+        self.assertEqual(s["status"], "active")
+        self.assertLessEqual(s["started_at"], self.at(9, 1))  # почалась сама
+        self.assertEqual(self.sql("select count(*) from breaks")[0][0], 0)
+
+    def test_device_list_shows_code_and_fingerprint(self):
+        self.record()
+        with core.connect() as c:
+            row = [r for r in lan.devices(c) if r["mac"] == self.iphone.mac][0]
+        self.assertEqual((row["full_name"], row["dev_key"], row["dev_fp"]), ("Іван Петренко", self.iphone.key, self.iphone.fp[:8]))
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        self.assertIn(f"код {self.iphone.key}", admin.req("get", "/admin?tab=live").get_data(as_text=True))
+
+    def test_admin_says_whose_phone_after_mac_change(self):
+        self.rotate(60)
+        self.record()
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        page = admin.req("get", "/admin?tab=live").get_data(as_text=True)
+        self.assertIn("Це телефон працівника?", page)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        admin.req("post", "/admin/lan/assign", data={"csrf": csrf, "mac": self.iphone.mac, "user_id": uid},
+                  headers={"Origin": "http://localhost"})
+        self.assertEqual(self.history_macs(), [self.iphone.mac])
+        self.assertEqual(self.sql("select how from lan_devices where mac = ?", self.iphone.mac)[0][0], "вручну")
+        self.assertTrue(self.events("ivan", "device_recognised"))
+        self.live_until(10)  # зміна почалась сама за новим MAC, без сайту
+        self.assertEqual(self.shift("ivan")["status"], "active")
+
+    def test_assign_needs_a_phone_login_once(self):
+        stranger = Phone(self.net, 61)
+        self.record()
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', admin.req("get", "/admin?tab=live").get_data(as_text=True))[1]
+        olha = self.sql("select id from users where username = 'olha'")[0][0]  # Ольга ще не заходила з телефона
+        r = admin.req("post", "/admin/lan/assign", data={"csrf": csrf, "mac": stranger.mac, "user_id": olha},
+                      headers={"Origin": "http://localhost"}, follow_redirects=True)
+        self.assertIn("ще жодного разу не заходила", r.get_data(as_text=True))
+        self.assertIsNone(self.sql("select user_id from lan_devices where mac = ?", stranger.mac)[0][0])
+
+    def test_recognised_by_name_after_mac_change(self):
+        self.record({self.iphone.ip: "Ivans-iPhone"})
+        old = self.iphone.mac
+        self.rotate(62)
+        self.record({self.iphone.ip: "Ivans-iPhone"})
+        self.assertEqual(self.history_macs(), [self.iphone.mac])
+        row = self.sql("select user_id, how from lan_devices where mac = ?", self.iphone.mac)[0]
+        self.assertEqual(row["how"], "за назвою в мережі")
+        details = self.events("ivan", "device_recognised")[-1][1]
+        self.assertIn(old, details)
+        self.live_until(10)
+        self.assertEqual(self.shift("ivan")["status"], "active")
+
+    def test_generic_name_is_not_a_proof(self):
+        self.record({self.iphone.ip: "iPhone"})
+        self.rotate(63)
+        self.record({self.iphone.ip: "iPhone"})  # «iPhone» — у всіх однаково: не вгадуємо
+        self.assertNotIn(self.iphone.mac, self.history_macs())
+        self.assertIsNone(self.sql("select user_id from lan_devices where mac = ?", self.iphone.mac)[0][0])
+
+    def test_same_name_while_old_phone_online_is_other_device(self):
+        self.record({self.iphone.ip: "Ivans-iPhone"})
+        other = Phone(self.net, 64)  # старий телефон Івана теж у мережі — це інший пристрій з такою ж назвою
+        self.record({self.iphone.ip: "Ivans-iPhone", other.ip: "Ivans-iPhone"})
+        self.assertIsNone(self.sql("select user_id from lan_devices where mac = ?", other.mac)[0][0])
+
+    def test_safari_wiped_site_storage_keeps_device_code(self):
+        # Safari стер сховище сайту (тиждень без відвідин): автовхід за cookie — і сторінка повертає той самий код пристрою
+        remember = self.iphone.c.get_cookie("crewhub_remember").value
+        fresh = core.app.test_client()
+        fresh.set_cookie("crewhub_remember", remember, domain="localhost")
+        page = fresh.get("/me?tab=clock", headers={"User-Agent": self.IPHONE},
+                         environ_base={"REMOTE_ADDR": self.iphone.ip}).get_data(as_text=True)
+        self.assertIn(f'device: "{self.iphone.key}"', page)
+
 if __name__ == "__main__":
     unittest.main()

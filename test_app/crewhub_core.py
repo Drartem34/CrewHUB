@@ -605,6 +605,9 @@ def init_db(seed=True):
         conn.execute("alter table device_history add column model text")
     if "phone_verified_at" not in cols:  # коли номер підтверджено кодом у WhatsApp (17.11)
         conn.execute("alter table users add column phone_verified_at integer")
+    if "how" not in [r[1] for r in conn.execute("pragma table_info(lan_devices)")]:
+        # як пристрій у мережі приписано людині без відкритого CrewHub (17.15): «вручну» (адмін), «за назвою в мережі»
+        conn.execute("alter table lan_devices add column how text")
     if "why" not in [r[1] for r in conn.execute("pragma table_info(shared_macs)")]:
         # Чому MAC спільний (17.15): «iPhone і Android», «різні моделі Android»… Позначки без причини — з 17.13–17.14,
         # коли спільним міг стати й MAC одного iPhone з двома браузерами: вони діють лише SHARED_LEGACY_KEEP
@@ -2914,6 +2917,30 @@ def learn_mac(conn, user_id, key, mac, overwrite=False):
                  + ("" if overwrite else " and mac is null") + " and mac is not ?", (mac, user_id, key, mac))
 
 
+def assign_mac(conn, user_id, mac, how, ip=None):
+    """Пристрій у мережі (MAC) — телефон цієї людини, хоч вона й не відкривала CrewHub з цим MAC (iPhone змінив «приватну
+    адресу Wi-Fi»): адмін вказав у «Пристроях у мережі» або сервер упізнав за назвою в мережі (17.15). MAC переходить на
+    її прив'язаний телефон (або останній телефон з історії входів) і відкриту зміну — далі сервер бачить телефон у
+    мережі без сайту. Повертає код пристрою або None: людина ще жодного разу не заходила з телефона (коду й відбитка нема)."""
+    row = conn.execute("select device_key from devices where user_id = ? order by last_seen_at desc limit 1", (user_id,)).fetchone() \
+        or conn.execute("select device_key from device_history where user_id = ? and phone = 1 order by last_at desc limit 1",
+                        (user_id,)).fetchone()
+    if not row or mac in shared_macs():
+        return None
+    key = row[0]
+    for table in ("devices", "device_history", "remember_tokens"):  # MAC — одного телефона: в інших людей його більше немає
+        conn.execute(f"update {table} set mac = null where mac = ? and user_id != ?", (mac, user_id))
+    conn.execute("update shifts set mac = null where mac = ? and user_id != ? and status != 'closed'", (mac, user_id))
+    old = conn.execute("select mac from device_history where user_id = ? and device_key = ? union all"
+                       " select mac from devices where user_id = ? and device_key = ?", (user_id, key, user_id, key)).fetchone()
+    learn_mac(conn, user_id, key, mac, overwrite=True)
+    conn.execute("update shifts set mac = ? where user_id = ? and status != 'closed'", (mac, user_id))
+    conn.execute("update lan_devices set user_id = ?, how = ? where mac = ?", (user_id, how, mac))
+    log_clock(conn, user_id, None, "device_recognised", ip, None, True, key,
+              {"MAC": mac, "упізнано": how, **({"був MAC": old[0]} if old and old[0] and old[0] != mac else {})})
+    return key
+
+
 def presence_step():
     import lan
     with _lock:
@@ -3744,6 +3771,8 @@ def _remember_login():
     if uid:
         session["uid"] = uid
         session.permanent = True
+        if tok and (tok["device"] or "").startswith("web-"):
+            session["dev"] = tok["device"]  # код пристрою цього браузера: сторінка поверне його, якщо Safari стер сховище сайту
         if owner:
             session["foreign_owner"] = owner
         g.pop("user", None)
@@ -4083,8 +4112,8 @@ def api_clock(action):
         mac = client_mac(client_ip(), cached_only=True)
         res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
         note_usage(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
-        if not mac:  # система ще не підтвердила MAC — фонова перевірка підтвердить і запише (17.15)
-            want_mac(client_ip(), current_user()["id"], key)
+        if not mac and neighbour_mac(client_ip(), cached_only=True) not in shared_macs():
+            want_mac(client_ip(), current_user()["id"], key)  # MAC ще не підтверджено — підтвердить фонова перевірка (17.15)
         if res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
             if mac:
                 conn.execute("update shifts set mac = ? where id = ? and mac is not ?", (mac, res["shift"]["id"], mac))
@@ -5031,6 +5060,11 @@ def admin():
         if setting("lan_scan") == "1":
             import lan
             ctx["lan"] = lan.summary(conn)
+            # «Це телефон…»: люди, які хоч раз заходили з телефона (є код пристрою, до якого прив'язати MAC)
+            ctx["lan_people"] = conn.execute(
+                "select id, full_name from users u where status not in ('dismissed', 'pending') and (exists (select 1 from devices d"
+                " where d.user_id = u.id) or exists (select 1 from device_history h where h.user_id = u.id and h.phone = 1))"
+                " order by full_name").fetchall()
     elif tab == "employees":
         archive = request.args.get("archive") == "1"
         ctx["archive"] = archive
@@ -5661,6 +5695,34 @@ def admin_schedule():
                   {"starts_at": [None, start], "ends_at": [None, end]})
         conn.commit()
     return redirect(url_for("admin", tab="schedule", week=f.get("week")))
+
+
+@app.post("/admin/lan/assign")
+@login_required(staff=True)
+def admin_lan_assign():
+    """«Це телефон…» у «Пристроях у мережі»: невідомий пристрій — телефон людини (iPhone змінив MAC, а сайт не відкривав).
+    Далі сервер бачить його в мережі сам: автозміна і зміна, що йде, — без відкритого CrewHub (17.15)."""
+    mac = (request.form.get("mac") or "").strip().lower().replace("-", ":")
+    uid = parse_int(request.form.get("user_id"))
+    back = url_for("admin", tab="live") + "#lan"
+    if not MAC_RE.fullmatch(mac) or not uid:
+        flash("Виберіть людину")
+        return redirect(back)
+    with _lock:
+        conn = db()
+        u = conn.execute("select full_name from users where id = ? and status != 'dismissed'", (uid,)).fetchone()
+        row = conn.execute("select ip from lan_devices where mac = ?", (mac,)).fetchone()
+        key = u and assign_mac(conn, uid, mac, "вручну", row["ip"] if row else None)
+        if key:
+            audit(conn, current_user()["id"], "UPDATE", "devices", None, uid, {"MAC телефона": [None, mac]})
+        conn.commit()
+    if mac in shared_macs():
+        flash(f"MAC {mac} спільний (роутер чи підсилювач) — за ним кілька телефонів, приписати його одній людині не можна")
+    elif not key:
+        flash("Ця людина ще жодного разу не заходила в CrewHub з телефона — хай увійде один раз, тоді телефон можна вказати")
+    else:
+        flash(f"Пристрій {mac} — телефон: {u['full_name']}. Сервер бачитиме його в мережі сам, без відкритого CrewHub")
+    return redirect(back)
 
 
 @app.post("/admin/lan/scan")

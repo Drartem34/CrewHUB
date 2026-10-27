@@ -480,8 +480,44 @@ def record(conn, seen, names):
                 conn.execute("insert into lan_devices(mac, ip, name, model, vendor, user_id, first_seen, last_seen)"
                              " values (?, ?, ?, ?, ?, ?, ?, ?)", (mac, ip, name, model, vend.get(mac), uid, t, t))
             conn.execute("update lan_devices set ip = '' where ip = ? and mac != ?", (ip, mac))  # IP перейшов іншому
+        recognise_by_name(conn, seen, names)
         conn.execute("delete from lan_devices where last_seen < ?", (t - KEEP_DAYS * 86400,))
         conn.commit()
+
+
+# Назви, які нічого не кажуть про власника: «iPhone», «Galaxy-A51», «Redmi-Note-12», «android-1a2b3c» — за ними
+# телефон не впізнати (однакові в усіх з такою моделлю). Особиста назва — з іменем: «Ivans-iPhone», «iPhone-Olha»
+MODEL_WORDS = {"iphone", "ipad", "ipod", "android", "galaxy", "redmi", "xiaomi", "mi", "poco", "samsung", "huawei", "honor",
+               "oppo", "vivo", "realme", "oneplus", "pixel", "nokia", "motorola", "moto", "tecno", "infinix", "zte", "phone",
+               "mobile", "tab", "pad", "note", "pro", "max", "plus", "ultra", "lite", "mini", "se", "prime", "fe", "neo", "edge",
+               "play", "power", "star", "localhost", "unknown", "tablet", "esp", "espressif", "s", "a", "m"}
+
+
+def generic_name(name):
+    words = [w for w in re.split(r"[\W_]+", (name or "").lower()) if w]
+    return not words or all(w in MODEL_WORDS or re.fullmatch(r"[a-z]?\d+[a-z]*|[0-9a-f]+", w) for w in words)
+
+
+def recognise_by_name(conn, seen, names):
+    """iPhone змінив «приватну адресу Wi-Fi» (новий MAC, новий IP) і сайт ще не відкривав: сервер упізнає його за назвою
+    в мережі (з роутера чи mDNS), якщо вона особиста («Ivans-iPhone»), а не загальна («iPhone»), була лише в однієї
+    людини і старого MAC її телефона зараз у мережі немає. Тоді новий MAC — її телефон: сервер бачить його в мережі
+    без сайту (17.15)."""
+    online = set(seen.values())
+    for ip, mac in seen.items():
+        name = (names.get(ip) or "").strip()
+        if generic_name(name) or not private_mac(mac) or mac in core.shared_macs():
+            continue
+        if conn.execute("select 1 from lan_devices where mac = ? and user_id is not null", (mac,)).fetchone():
+            continue  # уже чийсь
+        if sum(1 for i in seen if (names.get(i) or "").strip().lower() == name.lower()) > 1:
+            continue  # два пристрої з такою назвою зараз — не вгадуємо
+        rows = conn.execute("select mac, user_id from lan_devices where lower(name) = lower(?) and mac != ? and user_id is not null",
+                            (name, mac)).fetchall()
+        users = {r["user_id"] for r in rows}
+        if len(users) != 1 or any(r["mac"] in online for r in rows):
+            continue  # назва в кількох людей, або старий телефон теж зараз у мережі (тоді це інший пристрій)
+        core.assign_mac(conn, users.pop(), mac, "за назвою в мережі", ip)
 
 
 def devices(conn):
@@ -503,8 +539,14 @@ def devices(conn):
                         "shared": True, "user_id": None, "label": "Роутер чи підсилювач Wi-Fi (спільний MAC)",
                         "model": ("за ним: " + ", ".join(behind)) if behind else "за ним кілька телефонів", "vendor": None})
             continue
+        # Телефон людини: код пристрою й відбиток, які сервер запам'ятав, коли з нього заходили, — за ними і за MAC
+        # сервер бачить телефон у мережі без відкритого CrewHub (17.15)
+        dev = conn.execute("select device_key, fingerprint from devices where mac = ? and user_id = ? union all"
+                           " select device_key, fingerprint from device_history where mac = ? and user_id = ? limit 1",
+                           (r["mac"], r["user_id"], r["mac"], r["user_id"])).fetchone() if r["user_id"] else None
         out.append({**dict(r), "online": r["last_seen"] >= fresh, "private": private_mac(r["mac"]),
                     "blocked": bool(core.device_blocked(conn, None, r["mac"])), "shared": r["mac"] in core.shared_macs(),
+                    "dev_key": dev["device_key"] if dev else None, "dev_fp": (dev["fingerprint"] or "")[:8] if dev else None,
                     "label": r["name"] or r["model"] or r["vendor"] or ("Телефон чи ноутбук" if private_mac(r["mac"]) else "Невідомий пристрій")})
     return out
 

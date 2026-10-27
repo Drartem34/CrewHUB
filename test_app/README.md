@@ -36,13 +36,16 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
-## Що нового у версії 17.15: iPhone без застосунку не відвалюється
+## Що нового у версії 17.15: iPhone без застосунку не відвалюється і видно в мережі без сайту
 
 - `want_mac()` / `_mac_pending` → `presence_step` підтверджує MAC стуком і записує `learn_mac()`; `known_mac()` — зміна
   одразу з уже відомим MAC пристрою; зміни без MAC після «Перезаписати IP і MAC» — з їх свіжої адреси (`mac_taken`).
 - `different_devices()` повертає причину; не на iPhone і не для різних браузерів (`browser_sig`); `shared_macs.why`,
   позначки без причини — година (`SHARED_LEGACY_KEEP`); `admin_devices_unshare` («Це не роутер»).
 - `PRESENCE_RETRY`: повторний стук для тих, хто не відповів; `clock.js` — пінг перед сном (keepalive); `net_note()` в «Огляді».
+- `assign_mac()`: новий MAC — телефон людини (`/admin/lan/assign` «Це телефон працівника?», `lan.recognise_by_name` за
+  особистою назвою, `lan.generic_name`); `lan_devices.how`; у `lan.devices()` — `dev_key`, `dev_fp`.
+- `session["dev"]` з токена автовходу → `CREWHUB.device` → `clock.js` повертає код пристрою, якщо Safari стер `localStorage`.
 
 ## Що нового у версії 17.14: блокування в одному місці, впізнавання з новими IP і MAC
 

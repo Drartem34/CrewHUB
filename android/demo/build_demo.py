@@ -68,7 +68,8 @@ def prepare():
                 ("a4:2b:b0:11:22:33", "192.168.1.50", "KASA-PC", "Windows ПК", None, None),
                 ("3e:22:fa:10:00:07", "192.168.1.61", "Olenas-iPhone", "iPhone", None, None),
                 ("6a:00:11:22:33:44", "192.168.1.77", None, None, None, None)]:
-            c.execute("insert or replace into lan_devices values (?, ?, ?, ?, ?, ?, ?, ?)", (mac, ip, name, model, vendor, uid, t - 86400, t))
+            c.execute("insert or replace into lan_devices(mac, ip, name, model, vendor, user_id, first_seen, last_seen)"
+                      " values (?, ?, ?, ?, ?, ?, ?, ?)", (mac, ip, name, model, vendor, uid, t - 86400, t))
         c.commit()
     lan._state.update(scan_at=int(time.time()), took=2.1, error=None, nets=["192.168.1.0/24"])
 

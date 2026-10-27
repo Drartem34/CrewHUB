@@ -461,8 +461,9 @@
 
 {% block scripts %}
 {% if tab == 'clock' %}
-<script>window.CREWHUB = {currency: {{ currency|tojson }}, todayClosed: {{ today_closed }}, monthClosed: {{ month_closed }}, target: {{ shift_target }}};</script>
-<script src="{{ url_for('static', filename='clock.js') }}?v=20"></script>
+<script>window.CREWHUB = {currency: {{ currency|tojson }}, todayClosed: {{ today_closed }}, monthClosed: {{ month_closed }}, target: {{ shift_target }},
+  device: {{ (session.get('dev') if (session.get('dev') or '').startswith('web-') else none)|tojson }}};</script>
+<script src="{{ url_for('static', filename='clock.js') }}?v=21"></script>
 {% elif tab == 'team' %}
 <script>
   teamSearch.oninput = () => { const q = teamSearch.value.toLowerCase();

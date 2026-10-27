@@ -6,7 +6,11 @@
   const deviceId = (() => {
     try {
       let id = localStorage.getItem("crewhub_device");
-      if (!id) { id = "web-" + Math.random().toString(16).slice(2, 10); localStorage.setItem("crewhub_device", id); }
+      // Safari на iPhone сам стирає сховище сайту (тиждень без відвідин, «Очистити історію») — код цього браузера
+      // сервер пам'ятає з входу, повертаємо його, а не робимо новий: інакше телефон став би «новим пристроєм»
+      if (!id && window.CREWHUB && CREWHUB.device) id = CREWHUB.device;
+      if (!id) id = "web-" + Math.random().toString(16).slice(2, 10);
+      localStorage.setItem("crewhub_device", id);
       return id;  // той самий id, що надіслала реєстрація: за ним сервер упізнає телефон людини
     } catch (e) { return "web"; }
   })();
