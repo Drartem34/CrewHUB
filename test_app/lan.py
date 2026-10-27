@@ -484,6 +484,7 @@ def devices(conn):
     out = []
     for r in rows:
         out.append({**dict(r), "online": r["last_seen"] >= fresh, "private": private_mac(r["mac"]),
+                    "blocked": bool(core.device_blocked(conn, None, r["mac"])),
                     "label": r["name"] or r["model"] or r["vendor"] or ("Телефон чи ноутбук" if private_mac(r["mac"]) else "Невідомий пристрій")})
     return out
 

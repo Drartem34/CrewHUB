@@ -36,6 +36,16 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
+## Що нового у версії 17.11: блокування пристроїв, підозрілі пристрої, WhatsApp
+
+- `blocked_devices` + `device_blocked()` (кеш 5 с) — вхід, реєстрація, автовхід за cookie, `/api/clock`, `_blocked_guard`
+  на кожній сторінці; `admin_device_block` / `admin_device_unblock`, макрос `block_btn` у `_ui.html`.
+- `note_failed_login()` (подія `login_failed`, далі `brute_force`), `check_account_hopping()` (`account_hopping`);
+  пороги `suspicious_failed_logins`, `suspicious_accounts_hour`.
+- WhatsApp: `whatsapp_config`, `whatsapp_send_code` (Graph API, `CREWHUB_WA_API`), `new_phone_code`,
+  `check_phone_code`, `phone_codes`, `users.phone_verified_at`; маршрути `register_verify`, `register_resend`,
+  `admin_whatsapp_test`. Див. [docs/13-whatsapp.md](../docs/13-whatsapp.md).
+
 ## Що нового у версії 17.10: сервер у будь-якій мережі сам пропонує створити точку
 
 - `server_network(conn)` → {ip, cidr, location}; картка `_net_offer.html` («Створити точку» — дія `new_point`,

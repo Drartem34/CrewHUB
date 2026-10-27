@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import json
 import unittest
 from datetime import datetime
 from unittest import mock
@@ -735,6 +736,110 @@ class ForeignPhoneBlockTest(CrewHubBase):
         # керівника з чужого телефона пускає (міг свій розрядити), але позначає
         r = c.post("/login", data={"username": "admin", "password": "admin123"}, headers={"User-Agent": self.IVAN_PHONE})
         self.assertEqual(r.status_code, 302)
+
+
+class WhatsAppVerifyTest(CrewHubBase):
+    """17.11: після реєстрації — код у WhatsApp (Cloud API, тут імітація); заявка показує «✓ номер підтверджено»."""
+
+    def setUp(self):
+        super().setUp()
+        with core.connect() as c:
+            for k, v in (("registration_open", "1"), ("whatsapp_verify", "1"), ("whatsapp_phone_id", "1234567890")):
+                c.execute("insert or replace into settings(key, value) values (?, ?)", (k, v))
+            core.meta_set(c, "whatsapp_token", "EAAG" + "x" * 40)
+            c.commit()
+        self.sent = []
+
+    def fake_urlopen(self, fail=None):
+        test = self
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{"messages":[{"id":"wamid.1"}]}'
+
+        def urlopen(req, timeout=None):
+            if fail:
+                raise fail
+            body = json.loads(req.data)
+            test.sent.append((req.full_url, req.headers.get("Authorization"), body))
+            return Resp()
+        return mock.patch("urllib.request.urlopen", urlopen)
+
+    def register(self, client):
+        return client.post("/register", data={"full_name": "Петро Новий", "phone": "0991112233", "password": "123456",
+                                              "password2": "123456"}).get_data(as_text=True)
+
+    def code(self):
+        return self.sent[-1][2]["template"]["components"][0]["parameters"][0]["text"]
+
+    def test_register_with_code(self):
+        c = core.app.test_client()
+        with self.fake_urlopen():
+            page = self.register(c)
+            self.assertIn("Підтвердіть номер", page)
+            url, auth, body = self.sent[0]
+            self.assertIn("graph.facebook.com", url)
+            self.assertIn("/1234567890/messages", url)
+            self.assertTrue(auth.startswith("Bearer EAAG"))
+            self.assertEqual(body["to"], "380991112233")
+            self.assertEqual(body["template"]["name"], "crewhub_code")
+            self.assertIn("Невірний код", c.post("/register/verify", data={"code": "000000" if self.code() != "000000" else "111111"}).get_data(as_text=True))
+            page = c.post("/register/verify", data={"code": self.code()}).get_data(as_text=True)
+        self.assertIn("номер підтверджено в WhatsApp", page)
+        self.assertTrue(self.sql("select phone_verified_at from users where phone = '+380991112233'")[0][0])
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        self.assertIn("✓ номер підтверджено", admin.get("/admin?tab=employees").get_data(as_text=True))
+
+    def test_whatsapp_unreachable_registration_still_works(self):
+        import urllib.error
+        c = core.app.test_client()
+        with self.fake_urlopen(fail=urllib.error.URLError("no internet")):
+            page = self.register(c)
+        self.assertIn("Код у WhatsApp не надіслано", page)
+        self.assertEqual(self.sql("select status, phone_verified_at from users where phone = '+380991112233'")[0][:], ("pending", None))
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        self.assertIn("номер не підтверджено", admin.get("/admin?tab=employees").get_data(as_text=True))
+
+    def test_attempts_expiry_resend(self):
+        c = core.app.test_client()
+        with self.fake_urlopen():
+            self.register(c)
+            for _ in range(5):
+                c.post("/register/verify", data={"code": "999999" if self.code() != "999999" else "888888"})
+            self.assertIn("надішліть новий", c.post("/register/verify", data={"code": self.code()}).get_data(as_text=True))
+            self.assertIn("можна надіслати через", c.post("/register/resend").get_data(as_text=True))  # не частіше раз на хвилину
+            self.sql("update phone_codes set sent_at = sent_at - 120")
+            self.assertIn("Новий код надіслано", c.post("/register/resend").get_data(as_text=True))
+            self.assertEqual(len(self.sent), 2)
+            self.sql("update phone_codes set expires_at = 0")
+            self.assertIn("Код застарів", c.post("/register/verify", data={"code": self.code()}).get_data(as_text=True))
+
+    def test_off_or_not_configured(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '' where key = 'whatsapp_phone_id'")
+            c.commit()
+        with self.fake_urlopen():
+            page = self.register(core.app.test_client())
+        self.assertIn("Заявку надіслано", page)
+        self.assertEqual(self.sent, [])
+
+    def test_token_is_secret(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        page = admin.get("/admin?tab=settings").get_data(as_text=True)
+        self.assertNotIn("x" * 40, page)  # токен не показується
+        self.assertIn("•••• xxxx", page)
+        admin.post("/admin/settings", data={"whatsapp_token_new": "EAAG" + "y" * 40, "whatsapp_verify": "on"})
+        with core.connect() as c:
+            self.assertEqual(core.meta_get(c, "whatsapp_token"), "EAAG" + "y" * 40)
+        self.assertNotIn("y" * 40, "".join(r[0] or "" for r in self.sql("select changes from audit")))
+        with open(core.SETTINGS_FILE, encoding="utf-8") as f:
+            self.assertNotIn("EAAG", f.read())
 
 
 class ServerNetworkTest(CrewHubBase):

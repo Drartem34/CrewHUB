@@ -143,3 +143,16 @@
   <a href="{{ url_for(endpoint, tab='schedule', week=grid.days[0].iso, weekend=None if grid.weekend else '1') }}">{{ 'Сховати вихідні' if grid.weekend else 'Показати суботу й неділю' }}</a>
 </div>
 {% endmacro %}
+
+{# Заблокувати пристрій «по залізу» (MAC і код пристрою): з нього не увійти в жоден акаунт і не почати зміну (17.11) #}
+{% macro block_btn(key=None, mac=None, fp=None, label='', user_id=None, text='Заблокувати') %}
+{% if key or mac %}
+<form method="post" action="{{ url_for('admin_device_block') }}"
+  data-confirm="Заблокувати пристрій {{ label or key or mac }}? З нього не можна буде увійти в жоден акаунт, зареєструватись чи почати зміну, доки не розблокуєте («Підключення» → «Заблоковані пристрої»).">
+  <input type="hidden" name="device_key" value="{{ key or '' }}"><input type="hidden" name="mac" value="{{ mac or '' }}">
+  <input type="hidden" name="fingerprint" value="{{ fp or '' }}"><input type="hidden" name="label" value="{{ label or '' }}">
+  <input type="hidden" name="user_id" value="{{ user_id or '' }}"><input type="hidden" name="back" value="{{ request.full_path }}">
+  <button class="sm danger" title="Блокує пристрій за MAC і кодом, а не акаунт">{{ icon('x', 'sm') }}{{ text }}</button>
+</form>
+{% endif %}
+{% endmacro %}

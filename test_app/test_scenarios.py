@@ -660,5 +660,85 @@ class SoftCheckTest(ScenarioBase):
         self.assertEqual(core.DEFAULT_SETTINGS["soft_check_minutes"], "0")
 
 
+class DeviceSecurityTest(ScenarioBase):
+    """17.11: блокування пристрою «по залізу» (MAC і код), підбір пароля, вхід у різні акаунти з одного пристрою."""
+
+    def setUp(self):
+        super().setUp()
+        core._blocked["at"] = 0.0  # справжній час: «Безпека сьогодні» рахує за сьогоднішнім днем
+        self.admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+
+    def post_admin(self, url, **data):
+        page = self.admin.req("get", "/admin?tab=logs").get_data(as_text=True)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        return self.admin.req("post", url, data={"csrf": csrf, **data}, headers={"Origin": "http://localhost"})
+
+    def notes(self, title):
+        return self.sql("select count(*) from notifications n join users u on u.id = n.user_id where u.username = 'admin' and n.title = ?", title)[0][0]
+
+    def test_block_by_hardware_and_unblock(self):
+        phone = Phone(self.net, 50)
+        phone.login(IVAN)
+        self.assertEqual(phone.req("get", "/me").status_code, 200)
+        r = self.post_admin("/admin/devices/block", mac=phone.mac, label="Телефон Івана", back="/admin?tab=logs")
+        self.assertEqual(r.status_code, 302)
+        r = phone.req("get", "/me")  # був в акаунті — вилітає на наступній сторінці
+        self.assertIn("/login", r.headers.get("Location", ""))
+        phone.c = core.app.test_client()
+        phone.clear_browser()  # новий код браузера не рятує: MAC той самий
+        r = phone.req("post", "/login", data={"username": OLHA, "password": "1234", "device_id": phone.key, "fp": phone.fp})
+        self.assertEqual(r.status_code, 403)  # і в інший акаунт теж ні
+        self.assertIn("заблоковано адміністратором", r.get_data(as_text=True))
+        self.assertTrue(self.events("ivan", "blocked_device") or self.sql("select 1 from conn_log where event = 'blocked_device'"))
+        self.assertEqual(self.notes("Заблокований пристрій пробує зайти"), 1)
+        logs = self.admin.req("get", "/admin?tab=logs").get_data(as_text=True)
+        self.assertIn("Заблоковані пристрої · 1", logs)
+        bid = self.sql("select id from blocked_devices")[0][0]
+        self.post_admin(f"/admin/devices/unblock/{bid}")
+        phone.login(OLHA)  # розблоковано — входить
+
+    def test_block_app_by_code_and_clock_refused(self):
+        app = Phone(self.net, 51, app="appcode51")
+        app.login(IVAN)
+        self.post_admin("/admin/devices/block", device_key="app-appcode51", label="Застосунок")
+        r = app.req("post", "/api/clock/start", json={"device_id": app.key})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.sql("select count(*) from shifts")[0][0], 0)
+
+    def test_cannot_block_own_device(self):
+        self.post_admin("/admin/devices/block", mac=self.admin.mac, label="мій ПК")
+        self.assertEqual(self.sql("select count(*) from blocked_devices")[0][0], 0)
+        self.assertIn("не можна заблокувати", self.admin.req("get", "/admin?tab=logs").get_data(as_text=True))
+
+    def test_password_guessing(self):
+        bad = Phone(self.net, 52, model="SM-G991B")
+        for who in (IVAN, OLHA, IVAN, "0500000001", OLHA):
+            r = bad.req("post", "/login", data={"username": who, "password": "wrong", "device_id": bad.key, "fp": bad.fp})
+            self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.sql("select count(*) from conn_log where event = 'login_failed'")[0][0], 5)
+        row = self.sql("select details, device from conn_log where event = 'brute_force'")
+        self.assertEqual(len(row), 1)
+        self.assertIn("+380 67 123 45 67", row[0][0])
+        self.assertIn(bad.mac, row[0][0])
+        self.assertEqual(self.notes("Підозріло: підбір пароля"), 1)
+        live = self.admin.req("get", "/admin?tab=live").get_data(as_text=True)
+        security = live.split("<h3>Безпека сьогодні</h3>")[1]
+        self.assertIn("Підбір пароля", security)
+        self.assertIn(f'name="mac" value="{bad.mac}"', security)  # кнопка «Заблокувати» з MAC цього пристрою
+
+    def test_many_accounts_from_one_device(self):
+        with core.connect() as c:
+            c.execute("update users set password_hash = ? where username = 'moder'", (core.hash_password("1234"),))
+            c.commit()
+        kiosk = Phone(self.net, 53)
+        for who in (IVAN, OLHA, "0500000002"):
+            kiosk.login(who)
+            kiosk.logout()
+        row = self.sql("select details from conn_log where event = 'account_hopping'")
+        self.assertEqual(len(row), 1)
+        self.assertIn("Іван Петренко", row[0][0])
+        self.assertEqual(self.notes("Підозріло: вхід у різні акаунти"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

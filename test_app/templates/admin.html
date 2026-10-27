@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_ui.html" import icon, avatar, person, state_pill, req_pill, empty, month_nav, bars, week_table, month_table, STATE_LABELS with context %}
+{% from "_ui.html" import icon, avatar, person, state_pill, req_pill, empty, month_nav, bars, week_table, month_table, STATE_LABELS, block_btn with context %}
 {% block title %}{{ {'live': 'Огляд', 'employees': 'Працівники', 'requests': 'Запити', 'schedule': 'Графік змін', 'zones': 'Точки і Wi-Fi', 'logs': 'Журнал підключень', 'audit': 'Журнал редагувань', 'payroll': 'Зарплата', 'settings': 'Правила компанії'}[tab] }}{% endblock %}
 {% block actions %}
   {% if tab in ('employees', 'payroll') and me.role == 'admin' %}<button class="sm" data-dialog="rateDlg">{{ icon('wallet', 'sm') }}<span class="hide-mobile">Загальна ставка</span></button>{% endif %}
@@ -12,7 +12,9 @@
   <div class="card-head"><h3>{{ icon('user') }} Нові реєстрації · {{ pending_users|length }}</h3><span class="muted small">увійти в систему людина зможе лише після вашого підтвердження</span></div>
   {% for p in pending_users %}
   <form method="post" action="{{ url_for('admin_registration', uid=p.id, decision='approve') }}" class="row" style="padding:10px 0;border-bottom:1px solid var(--line)">
-    {{ person(p, (p.phone|phone) ~ ' · ' ~ (p.hire_date or '') ~ ((' · ' ~ p.device) if p.device else '')) }}<span class="spacer"></span>
+    {{ person(p, (p.phone|phone) ~ ' · ' ~ (p.hire_date or '') ~ ((' · ' ~ p.device) if p.device else '')) }}
+    {% if p.phone_verified_at %}<span class="pill ok" title="Код з WhatsApp введено {{ p.phone_verified_at|dt }}">✓ номер підтверджено</span>
+    {% elif wa_verify %}<span class="pill warn" title="Код з WhatsApp не введено">номер не підтверджено</span>{% endif %}<span class="spacer"></span>
     <input name="job_title" placeholder="Посада" style="flex:1 1 120px;max-width:170px">
     <select name="location_id" style="flex:1 1 120px;max-width:170px">{% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
     <input name="hourly_rate" value="{{ default_rate }}" inputmode="decimal" title="Ставка, {{ currency }}/год" style="width:90px">
@@ -64,9 +66,11 @@
       <div class="kpi"><span class="ic {{ 'bad' if stats.denied_today else 'ok' }}">{{ icon('shield') }}</span>
         <div><small>Відмов, чужих мереж і підозрілих входів</small><b id="k-denied">{{ stats.denied_today }}</b></div></div>
       {% for x in stats.suspicious %}
-      <div class="banner bad" style="margin:10px 0 0">{{ icon('alert') }}<div><b>{{ x.full_name or '—' }}</b> · {{ EVENTS.get(x.event, x.event) }}, {{ x.created_at|tm }}
-        <div class="small">{{ x.details|logdetails }}</div></div></div>
+      <div class="banner bad" style="margin:10px 0 0;flex-wrap:wrap">{{ icon('alert') }}<div style="flex:1 1 200px"><b>{{ x.full_name or x.dev_label or 'Невідомий пристрій' }}</b> · {{ EVENTS.get(x.event, x.event) }}, {{ x.created_at|tm }}
+        <div class="small">{{ x.details|logdetails }}{% if x.ip %} · IP {{ x.ip }}{% endif %}</div></div>
+        {% if x.event != 'blocked_device' and not x.blocked %}{{ block_btn(x.device, x.mac, None, x.dev_label) }}{% endif %}</div>
       {% endfor %}
+      {% if blocked_count %}<div class="muted small" style="margin-top:8px">Заблоковано пристроїв: {{ blocked_count }} · <a href="{{ url_for('admin', tab='logs') }}#blocked">керувати</a></div>{% endif %}
     </div>
   </div>
 </div>
@@ -91,6 +95,7 @@
       </div>
       {% if d.user_id %}<a class="pill ok" href="{{ url_for('admin_employee', uid=d.user_id) }}">{{ d.full_name }}</a>
       {% else %}<span class="pill warn">не в CrewHub</span>{% endif %}
+      {% if d.blocked %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(None, d.mac, None, d.label) }}{% endif %}
     </div>
     {% endfor %}
   </div>
@@ -333,6 +338,20 @@
 {% if me.role != 'admin' %}<p class="muted">Wi-Fi зони змінює лише адміністратор.</p>{% endif %}
 
 {% elif tab == 'logs' %}
+<div class="card" id="blocked">
+  <div class="card-head"><h3>{{ icon('shield') }} Заблоковані пристрої · {{ blocked|length }}</h3>
+    <span class="muted small">блокування «по залізу»: за MAC і кодом пристрою, а не за акаунтом</span></div>
+  {% for b in blocked %}
+  <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+    <div class="grow" style="flex:1 1 240px"><b>{{ b.label or 'Пристрій' }}</b>{% if b.owner %} <span class="muted small">· {{ b.owner }}</span>{% endif %}
+      <div class="muted small mono">{% if b.device_key %}код {{ b.device_key }}{% endif %}{% if b.mac %} · MAC {{ b.mac }}{% endif %}</div>
+      <div class="muted small">заблокував(ла) {{ b.actor or '—' }}, {{ b.created_at|dt }}{% if b.reason %} · {{ b.reason }}{% endif %}</div></div>
+    <form method="post" action="{{ url_for('admin_device_unblock', bid=b.id) }}" data-confirm="Розблокувати {{ b.label or b.device_key or b.mac }}?">
+      <button class="sm">{{ icon('check', 'sm') }}Розблокувати</button></form>
+  </div>
+  {% else %}<div class="muted small">Немає. Заблокувати пристрій можна в «Огляді» → «Безпека сьогодні» (біля підозрілої події),
+    у «Пристроях у мережі» або в картці працівника — біля його пристроїв.</div>{% endfor %}
+</div>
 <div class="card">
   <div class="card-head"><div class="segmented">
     <a href="{{ url_for('admin', tab='logs') }}" class="{{ 'on' if not request.args.get('only') }}">Усі</a>
@@ -404,6 +423,11 @@
         <option value="{{ k }}" {{ 'selected' if settings.foreign_phone_action == k }}>{{ v }}</option>{% endfor %}
       </select>
       <span class="muted small">Чий телефон: кому прив'язаний, або хто першим з нього заходив. Позначка ⚠ видно на зміні в «Огляді» й у табелі, подія — у «Підключеннях».</span></div>
+    <div class="form-grid" style="margin-top:10px">
+      <div><label>«Підбір пароля»: невдалих входів з одного пристрою за 15 хв</label><input name="suspicious_failed_logins" type="number" min="2" max="100" value="{{ settings.suspicious_failed_logins }}"></div>
+      <div><label>«Вхід у різні акаунти»: стільки акаунтів з одного пристрою за годину</label><input name="suspicious_accounts_hour" type="number" min="2" max="50" value="{{ settings.suspicious_accounts_hour }}"></div>
+    </div>
+    <span class="muted small">Такий пристрій — червоним у «Безпека сьогодні» з кнопкою «Заблокувати», керівникам — сповіщення. Заблоковані — у «Підключеннях».</span>
     <div class="form-grid" style="margin-top:6px">
       <div><label>Зміна починається о</label><input type="time" name="work_start" value="{{ settings.work_start }}"></div>
       <div><label>Зміна закінчується о</label><input type="time" name="work_end" value="{{ settings.work_end }}"></div>
@@ -466,6 +490,23 @@
   <div class="card">
     <div class="card-head"><h3>{{ icon('shield') }} Дисципліна і доступ</h3></div>
     <label class="check"><input type="checkbox" name="registration_open" {{ 'checked' if settings.registration_open == '1' }}>Дозволити самостійну реєстрацію (з підтвердженням)</label>
+    <div id="whatsapp" style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px">
+      <label class="check"><input type="checkbox" name="whatsapp_verify" {{ 'checked' if settings.whatsapp_verify == '1' }}><span><b>Підтверджувати номер через WhatsApp.</b>
+        Після реєстрації людині приходить код у WhatsApp, вона вводить його, і в заявці видно «✓ номер підтверджено». Потрібні інтернет на сервері й
+        акаунт WhatsApp Business у Meta — див. docs/13-whatsapp.md</span></label>
+      {% if settings.whatsapp_verify == '1' and not (settings.whatsapp_phone_id and wa_token) %}<div class="banner warn small" style="margin:8px 0 0">{{ icon('alert', 'sm') }}Не налаштовано: поки немає Phone number ID і токена, реєстрація йде без коду</div>{% endif %}
+      <div class="form-grid" style="margin-top:8px">
+        <div><label>Phone number ID (Meta)</label><input name="whatsapp_phone_id" value="{{ settings.whatsapp_phone_id }}" inputmode="numeric" autocomplete="off"></div>
+        <div><label>Токен доступу{% if wa_token %} — збережено {{ wa_token }}{% endif %}</label><input name="whatsapp_token_new" type="password" autocomplete="new-password" placeholder="{{ 'вставте новий, щоб замінити' if wa_token else 'постійний токен з кабінету Meta' }}"></div>
+        <div><label>Назва шаблону з кодом</label><input name="whatsapp_template" value="{{ settings.whatsapp_template }}"></div>
+        <div><label>Мова шаблону</label><input name="whatsapp_lang" value="{{ settings.whatsapp_lang }}" placeholder="uk"></div>
+      </div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap">
+        {% if wa_token %}<label class="check"><input type="checkbox" name="whatsapp_token_clear">Стерти токен</label>{% endif %}
+        <span class="spacer"></span>
+        <button class="sm" formaction="{{ url_for('admin_whatsapp_test') }}" title="Спершу збережіть правила">{{ icon('phone', 'sm') }}Надіслати тестовий код мені</button>
+      </div>
+    </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_scan" {{ 'checked' if settings.lan_scan == '1' }}><span><b>Шукати всі пристрої в мережі сервера.</b> Раз на 5 хв: IP, назва, модель, чий телефон — блок унизу «Огляду»</span></label>
     <label class="check" style="margin-top:10px"><input type="checkbox" name="lan_presence" {{ 'checked' if settings.lan_presence == '1' }}><span><b>Бачити телефон у робочому Wi-Fi без застосунку.</b> Сервер раз на пів хвилини перевіряє MAC телефонів людей: телефон у мережі точки в робочий час — зміна починається сама (якщо ввімкнено автостарт), поки він у мережі — йде, навіть коли браузер спить, пропав — пауза й закриття, як із застосунком. MAC сервер знає після першого входу з телефона в робочому Wi-Fi</span></label>
     <div class="form-grid" style="margin-top:10px">

@@ -24,6 +24,8 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 from functools import wraps
+import urllib.error
+import urllib.request
 from urllib.parse import urlencode, urlsplit
 
 from flask import (Flask, Response, abort, flash, g, has_app_context, has_request_context, jsonify, redirect, render_template, send_file,
@@ -117,6 +119,12 @@ DEFAULT_SETTINGS = {
     "sick_auto_approve": "1",
     "auto_start": "1",
     "device_lock": "1",               # зміна починається сама, коли телефон з'являється в робочому Wi-Fi
+    "suspicious_failed_logins": "5",  # стільки невдалих входів з одного пристрою за 15 хв — «підбір пароля» (17.11)
+    "suspicious_accounts_hour": "3",  # у стільки різних акаунтів за годину з одного пристрою — «вхід у різні акаунти»
+    "whatsapp_verify": "0",          # підтверджувати номер при реєстрації кодом у WhatsApp (WhatsApp Cloud API)
+    "whatsapp_phone_id": "",         # Phone number ID з кабінету Meta (токен — окремо, не в settings.ini)
+    "whatsapp_template": "crewhub_code",  # назва шаблону «Authentication» з кодом
+    "whatsapp_lang": "uk",           # мова шаблону
     "foreign_phone_action": "flag",  # чужий акаунт (телефон іншої людини): flag — позначати й повідомляти (як у v17); block_shift — не дати почати / вести зміну; block_login — ще й не пустити в акаунт
     "work_start": "09:00",           # звичайні години зміни (якщо в «Графіку» на цей день нічого немає)
     "work_end": "18:00",             # кінець раніше за початок = нічна зміна через північ
@@ -166,6 +174,12 @@ SETTING_RULES = {
     "auto_start": ("bool", "Автостарт"),
     "device_lock": ("bool", "Лише свій телефон"),
     "foreign_phone_action": ("choice", ("flag", "block_shift", "block_login"), "Чужий акаунт (телефон іншої людини)"),
+    "suspicious_failed_logins": ("int", 2, 100, "Підбір пароля: невдалих входів за 15 хв"),
+    "suspicious_accounts_hour": ("int", 2, 50, "Різних акаунтів з одного пристрою за годину"),
+    "whatsapp_verify": ("bool", "Підтвердження номера в WhatsApp"),
+    "whatsapp_phone_id": ("text", 40, "WhatsApp: Phone number ID"),
+    "whatsapp_template": ("text", 60, "WhatsApp: назва шаблону"),
+    "whatsapp_lang": ("text", 10, "WhatsApp: мова шаблону"),
     "work_start": ("time", "Початок робочого дня"),
     "work_end": ("time", "Кінець робочого дня"),
     "work_weekends": ("bool", "Робочі вихідні"),
@@ -252,9 +266,13 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "auto_close": "Зміна закрилась автоматично", "login_other_device": "Вхід у чужий акаунт",
           "login_new_device": "Вхід з нового пристрою", "shift_other_device": "Зміна в чужому акаунті (чужий телефон)",
           "device_recognised": "Свій телефон упізнано", "battery_dead": "Телефон розрядився",
-          "outage_credit": "Сервер не працював: час зараховано", "shift_new_device": "Зміна з нового пристрою"}
-# Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні»
-SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device")
+          "outage_credit": "Сервер не працював: час зараховано", "shift_new_device": "Зміна з нового пристрою",
+          "login_failed": "Невдалий вхід", "brute_force": "Підбір пароля", "account_hopping": "Вхід у різні акаунти",
+          "blocked_device": "Заблокований пристрій", "phone_verified": "Номер підтверджено в WhatsApp"}
+# Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні».
+# 17.11: підбір пароля, вхід у різні акаунти з одного пристрою, спроба із заблокованого пристрою
+SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device",
+                     "brute_force", "account_hopping", "blocked_device")
 
 SCHEMA = """
 create table if not exists settings (key text primary key, value text not null);
@@ -304,6 +322,14 @@ create table if not exists device_history (id integer primary key, user_id integ
   first_at integer not null, last_at integer not null, unique(user_id, device_key));
 create index if not exists device_history_key on device_history(device_key);
 create index if not exists device_history_mac on device_history(mac);
+-- Заблоковані адміном пристрої (17.11): «по залізу» — за MAC (адреса Wi-Fi-чипа) і кодом пристрою. Відбиток сам не
+-- блокує: в однакових телефонів він однаковий. Такий пристрій не увійде, не зареєструється і не почне зміну
+create table if not exists blocked_devices (id integer primary key, device_key text, mac text, fingerprint text,
+  label text, reason text, user_id integer, created_by integer, created_at integer not null);
+-- Коди підтвердження номера через WhatsApp (17.11): хеш коду, термін, спроби
+create table if not exists phone_codes (user_id integer primary key references users(id) on delete cascade,
+  code_hash text not null, sent_at integer not null, expires_at integer not null, attempts integer not null default 0,
+  sends integer not null default 1);
 -- Довгоживучий токен «запам'ятати мене»: видається після входу, лежить у cookie на телефоні/в браузері.
 -- За ним людина входить автоматично, навіть якщо IP телефона чи сервера змінився. Не прив'язаний до IP (IP ненадійний).
 create table if not exists remember_tokens (id integer primary key, user_id integer not null references users(id) on delete cascade,
@@ -564,6 +590,8 @@ def init_db(seed=True):
         conn.execute("alter table users add column folder text")
     if "whatsapp" not in cols:
         conn.execute("alter table users add column whatsapp text")
+    if "phone_verified_at" not in cols:  # коли номер підтверджено кодом у WhatsApp (17.11)
+        conn.execute("alter table users add column phone_verified_at integer")
     if "grant_until" not in [r[1] for r in conn.execute("pragma table_info(requests)")]:
         conn.execute("alter table requests add column grant_until integer")
     bcols = [r[1] for r in conn.execute("pragma table_info(breaks)")]
@@ -1102,6 +1130,189 @@ def shift_device(conn, s):
                          " select name from remember_tokens where device = ? and name is not null limit 1", (key, key)).fetchone()
         name = r[0] if r else ("застосунок" if key.startswith("app-") else "браузер")
     return name
+
+
+# ── Підтвердження номера через WhatsApp (17.11) ────────────────────────────────────────────────────
+# Офіційний WhatsApp Cloud API (Meta): сервер надсилає шаблон «Authentication» з кодом. Потрібні інтернет на сервері,
+# Phone number ID і постійний токен з кабінету Meta (див. docs/13-whatsapp.md). Токен не пишеться в settings.ini і
+# в журнал: лежить у базі (meta) або в змінній CREWHUB_WA_TOKEN.
+WA_API = os.environ.get("CREWHUB_WA_API", "v23.0")
+WA_CODE_TTL = 600     # с: код дійсний 10 хв
+WA_ATTEMPTS = 5       # спроб ввести код
+WA_RESEND = 60        # с між повторними надсиланнями
+WA_SENDS_HOUR = 5     # надсилань на номер за годину
+
+
+def whatsapp_config(conn):
+    """Налаштування для надсилання або None, якщо підтвердження вимкнено чи не налаштовано."""
+    token = os.environ.get("CREWHUB_WA_TOKEN") or meta_get(conn, "whatsapp_token")
+    pid = setting("whatsapp_phone_id", conn)
+    if not (token and pid):
+        return None
+    return {"token": token, "phone_id": pid, "template": setting("whatsapp_template", conn) or "crewhub_code",
+            "lang": setting("whatsapp_lang", conn) or "uk"}
+
+
+def whatsapp_send_code(cfg, phone, code):
+    """Надсилає код шаблоном у WhatsApp. None — надіслано, інакше текст помилки для людини й адміна.
+    Мережевий запит — до 10 с, тож викликати поза _lock."""
+    body = {"messaging_product": "whatsapp", "to": phone.lstrip("+"), "type": "template",
+            "template": {"name": cfg["template"], "language": {"code": cfg["lang"]},
+                         "components": [{"type": "body", "parameters": [{"type": "text", "text": code}]},
+                                        # кнопка «Скопіювати код» шаблону Authentication
+                                        {"type": "button", "sub_type": "url", "index": "0", "parameters": [{"type": "text", "text": code}]}]}}
+    req = urllib.request.Request(f"https://graph.facebook.com/{WA_API}/{cfg['phone_id']}/messages",
+                                 data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": f"Bearer {cfg['token']}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        return None
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode("utf-8", "replace")).get("error", {})
+            msg = err.get("error_user_msg") or err.get("message") or f"HTTP {e.code}"
+        except (ValueError, AttributeError):
+            msg = f"HTTP {e.code}"
+        log.warning("WhatsApp: %s", msg)
+        return f"WhatsApp відповів помилкою: {msg[:200]}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        log.warning("WhatsApp недоступний: %s", e)
+        return "немає зв'язку з WhatsApp (сервер без інтернету?)"
+
+
+def _code_hash(uid, code):
+    return hashlib.sha256(f"{app.secret_key}:{uid}:{code}".encode()).hexdigest()
+
+
+def new_phone_code(conn, uid):
+    """Новий 6-значний код для людини (старий перестає діяти). Повертає (код, None) або (None, причина відмови)."""
+    t, row = now(), conn.execute("select * from phone_codes where user_id = ?", (uid,)).fetchone()
+    if row and t - row["sent_at"] < WA_RESEND:
+        return None, f"Новий код можна надіслати через {WA_RESEND - (t - row['sent_at'])} с"
+    sends = (row["sends"] + 1) if row and t - row["sent_at"] < 3600 else 1
+    if sends > WA_SENDS_HOUR:
+        return None, "Забагато надсилань. Спробуйте за годину або попросіть адміністратора підтвердити заявку"
+    code = f"{secrets.randbelow(10 ** 6):06d}"
+    conn.execute("insert or replace into phone_codes(user_id, code_hash, sent_at, expires_at, attempts, sends) values (?, ?, ?, ?, 0, ?)",
+                 (uid, _code_hash(uid, code), t, t + WA_CODE_TTL, sends))
+    return code, None
+
+
+def check_phone_code(conn, uid, code):
+    """None — номер підтверджено; інакше текст помилки."""
+    row = conn.execute("select * from phone_codes where user_id = ?", (uid,)).fetchone()
+    if not row:
+        return "Код не надсилали або він уже використаний — надішліть новий"
+    if row["attempts"] >= WA_ATTEMPTS:
+        return "Забагато невдалих спроб — надішліть новий код"
+    if now() > row["expires_at"]:
+        return "Код застарів — надішліть новий"
+    if not secrets.compare_digest(row["code_hash"], _code_hash(uid, (code or "").strip())):
+        conn.execute("update phone_codes set attempts = attempts + 1 where user_id = ?", (uid,))
+        left = WA_ATTEMPTS - row["attempts"] - 1
+        return f"Невірний код. Лишилось спроб: {left}" if left else "Невірний код. Спроби скінчились — надішліть новий"
+    conn.execute("delete from phone_codes where user_id = ?", (uid,))
+    conn.execute("update users set phone_verified_at = ? where id = ?", (now(), uid))
+    log_clock(conn, uid, None, "phone_verified", client_ip() if has_request_context() else None, None, True, None, None)
+    return None
+
+
+# ── Заблоковані пристрої й підозрілі спроби входу (17.11) ─────────────────────────────────────────
+_blocked = {"at": 0.0, "rows": []}
+MAC_RE = re.compile(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}")
+
+
+def suspicious_row(conn, r):
+    """Підозріла подія для «Безпека сьогодні»: з MAC і назвою пристрою з журналу — для кнопки «Заблокувати»."""
+    d = json.loads(r["details"]) if r["details"] else {}
+    mac = d.get("MAC")
+    return {**dict(r), "mac": mac, "dev_label": d.get("пристрій"), "blocked": bool(device_blocked(conn, r["device"], mac))}
+
+
+def blocked_rows(conn):
+    """Заблоковані пристрої. Перевіряються на кожному запиті, тож кеш на 5 с (і скидається при зміні)."""
+    if time.time() - _blocked["at"] > 5:
+        _blocked.update(at=time.time(), rows=[dict(r) for r in conn.execute("select * from blocked_devices")])
+    return _blocked["rows"]
+
+
+def device_blocked(conn, key=None, mac=None):
+    """Рядок blocked_devices, якщо цей пристрій заблоковано — за кодом пристрою або MAC («залізо»), інакше None."""
+    for r in blocked_rows(conn):
+        if (key and r["device_key"] == key) or (mac and r["mac"] == mac):
+            return r
+    return None
+
+
+def blocked_attempt(conn, row, ip, key, mac, what, user_id=None):
+    """Заблокований пристрій пробує зайти: у журнал (раз на 10 хв на пристрій), керівникам — раз на годину."""
+    t = now()
+    dev = device_name() if has_request_context() else (key or "")
+    details = {"пристрій": dev, "дія": what, "заблоковано": row["label"] or row["device_key"] or row["mac"]}
+    if mac:
+        details["MAC"] = mac
+    recent = conn.execute("select max(created_at) from conn_log where event = 'blocked_device' and (device = ? or ip = ?)",
+                          (key or row["device_key"] or "", ip)).fetchone()[0] or 0
+    if t - recent >= 600:
+        log_clock(conn, user_id, None, "blocked_device", ip, None, False, key, details)
+    if t - recent >= 3600:
+        notify_staff(conn, "Заблокований пристрій пробує зайти",
+                     f"{dev} (IP {ip}{', MAC ' + mac if mac else ''}): {what}. Розблокувати — «Підключення» → «Заблоковані пристрої»")
+
+
+def note_failed_login(conn, user, ident, key, mac, ip):
+    """Невдалий вхід — у журнал з пристроєм. Забагато з одного пристрою за 15 хв (suspicious_failed_logins) —
+    «Підбір пароля»: окремий запис і сповіщення керівникам (раз на 30 хв на пристрій), з якими акаунтами пробували."""
+    t, dev = now(), device_name()
+    details = {"пристрій": dev, "логін": format_phone(user["phone"]) if user and user["phone"] else (ident or "")[:40]}
+    if mac:
+        details["MAC"] = mac
+    log_clock(conn, user["id"] if user else None, None, "login_failed", ip, None, False, key, details)
+    # Той самий пристрій: той самий код чи MAC; IP — лише якщо він не спільний (не тунель, де всі з 127.0.0.1)
+    rows = conn.execute("select details from conn_log where event = 'login_failed' and created_at > ? and"
+                        " ((? is not null and device = ?) or (? is not null and details like ?) or (? = 0 and ip = ?))",
+                        (t - 900, key, key, mac, f'%"MAC": "{mac}"%', int(_shared_ip(ip)), ip)).fetchall()
+    if len(rows) < setting_int("suspicious_failed_logins", conn):
+        return
+    if conn.execute("select 1 from conn_log where event = 'brute_force' and created_at > ? and (device = ? or ip = ?)",
+                    (t - 1800, key or "", ip)).fetchone():
+        return
+    tried = []
+    for (d,) in rows:
+        login = (json.loads(d) if d else {}).get("логін")
+        if login and login not in tried:
+            tried.append(login)
+    details.update({"спроб за 15 хв": len(rows), "акаунти": ", ".join(tried[:8])})
+    details.pop("логін", None)
+    # Без «хто»: акаунт тут — жертва, а не винуватець; які акаунти пробували — у details
+    log_clock(conn, None, None, "brute_force", ip, None, False, key, details)
+    notify_staff(conn, "Підозріло: підбір пароля",
+                 f"{dev} (IP {ip}{', MAC ' + mac if mac else ''}) — {len(rows)} невдалих спроб входу за 15 хв: "
+                 f"{', '.join(tried[:8])}. Заблокувати пристрій можна в «Огляді» → «Безпека сьогодні»")
+
+
+def check_account_hopping(conn, user, key, mac, ip):
+    """Після входу: з цього пристрою за годину заходили в suspicious_accounts_hour різних акаунтів — підозріло
+    (хтось «перебирає» акаунти чи відмічає колег). У журнал і керівникам, раз на годину на пристрій."""
+    t = now()
+    if not (key or mac):
+        return
+    rows = conn.execute("select distinct u.id, u.full_name from device_history h join users u on u.id = h.user_id"
+                        " where h.last_at > ? and (h.device_key = ? or (? is not null and h.mac = ?))",
+                        (t - 3600, key or "", mac, mac)).fetchall()
+    if len(rows) < setting_int("suspicious_accounts_hour", conn):
+        return
+    if conn.execute("select 1 from conn_log where event = 'account_hopping' and created_at > ? and (device = ? or ip = ?)",
+                    (t - 3600, key or "", ip)).fetchone():
+        return
+    dev, names = device_name(), ", ".join(r["full_name"] for r in rows)
+    details = {"пристрій": dev, "акаунтів за годину": len(rows), "акаунти": names}
+    if mac:
+        details["MAC"] = mac
+    log_clock(conn, None, None, "account_hopping", ip, None, False, key, details)  # винуватець — пристрій, акаунти в details
+    notify_staff(conn, "Підозріло: вхід у різні акаунти",
+                 f"З пристрою {dev} (IP {ip}{', MAC ' + mac if mac else ''}) за годину входили в {len(rows)} акаунти: {names}")
 
 
 def flag_foreign(conn, user, key, ip, event, what, fp=None, mac=None, quiet_repeats=False, extra=None):
@@ -3225,6 +3436,9 @@ def _remember_login():
     with _lock:
         conn = db()
         uid = remember_user(conn, cookie, client_ip())
+        tok = uid and conn.execute("select device, mac from remember_tokens where selector = ?", (cookie.split(":", 1)[0],)).fetchone()
+        if tok and device_blocked(conn, tok["device"], client_mac(client_ip(), cached_only=True) or tok["mac"]):
+            uid = None  # заблокований пристрій сам не входить (вхід з паролем покаже, чому)
         if uid:  # токен видали на чужому телефоні — та сама плашка «Ви в чужому акаунті», що й після входу з паролем
             t = conn.execute("select device, fingerprint, mac from remember_tokens where selector = ?", (cookie.split(":", 1)[0],)).fetchone()
             what = t and foreign_device(conn, uid, t["device"], t["fingerprint"], t["mac"])
@@ -3236,6 +3450,34 @@ def _remember_login():
         if owner:
             session["foreign_owner"] = owner
         g.pop("user", None)
+
+
+@app.before_request
+def _blocked_guard():
+    """Пристрій заблокували, поки людина в акаунті: на наступній же сторінці — вихід і пояснення."""
+    if not session.get("uid") or request.endpoint in ("static", "login", "logout", "health", "hello"):
+        return
+    conn = db()
+    if not blocked_rows(conn):
+        return
+    key = device_key() or session.get("dev")  # застосунок — код у User-Agent, браузер — код, запам'ятований при вході
+    mac = client_mac(client_ip(), cached_only=True)
+    row = device_blocked(conn, key, mac)
+    if not row:
+        return
+    with _lock:
+        conn = db()
+        blocked_attempt(conn, row, client_ip(), key, mac, "робота в акаунті", session.get("uid"))
+        for col, v in (("device", key), ("mac", mac)):
+            if v:
+                conn.execute(f"delete from remember_tokens where {col} = ?", (v,))
+        conn.commit()
+    session.clear()
+    g.pop("user", None)
+    if request.path.startswith("/api/"):
+        return clear_remember_cookie(jsonify({"ok": False, "error": "Цей пристрій заблоковано адміністратором"})), 403
+    flash("Цей пристрій заблоковано адміністратором")
+    return clear_remember_cookie(redirect(url_for("login")))
 
 
 @app.before_request
@@ -3258,8 +3500,20 @@ def login():
         if wait := login_blocked(acct, ip):
             flash(wait_text(wait))
             return render_template("login.html", ip=ip, registration_open=setting("registration_open") == "1"), 429
+        key, fp, mac = device_key(request.form.get("device_id")), clean_fp(request.form.get("fp")), client_mac(ip)
+        with _lock:
+            conn = db()
+            if row := device_blocked(conn, key, mac):  # заблокований адміном пристрій не входить ні в який акаунт
+                blocked_attempt(conn, row, ip, key, mac, "вхід", u["id"] if u else None)
+                conn.commit()
+                flash("Цей пристрій заблоковано адміністратором")
+                return render_template("login.html", ip=ip, registration_open=setting("registration_open") == "1"), 403
         if not (u and verify_password(u["password_hash"], request.form.get("password", ""))):
             login_failed(acct, ip)
+            with _lock:  # у журнал з пристроєм; забагато — «підбір пароля»
+                conn = db()
+                note_failed_login(conn, u, ident, key, mac, ip)
+                conn.commit()
             u = None
         if u:
             _throttle.clear(f"login:{acct}:{ip}")
@@ -3270,10 +3524,10 @@ def login():
             else:
                 session.clear()
                 session["uid"] = u["id"]
+                session["dev"] = key  # код пристрою браузера (він лише у формі): за ним блокування діє на всіх сторінках
                 session.permanent = True
                 resp = redirect(url_for("index"))
                 # «Запам'ятати мене»: один раз увійшов — далі входить сам, навіть якщо IP зміниться
-                key, fp, mac = device_key(request.form.get("device_id")), clean_fp(request.form.get("fp")), client_mac(ip)
                 with _lock:
                     conn = db()
                     # Пристрій не власника (телефон колеги чи невідомий) — підозріло: у журнал і сповіщення
@@ -3289,6 +3543,7 @@ def login():
                     else:
                         adopt_device(conn, u["id"], key, fp, mac, ip)
                     note_usage(conn, u["id"], key, fp, mac)
+                    check_account_hopping(conn, u, key, mac, ip)
                     val = issue_remember(conn, u["id"], key, device_name(), client_ip(), fp, mac)
                     conn.commit()
                 return set_remember_cookie(resp, val)
@@ -3309,6 +3564,14 @@ def register():
             flash("Забагато реєстрацій з цієї мережі. Спробуйте пізніше або попросіть адміністратора")
             return render_template("register.html", done=False, form=form), 429
         _throttle.add(key)
+        reg_mac = client_mac(client_ip())  # до блокування: читання ARP може тривати
+        with _lock:
+            conn = db()
+            if row := device_blocked(conn, device_key(form.get("device_id")), reg_mac):
+                blocked_attempt(conn, row, client_ip(), device_key(form.get("device_id")), reg_mac, "реєстрація")
+                conn.commit()
+                flash("Цей пристрій заблоковано адміністратором")
+                return render_template("register.html", done=False, form=form), 403
         name = " ".join(form.get("full_name", "").split())
         phone = normalize_phone(form.get("phone"))
         pw = form.get("password", "")
@@ -3321,7 +3584,6 @@ def register():
             error = "Пароль має бути не коротший за 6 символів"
         elif pw != form.get("password2"):
             error = "Паролі не збігаються"
-        reg_mac = client_mac(client_ip())  # до блокування: читання ARP може тривати
         with _lock:
             conn = db()
             if not error and phone_taken(conn, phone):
@@ -3345,10 +3607,82 @@ def register():
                         remember_device(conn, cur.lastrowid, reg_key, client_ip())
                     note_usage(conn, cur.lastrowid, reg_key, reg_fp, reg_mac)
                     notify_staff(conn, "Нова реєстрація", f"{name}, {format_phone(phone)} чекає підтвердження")
+                    cfg = whatsapp_config(conn) if setting("whatsapp_verify", conn) == "1" else None
+                    code = new_phone_code(conn, cur.lastrowid)[0] if cfg else None
                     conn.commit()
-                    return render_template("register.html", done=True, name=name)
+                    if not cfg:
+                        return render_template("register.html", done=True, name=name)
+                    # Підтвердження номера: код у WhatsApp (запит в інтернет — поза _lock)
+                    session["verify_uid"] = cur.lastrowid
+                    if err := whatsapp_send_code(cfg, phone, code):
+                        return render_template("register.html", done=True, name=name, wa_error=err)
+                    return render_template("register.html", verify=True, name=name, verify_phone=format_phone(phone))
         flash(error)
     return render_template("register.html", done=False, form=form)
+
+
+@app.post("/register/verify")
+def register_verify():
+    """Код з WhatsApp, введений після реєстрації: номер підтверджено (заявку однаково підтверджує адміністратор)."""
+    uid = session.get("verify_uid")
+    if not uid:
+        return redirect(url_for("register"))
+    key = f"verify:{client_ip()}"
+    if _throttle.recent(key, 900)[0] >= 30:
+        flash("Забагато спроб. Спробуйте пізніше")
+        return redirect(url_for("login"))
+    _throttle.add(key)
+    with _lock:
+        conn = db()
+        u = conn.execute("select * from users where id = ?", (uid,)).fetchone()
+        if not u:
+            session.pop("verify_uid", None)
+            return redirect(url_for("register"))
+        err = check_phone_code(conn, uid, request.form.get("code"))
+        conn.commit()
+    if err:
+        flash(err)
+        return render_template("register.html", verify=True, name=u["full_name"], verify_phone=format_phone(u["phone"]))
+    session.pop("verify_uid", None)
+    return render_template("register.html", done=True, name=u["full_name"], verified=True)
+
+
+@app.post("/register/resend")
+def register_resend():
+    uid = session.get("verify_uid")
+    if not uid:
+        return redirect(url_for("register"))
+    with _lock:
+        conn = db()
+        u = conn.execute("select * from users where id = ?", (uid,)).fetchone()
+        cfg = whatsapp_config(conn)
+        code, why = new_phone_code(conn, uid) if u and cfg else (None, "Підтвердження через WhatsApp зараз недоступне")
+        conn.commit()
+    if not u:
+        return redirect(url_for("register"))
+    err = why or whatsapp_send_code(cfg, u["phone"], code)
+    flash(err or "Новий код надіслано у WhatsApp")
+    return render_template("register.html", verify=True, name=u["full_name"], verify_phone=format_phone(u["phone"]))
+
+
+@app.post("/admin/whatsapp/test")
+@login_required(staff=True)
+def admin_whatsapp_test():
+    """Перевірка налаштувань: тестовий код на номер адміна."""
+    if current_user()["role"] != "admin":
+        abort(403)
+    with _lock:
+        conn = db()
+        cfg = whatsapp_config(conn)
+    phone = current_user()["phone"]
+    if not cfg:
+        flash("WhatsApp не налаштовано: вкажіть Phone number ID і токен")
+    elif not phone:
+        flash("У вашому акаунті немає номера телефону")
+    else:
+        err = whatsapp_send_code(cfg, phone, f"{secrets.randbelow(10 ** 6):06d}")
+        flash(err or f"Тестовий код надіслано у WhatsApp на {format_phone(phone)}")
+    return redirect(url_for("admin", tab="settings") + "#whatsapp")
 
 
 @app.route("/password", methods=["GET", "POST"])
@@ -3438,6 +3772,10 @@ def api_clock(action):
     with _lock:
         conn = db()
         key = device_key(body.get("device_id"))
+        if row := device_blocked(conn, key, mac):
+            blocked_attempt(conn, row, client_ip(), key, mac, f"зміна ({action})", current_user()["id"])
+            conn.commit()
+            return jsonify({"ok": False, "error": "Цей пристрій заблоковано адміністратором"}), 403
         res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
         note_usage(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
         if mac and res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
@@ -3728,6 +4066,66 @@ def admin_device_history(uid, hid, action):
             flash("Пристрій забуто")
         conn.commit()
     return redirect(url_for("admin_employee", uid=uid))
+
+
+def _safe_back(default):
+    """Куди повернутись після дії: лише свій шлях (/admin?tab=…), не чужий сайт."""
+    back = request.form.get("back") or ""
+    return back if back.startswith("/") and not back.startswith("//") else default
+
+
+@app.post("/admin/devices/block")
+@login_required(staff=True)
+def admin_device_block():
+    """Заблокувати пристрій «по залізу»: за MAC (адреса Wi-Fi-чипа) і кодом пристрою. З нього не можна увійти в жоден
+    акаунт, зареєструватись чи почати зміну; хто вже в акаунті з нього — вилітає на наступній сторінці."""
+    f = request.form
+    back = _safe_back(url_for("admin", tab="logs"))
+    key = (f.get("device_key") or "").strip()[:80] or None
+    key = key if key and re.fullmatch(r"[\w .:-]{4,80}", key) else None
+    mac = (f.get("mac") or "").strip().lower().replace("-", ":") or None
+    mac = mac if mac and MAC_RE.fullmatch(mac) else None
+    if not key and not mac:
+        flash("Немає ні коду пристрою, ні MAC — блокувати нічого")
+        return redirect(back)
+    mine_key, mine_mac = device_key() or session.get("dev"), client_mac(client_ip(), cached_only=True)
+    if (key and key == mine_key) or (mac and mac == mine_mac):
+        flash("Це пристрій, з якого ви зараз працюєте, — його не можна заблокувати")
+        return redirect(back)
+    with _lock:
+        conn = db()
+        if device_blocked(conn, key, mac):
+            flash("Цей пристрій уже заблоковано")
+            return redirect(back)
+        label = " ".join((f.get("label") or "").split())[:80] or None
+        cur = conn.execute("insert into blocked_devices(device_key, mac, fingerprint, label, reason, user_id, created_by, created_at)"
+                           " values (?, ?, ?, ?, ?, ?, ?, ?)",
+                           (key, mac, clean_fp(f.get("fingerprint")), label, " ".join((f.get("reason") or "").split())[:200] or None,
+                            parse_int(f.get("user_id")), current_user()["id"], now()))
+        for col, v in (("device", key), ("mac", mac)):  # «запам'ятати мене» на цьому пристрої — більше не діє
+            if v:
+                conn.execute(f"delete from remember_tokens where {col} = ?", (v,))
+        audit(conn, current_user()["id"], "INSERT", "blocked_devices", cur.lastrowid, parse_int(f.get("user_id")),
+              {"заблоковано": [None, " · ".join(x for x in (label, key, mac) if x)]})
+        conn.commit()
+        _blocked["at"] = 0.0
+    flash(f"Пристрій заблоковано: {label or key or mac}")
+    return redirect(back)
+
+
+@app.post("/admin/devices/unblock/<int:bid>")
+@login_required(staff=True)
+def admin_device_unblock(bid):
+    with _lock:
+        conn = db()
+        row = conn.execute("select * from blocked_devices where id = ?", (bid,)).fetchone() or abort(404)
+        conn.execute("delete from blocked_devices where id = ?", (bid,))
+        audit(conn, current_user()["id"], "DELETE", "blocked_devices", bid, row["user_id"],
+              {"заблоковано": [" · ".join(x for x in (row["label"], row["device_key"], row["mac"]) if x), None]})
+        conn.commit()
+        _blocked["at"] = 0.0
+    flash(f"Пристрій розблоковано: {row['label'] or row['device_key'] or row['mac']}")
+    return redirect(_safe_back(url_for("admin", tab="logs")))
 
 
 @app.post("/admin/employee/<int:uid>/logout_all")
@@ -4052,8 +4450,8 @@ def dashboard_stats(conn):
         # лічильники для значків — завжди свіжі (вони дешеві)
         "pending": conn.execute("select count(*) from requests where status = 'pending'").fetchone()[0],
         "denied_today": conn.execute("select count(*) from conn_log where allowed = 0 and created_at >= ?", (start,)).fetchone()[0],
-        "suspicious": [dict(r) for r in conn.execute(
-            f"select c.event, c.details, c.created_at, u.full_name from conn_log c left join users u on u.id = c.user_id"
+        "suspicious": [suspicious_row(conn, r) for r in conn.execute(
+            f"select c.event, c.details, c.created_at, c.device, c.ip, u.full_name from conn_log c left join users u on u.id = c.user_id"
             f" where c.event in ({','.join('?' * len(SUSPICIOUS_EVENTS))}) and c.created_at >= ? order by c.id desc limit 5",
             (*SUSPICIOUS_EVENTS, start)).fetchall()],
     }
@@ -4207,7 +4605,7 @@ def admin_employee_folder(uid):
 def admin():
     conn = db()
     tab = request.args.get("tab", "live")
-    ctx = {"tab": tab}
+    ctx = {"tab": tab, "wa_verify": setting("whatsapp_verify", conn) == "1"}
     ctx["pending_users"] = conn.execute(
         "select u.*, (select d.name || ' · IP ' || coalesce(d.first_ip, '?') from devices d where d.user_id = u.id order by d.id limit 1)"
         " as device from users u where u.status = 'pending' order by u.id").fetchall()
@@ -4215,6 +4613,7 @@ def admin():
         ctx["server_net"] = server_network(conn)
         ctx["active_locations"] = conn.execute("select id, name from locations where is_active = 1 order by name").fetchall()
     if tab == "live":
+        ctx["blocked_count"] = len(blocked_rows(conn))
         ctx["rows"] = live_monitor(conn)
         ctx["counts"] = {k: sum(1 for r in ctx["rows"] if r["state"] == k)
                          for k in LIVE_STATES}
@@ -4268,6 +4667,9 @@ def admin():
             x["count"] += 1
         ctx["unknown"] = list(unknown.values())[:10]
     elif tab == "logs":
+        ctx["blocked"] = conn.execute(
+            "select b.*, x.full_name as actor, o.full_name as owner from blocked_devices b left join users x on x.id = b.created_by"
+            " left join users o on o.id = b.user_id order by b.id desc").fetchall()
         ctx["logs"] = conn.execute(
             "select c.*, u.full_name, l.name as location from conn_log c left join users u on u.id = c.user_id"
             " left join locations l on l.id = c.location_id order by c.id desc limit 300").fetchall()
@@ -4280,6 +4682,8 @@ def admin():
         ctx.update(nav=month_nav(d_from), month=d_from.strftime("%Y-%m"), rows=payroll(conn, d_from, d_to), d_from=d_from, d_to=d_to)
     elif tab == "settings":
         ctx["settings"] = {k: setting(k) for k in DEFAULT_SETTINGS}
+        tok = os.environ.get("CREWHUB_WA_TOKEN") or meta_get(conn, "whatsapp_token")
+        ctx["wa_token"] = ("•••• " + tok[-4:] + (" (зі змінної CREWHUB_WA_TOKEN)" if os.environ.get("CREWHUB_WA_TOKEN") else "")) if tok else None
         # У списку — і щоденні копії, і зроблені кнопкою «Завантажити зараз» (як в оригінальній версії)
         ctx.update(backups=sorted(list_backups()[:10] + list_backups(manual=True), key=lambda b: -b["mtime"]), backup_dir=BACKUP_DIR, backup_keep=BACKUP_KEEP, people_dir=PEOPLE_DIR,
                    data_dir=DATA_DIR, settings_file=SETTINGS_FILE, db_path=DB_PATH,
@@ -4303,6 +4707,8 @@ def admin_employee(uid):
                            week=hours_by_day(conn, uid), open_shift=shift_stats(conn, open_s) if open_s else None,
                            logs=conn.execute("select * from conn_log where user_id = ? order by id desc limit 15", (uid,)).fetchall(),
                            devices=conn.execute("select * from devices where user_id = ? order by id", (uid,)).fetchall(),
+                           blocked_keys={r["device_key"] for r in blocked_rows(conn) if r["device_key"]},
+                           blocked_macs={r["mac"] for r in blocked_rows(conn) if r["mac"]},
                            device_history=[{**dict(h), "owner": device_owner(conn, h["device_key"], h["fingerprint"], h["mac"], other_than=uid)}
                                            for h in conn.execute("select * from device_history h where user_id = ? and not exists"
                                                                  " (select 1 from devices d where d.user_id = h.user_id and d.device_key = h.device_key)"
@@ -4964,7 +5370,7 @@ def _zones_back(f):
 
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
-                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence", "outage_credit")
+                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence", "outage_credit", "whatsapp_verify")
 
 
 @app.post("/admin/backup_mirror")
@@ -5019,6 +5425,14 @@ def admin_settings():
             conn.execute("update settings set value = ? where key = ?", (v, k))
         g.pop("settings_cache", None)
         changes = diff(old, new)
+        if (tok := (request.form.get("whatsapp_token_new") or "").strip()) and re.fullmatch(r"[\w.\-]{20,600}", tok):
+            meta_set(conn, "whatsapp_token", tok)
+            changes["whatsapp_token"] = ["***", "*** (новий)"]
+        elif tok:
+            bad.append("токен WhatsApp")
+        elif request.form.get("whatsapp_token_clear"):
+            conn.execute("delete from meta where key = 'whatsapp_token'")
+            changes["whatsapp_token"] = ["***", None]
         if changes:
             audit(conn, current_user()["id"], "UPDATE", "settings", None, None, changes)
         conn.commit()

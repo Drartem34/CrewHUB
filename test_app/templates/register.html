@@ -5,8 +5,20 @@
 <div class="login-wrap">
   <div class="card login-card">
     <div class="brand" style="padding:0 0 6px"><span class="logo">{{ icon('logo') }}</span>{{ company }}</div>
-    {% if done %}
+    {% if verify %}
+      <div class="empty" style="padding:18px 0">{{ icon('phone') }}<b>Підтвердіть номер, {{ name.split()[0] }}</b></div>
+      <p class="muted center">Ми надіслали код у WhatsApp на номер <b>{{ verify_phone }}</b>. Введіть його тут — тоді адміністратор побачить, що номер справжній.</p>
+      <form method="post" action="{{ url_for('register_verify') }}" class="stack">
+        <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="123456" required
+          style="text-align:center;font-size:24px;letter-spacing:6px">
+        <button class="primary xl">Підтвердити</button>
+      </form>
+      <form method="post" action="{{ url_for('register_resend') }}" style="margin-top:10px"><button class="ghost" style="width:100%">Надіслати код ще раз</button></form>
+      <p class="muted small center" style="margin:12px 0 0">Код не приходить? Перевірте, що на цьому номері є WhatsApp. Заявка вже в адміністратора — він може підтвердити її й без коду.</p>
+    {% elif done %}
       <div class="empty" style="padding:18px 0">{{ icon('check') }}<b>Заявку надіслано, {{ name.split()[0] }}!</b></div>
+      {% if verified %}<p class="center"><span class="pill ok">✓ номер підтверджено в WhatsApp</span></p>{% endif %}
+      {% if wa_error %}<div class="banner warn small">{{ icon('alert', 'sm') }}<span>Код у WhatsApp не надіслано: {{ wa_error }}. Заявку однаково отримав адміністратор.</span></div>{% endif %}
       <p class="muted center">Заявка пішла адміністратору й модераторам. Поки її не перевірять і не підтвердять, увійти не вийде. Після підтвердження увійдіть зі своїм номером і паролем.</p>
       <a class="btn primary xl" href="{{ url_for('login') }}">До входу</a>
     {% else %}
