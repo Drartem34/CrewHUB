@@ -1273,6 +1273,23 @@ def temp_password():
     return "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice("23456789") for _ in range(4))
 
 
+_server_ip = {"at": 0.0, "ip": None}
+
+
+def server_network(conn):
+    """Мережа, у якій зараз сам сервер (основний IP, підмережа /24), і точка, до якої вона прив'язана (або None).
+    Сервер стоїть на точці, тож телефони в його мережі — на точці. Перенесли сервер в інше приміщення чи змінили
+    роутер, а в «Точки і Wi-Fi» лишилась стара мережа — телефони бачать «Не в робочій мережі»; адмінка й консоль
+    сервера нагадують додати нову. None — сервер не в локальній мережі (немає приватного IPv4)."""
+    if time.time() - _server_ip["at"] > 30:  # IP — раз на 30 с; точку — щоразу (щойно додали мережу — видно одразу)
+        _server_ip.update(at=time.time(), ip=get_local_ip())
+    ip = _server_ip["ip"]
+    addr = work_ip(ip)
+    if addr is None or addr.version != 4 or not addr.is_private:
+        return None
+    return {"ip": ip, "cidr": suggest_cidr(ip), "location": match_location(conn, ip)}
+
+
 def suggest_cidr(ip):
     """Яку зону додати для IP: локальна адреса → вся підмережа /24 цього Wi-Fi, публічна → точний IP роутера."""
     addr = work_ip(ip)
@@ -4188,6 +4205,9 @@ def admin():
     ctx["pending_users"] = conn.execute(
         "select u.*, (select d.name || ' · IP ' || coalesce(d.first_ip, '?') from devices d where d.user_id = u.id order by d.id limit 1)"
         " as device from users u where u.status = 'pending' order by u.id").fetchall()
+    if tab in ("live", "zones") and current_user()["role"] == "admin":
+        ctx["server_net"] = server_network(conn)
+        ctx["active_locations"] = conn.execute("select id, name from locations where is_active = 1 order by name").fetchall()
     if tab == "live":
         ctx["rows"] = live_monitor(conn)
         ctx["counts"] = {k: sum(1 for r in ctx["rows"] if r["state"] == k)

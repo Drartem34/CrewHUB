@@ -737,6 +737,39 @@ class ForeignPhoneBlockTest(CrewHubBase):
         self.assertEqual(r.status_code, 302)
 
 
+class ServerNetworkTest(CrewHubBase):
+    """Сервер перенесли в іншу мережу (інший роутер, приміщення), а в «Точки і Wi-Fi» лишилась стара: телефони бачать
+    «Не в робочій мережі». Адмінка (і консоль) нагадує додати мережу сервера — однією кнопкою."""
+
+    def setUp(self):
+        super().setUp()
+        core._server_ip["at"] = 0.0
+        patcher = mock.patch.object(core, "get_local_ip", return_value="192.168.0.9")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(core._server_ip.update, at=0.0)
+
+    def test_banner_and_one_click_add(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        page = admin.get("/admin?tab=live").get_data(as_text=True)
+        self.assertIn('id="serverNet"', page)
+        self.assertIn("192.168.0.0/24", page)
+        self.assertIn('id="serverNet"', admin.get("/admin?tab=zones").get_data(as_text=True))
+        moder = self.login("moder", "moder123", client=core.app.test_client())
+        self.assertNotIn('id="serverNet"', moder.get("/admin?tab=live").get_data(as_text=True))  # додати мережу може лише адмін
+        r = admin.post("/admin/zones", data={"action": "network", "cidr": "192.168.0.0/24", "label": "Мережа сервера", "location_id": "1"})
+        self.assertEqual(r.status_code, 302)
+        self.assertNotIn('id="serverNet"', admin.get("/admin?tab=live").get_data(as_text=True))
+        with core.connect() as c:
+            self.assertEqual(core.server_network(c)["location"]["id"], 1)
+            self.assertIsNotNone(core.match_location(c, "192.168.0.16"))  # телефон у мережі сервера — на точці
+
+    def test_no_local_network(self):
+        core.get_local_ip.return_value = "127.0.0.1"
+        with core.connect() as c:
+            self.assertIsNone(core.server_network(c))
+
+
 class PresenceTest(CrewHubBase):
     """Браузер на телефоні з вимкненим екраном не пінгує, але телефон у Wi-Fi: сервер бачить його MAC сам."""
     MAC = "da:a1:19:00:00:01"

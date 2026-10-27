@@ -58,6 +58,9 @@ def prepare():
     with core.connect() as c:
         c.execute("update locations set name = 'Центр', address = 'вул. Хрещатик, 1' where id = 1")
         c.execute("update networks set cidr = '192.168.1.0/24' where location_id = 1")
+        # «Сервер» демо — у тій самій мережі точки, що й телефони: без цього адмінка показала б плашку «мережу сервера
+        # не додано» (машина, де збирають демо, у своїй мережі). Змінює лише server_network(), більше нічого
+        core._server_ip.update(at=float("inf"), ip="192.168.1.10")
         c.execute("update settings set value = 'CrewHub Демо' where key = 'company_name'")
         t = int(time.time())
         for mac, ip, name, model, vendor, uid in [
