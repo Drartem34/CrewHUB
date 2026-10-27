@@ -452,15 +452,21 @@ def scan(conn=None):
 def record(conn, seen, names):
     """Записує знайдене: {ip: mac}, {ip: ім'я}. Прив'язує пристрій до працівника, якщо той заходив з цього IP."""
     t = core.now()
-    visits = dict(core._visits)
-    dev_ips = {r["last_ip"]: r for r in conn.execute(
-        "select d.last_ip, d.user_id, d.name from devices d where d.last_seen_at > ?", (t - 3 * 86400,))}
+    # Хто щойно (5 хв) відкривав CrewHub з цього IP. Старіші візити не беремо: після відключення світла роутер
+    # роздає IP наново, і вчорашній IP Івана сьогодні в телефона Ольги (17.12)
+    visits = {ip: v for ip, v in core._visits.items() if v["t"] > t - 300}
+    # Чий пристрій — за MAC («залізом»), а не за IP: прив'язаний телефон людини чи її телефон з історії входів.
+    # Раніше брали за останнім IP прив'язаного телефона — і після зміни IP пристрій діставався не тій людині
+    dev_macs = {}
+    for r in conn.execute("select mac, user_id from devices where mac is not null union all select mac, user_id from"
+                          " device_history where mac is not null and phone = 1 and last_at > ? order by 1", (t - 3 * 86400,)):
+        dev_macs.setdefault(r["mac"], r["user_id"])
     vend = vendors(seen.values())
     with core._lock:
         for ip, mac in seen.items():
             v = visits.get(ip)
             model, phone_name = ua_info(v["ua"]) if v else (None, None)
-            uid = (v or {}).get("uid") or (dev_ips[ip]["user_id"] if ip in dev_ips else None)
+            uid = (v or {}).get("uid") or dev_macs.get(mac)
             name = phone_name or names.get(ip)
             row = conn.execute("select * from lan_devices where mac = ?", (mac,)).fetchone()
             if row:

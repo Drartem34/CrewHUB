@@ -36,6 +36,12 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
+## Що нового у версії 17.12: IP і MAC після відключення світла
+
+- `client_mac()`: лише записи ARP у стані REACHABLE (`lan.neighbour_states`), сумнівні — стук і `None`; `MAC_TTL` 20 с.
+- `lan.record()`: власник пристрою за MAC (`devices`, `device_history`), за IP — лише візит за 5 хв.
+- `admin_devices_relearn` («Перезаписати IP і MAC»: усі або `user_id`), `mac_conflicts()` — плашка в «Огляді» й картці.
+
 ## Що нового у версії 17.11: блокування пристроїв, підозрілі пристрої, WhatsApp
 
 - `blocked_devices` + `device_blocked()` (кеш 5 с) — вхід, реєстрація, автовхід за cookie, `/api/clock`, `_blocked_guard`

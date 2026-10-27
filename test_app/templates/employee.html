@@ -52,6 +52,12 @@
         {% if d.device_key in blocked_keys or (d.mac and d.mac in blocked_macs) %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(d.device_key, d.mac, d.fingerprint, d.name, u.id) }}{% endif %}
       </div>
       {% else %}<div class="muted small">Ще не прив'язано. Телефон запам'ятається під час реєстрації або з першого автопінгу з робочого Wi-Fi.</div>{% endfor %}
+      {% for c in mac_conflict %}<div class="banner bad small" style="margin-top:8px">{{ icon('alert', 'sm') }}<span>Цей MAC <span class="mono">{{ c.mac }}</span> прив'язаний і до інших: <b>{{ c.names }}</b>.
+        Мабуть, після відключення світла роутер перемішав IP — натисніть «Перезаписати IP і MAC».</span></div>{% endfor %}
+      {% if devices or device_history %}<form method="post" action="{{ url_for('admin_devices_relearn') }}" style="margin-top:8px"
+        data-confirm="Перезаписати IP і MAC пристроїв {{ u.full_name }}? Сервер запише їх наново, щойно телефон озветься. Прив'язка лишається.">
+        <input type="hidden" name="user_id" value="{{ u.id }}"><input type="hidden" name="back" value="{{ url_for('admin_employee', uid=u.id) }}">
+        <button class="sm">{{ icon('refresh', 'sm') }}Перезаписати IP і MAC</button></form>{% endif %}
       <form method="post" action="{{ url_for('admin_device_rewrite', uid=u.id) }}" style="margin-top:12px"
         data-confirm="Перезаписати код пристрою {{ u.full_name }}? Старий телефон відв'яжеться, автозміна вмикатиметься лише з нового.">
         <label>Перезаписати код пристрою (у людини новий телефон)</label>

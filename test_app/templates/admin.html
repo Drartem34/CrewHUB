@@ -80,7 +80,12 @@
     <span class="muted small">{% if lan.scan_at %}зараз {{ lan.online }}{% if lan.unknown %}, з них незареєстрованих {{ lan.unknown }}{% endif %} · перевірено {{ lan.scan_at|dt }}{% else %}перший пошук іде у фоні{% endif %}</span>
     <span class="spacer"></span>
     <form method="post" action="{{ url_for('admin_lan_scan') }}"><button class="sm">{{ icon('refresh', 'sm') }}Сканувати зараз</button></form>
+    <form method="post" action="{{ url_for('admin_devices_relearn') }}"
+      data-confirm="Перезаписати IP і MAC усіх пристроїв? Сервер забуде їх і запише наново, щойно телефони озвуться. Прив'язки «Телефон людини» лишаються.">
+      <button class="sm" title="Після відключення світла роутер міг перемішати IP — і стара пара IP-MAC дісталась не тій людині">{{ icon('refresh', 'sm') }}Перезаписати IP і MAC</button></form>
   </div>
+  {% for c in mac_conflicts %}<div class="banner bad">{{ icon('alert') }}<span>Один MAC <span class="mono">{{ c.mac }}</span> прив'язаний до кількох людей: <b>{{ c.names }}</b>.
+    Так не буває — мабуть, після відключення світла роутер перемішав IP. Натисніть «Перезаписати IP і MAC».</span></div>{% endfor %}
   {% if lan.error %}<div class="banner warn">{{ icon('alert') }}<span>{{ lan.error }}</span></div>{% endif %}
   {% if lan.rows %}
   <div class="lan-list">

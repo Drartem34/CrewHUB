@@ -740,5 +740,98 @@ class DeviceSecurityTest(ScenarioBase):
         self.assertEqual(self.notes("Підозріло: вхід у різні акаунти"), 1)
 
 
+class DhcpShuffleAfterOutageTest(ScenarioBase):
+    """17.12: світло вибило, роутер роздав IP наново — IP телефона Івана дістався телефону Ольги, а таблиця сусідів
+    сервера ще пам'ятає стару пару «IP → MAC Івана». Ольга не отримує MAC Івана і не стає «на чужому телефоні»."""
+
+    def setUp(self):
+        super().setUp()
+        self.states = {}  # ip → (mac, стан), як `ip neigh` / Get-NetNeighbor
+        patcher = mock.patch.object(lan, "neighbour_states", lambda: dict(self.states))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tick(9)
+        self.ivan = Phone(self.net, 20)
+        self.states[self.ivan.ip] = (self.ivan.mac, "REACHABLE")
+        self.ivan.login(IVAN)
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.connect() as c:
+            core.remember_device(c, uid, self.ivan.key, self.ivan.ip)
+            core.note_device(c, uid, self.ivan.key, self.ivan.fp, self.ivan.mac)
+            c.commit()
+
+    def shuffle(self):
+        """Після відключення: телефон Ольги отримав .20; таблиця сусідів ще має .20 → MAC Івана, але запис застарілий."""
+        self.ivan.online = False
+        del self.net[self.ivan.ip]
+        self.olha = Phone(self.net, 21)
+        del self.net[self.olha.ip]
+        self.olha.ip = self.ivan.ip
+        self.net[self.olha.ip] = self.ivan  # ARP-таблиця ще віддає MAC Івана
+        self.ivan.online = True
+        self.states[self.olha.ip] = (self.ivan.mac, "STALE")
+
+    def test_stale_pair_is_not_used(self):
+        self.shuffle()
+        self.tick(10)
+        self.olha.login(OLHA)
+        self.assertEqual(self.events("olha", "login_other_device"), [])  # не «чужий телефон»
+        self.assertNotIn(self.ivan.mac, [r[0] for r in self.sql(
+            "select h.mac from device_history h join users u on u.id = h.user_id where u.username = 'olha'")])
+        # система перепитала: тепер у таблиці правильний MAC Ольги
+        self.net[self.olha.ip] = self.olha
+        self.olha.online = True
+        self.states[self.olha.ip] = (self.olha.mac, "REACHABLE")
+        self.olha.clock("check")
+        macs = [r[0] for r in self.sql("select h.mac from device_history h join users u on u.id = h.user_id where u.username = 'olha'")]
+        self.assertIn(self.olha.mac, macs)
+        self.assertEqual(core.mac_conflicts(core.connect()), [])
+
+    def test_client_mac_rules(self):
+        ip = "192.168.1.40"
+        for neigh, state, want in ((self.ivan.mac, (self.ivan.mac, "REACHABLE"), self.ivan.mac),
+                                   (self.ivan.mac, (self.ivan.mac, "STALE"), None),        # не підтверджений щойно
+                                   (self.ivan.mac, (self.ivan.mac, "DELAY"), None),
+                                   (self.ivan.mac, ("da:00:00:00:00:99", "REACHABLE"), None)):  # таблиці розходяться
+            core._mac_cache.update(at=0.0, table={})
+            self.states[ip] = state
+            with mock.patch.object(lan, "neighbours", return_value={ip: neigh}), mock.patch.object(lan, "knock") as knock:
+                self.assertEqual(core.client_mac(ip), want, state)
+                self.assertEqual(knock.called, want is None)  # сумнівний запис — стукаємо, щоб система перепитала
+
+    def test_conflict_banner_and_relearn(self):
+        olha_id = self.sql("select id from users where username = 'olha'")[0][0]
+        with core.connect() as c:  # стара біда: MAC Івана записався й Ользі
+            core.remember_device(c, olha_id, "web-0000aaaa", "192.168.1.20")
+            c.execute("update devices set mac = ? where user_id = ?", (self.ivan.mac, olha_id))
+            c.execute("insert into lan_devices(mac, ip, name, model, vendor, user_id, first_seen, last_seen) values (?, ?, null, null, null, ?, 0, 0)",
+                      (self.ivan.mac, self.ivan.ip, olha_id))
+            c.commit()
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        live = admin.req("get", "/admin?tab=live").get_data(as_text=True)
+        self.assertIn("прив'язаний до кількох людей", live)
+        card = admin.req("get", f"/admin/employee/{olha_id}").get_data(as_text=True)
+        self.assertIn("Перезаписати IP і MAC", card)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', card)[1]
+        admin.req("post", "/admin/devices/relearn", data={"csrf": csrf, "user_id": olha_id}, headers={"Origin": "http://localhost"})
+        self.assertEqual(self.sql("select mac, last_ip from devices where user_id = ?", olha_id)[0][:], (None, None))
+        self.assertEqual(self.sql("select count(*) from devices where mac is not null")[0][0], 1)  # Іванів лишився
+        self.assertEqual(self.sql("select count(*) from devices where user_id = ?", olha_id)[0][0], 1)  # прив'язка лишилась
+        self.assertNotIn("кількох людей", admin.req("get", "/admin?tab=live").get_data(as_text=True))
+        admin.req("post", "/admin/devices/relearn", data={"csrf": csrf}, headers={"Origin": "http://localhost"})  # усі
+        self.assertEqual(self.sql("select count(*) from devices where mac is not null")[0][0], 0)
+        self.assertEqual(self.sql("select count(*) from lan_devices")[0][0], 0)
+
+    def test_lan_list_by_mac_not_old_ip(self):
+        olha_id = self.sql("select id from users where username = 'olha'")[0][0]
+        with core.connect() as c:  # учора телефон Ольги мав .30 — сьогодні в нього інший IP, а .30 у телефона Івана
+            core.remember_device(c, olha_id, "web-0000bbbb", "192.168.1.30")
+            c.commit()
+        with core.connect() as c:
+            lan.record(c, {"192.168.1.30": self.ivan.mac}, {})
+        self.assertEqual(self.sql("select u.username from lan_devices l join users u on u.id = l.user_id where l.mac = ?",
+                                  self.ivan.mac)[0][0], "ivan")
+
+
 if __name__ == "__main__":
     unittest.main()

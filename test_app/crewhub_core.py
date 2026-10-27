@@ -913,25 +913,43 @@ def clean_fp(v):
 _mac_cache = {"at": 0.0, "table": {}}
 
 
+MAC_TTL = 20  # с: таблицю сусідів перечитуємо не рідше (IP міг перейти до іншого телефона)
+MAC_TRUSTED = ("REACHABLE", "PERMANENT", "NOARP")  # стани запису, яким віримо: щойно підтверджений або статичний
+
+
 def client_mac(ip, cached_only=False):
     """MAC пристрою з таблиці сусідів (ARP) сервера. Лише в локальній мережі: через роутер чи тунель MAC не видно.
-    Таблицю перечитуємо не частіше раз на хвилину (новий IP — не частіше раз на 5 с). Читання таблиці на Windows —
+    Таблицю перечитуємо не рідше раз на MAC_TTL с (новий IP — не частіше раз на 5 с). Читання таблиці на Windows —
     окрема програма `arp`, тож під _lock кличемо з cached_only=True, а свіжу таблицю беремо до блокування.
     Телефони у Wi-Fi показують «приватний» MAC — випадковий, але сталий для однієї мережі, тож у мережі точки
-    він однозначно вказує на телефон."""
+    він однозначно вказує на телефон.
+    Пастка (17.12): після відключення світла роутер роздає IP наново, і адреса телефона Івана дістається Ользі, а
+    таблиця сусідів ще кілька хвилин пам'ятає стару пару «IP → MAC Івана». Тому запис, який система не
+    підтвердила щойно (STALE, DELAY, PROBE…) чи з іншим MAC, не беремо: MAC невідомий, ніж чужий. У такий IP
+    стукаємо — система перепитає, і наступний запит отримає правильний MAC."""
     try:
         if not ip or not ipaddress.ip_address(ip).is_private or ipaddress.ip_address(ip).is_loopback:
             return None
     except ValueError:
         return None
     t = time.time()
-    if not cached_only and (t - _mac_cache["at"] > 60 or (ip not in _mac_cache["table"] and t - _mac_cache["at"] > 5)):
+    if not cached_only and (t - _mac_cache["at"] > MAC_TTL or (ip not in _mac_cache["table"] and t - _mac_cache["at"] > 5)):
         import lan
         try:
             table = lan.neighbours()
         except Exception:  # noqa: BLE001 — MAC лише підказка: збій таблиці сусідів не може зламати вхід
             log.exception("Не вдалося прочитати таблицю сусідів (ARP)")
             table = {}
+        try:
+            states = lan.neighbour_states()  # None — система не дає станів (тоді як раніше: уся таблиця)
+        except Exception:  # noqa: BLE001
+            states = None
+        if states:
+            doubtful = [i for i, m in table.items() if i in states and (states[i][0] != m or states[i][1] not in MAC_TRUSTED)]
+            for i in doubtful:
+                table.pop(i)
+            if ip in doubtful:
+                lan.knock([ip])
         _mac_cache.update(at=t, table=table)
     return _mac_cache["table"].get(ip)
 
@@ -4113,6 +4131,48 @@ def admin_device_block():
     return redirect(back)
 
 
+@app.post("/admin/devices/relearn")
+@login_required(staff=True)
+def admin_devices_relearn():
+    """«Перезаписати IP і MAC»: сервер забуває IP і MAC пристроїв (усіх або однієї людини) і записує їх наново з
+    наступних запитів телефонів. Коди пристроїв, відбитки й прив'язки «Телефон людини» лишаються. Для випадку, коли
+    після відключення світла роутер перемішав IP і стара пара IP-MAC дісталась не тій людині."""
+    uid = parse_int(request.form.get("user_id"))
+    who = "user_id = ?" if uid else "1 = 1"
+    args = (uid,) if uid else ()
+    with _lock:
+        conn = db()
+        conn.execute(f"update devices set mac = null, last_ip = null where {who}", args)
+        conn.execute(f"update device_history set mac = null, last_ip = null where {who}", args)
+        conn.execute(f"update remember_tokens set mac = null where {who}", args)
+        conn.execute(f"update shifts set mac = null where status != 'closed' and {who}", args)
+        if uid:
+            conn.execute("update lan_devices set user_id = null where user_id = ?", (uid,))
+        else:
+            conn.execute("delete from lan_devices")
+        u = conn.execute("select full_name from users where id = ?", (uid,)).fetchone() if uid else None
+        audit(conn, current_user()["id"], "UPDATE", "devices", None, uid, {"IP і MAC": ["записані", "перезаписуються наново"]})
+        conn.commit()
+    _mac_cache.update(at=0.0, table={})
+    for ip in [ip for ip, v in _visits.items() if not uid or v.get("uid") == uid]:
+        _visits.pop(ip, None)
+    if not uid and setting("lan_scan") == "1":
+        import lan
+        threading.Thread(target=lan.scan, daemon=True).start()  # «Пристрої в мережі» — одразу заново
+    flash(f"IP і MAC {'пристроїв ' + u['full_name'] if u else 'усіх пристроїв'} перезаписуються: сервер запише їх наново, "
+          "щойно телефони озвуться (зазвичай за хвилину)")
+    return redirect(_safe_back(url_for("admin", tab="live") + "#lan"))
+
+
+def mac_conflicts(conn):
+    """MAC, прив'язаний як «Телефон людини» до кількох різних людей: так не буває (один MAC — один телефон), отже
+    стара пара IP-MAC дісталась не тій людині. [{mac, names, ids}] — підказка натиснути «Перезаписати IP і MAC»."""
+    return [{"mac": r["mac"], "names": r["names"], "ids": [int(x) for x in r["ids"].split(",")]} for r in conn.execute(
+        "select d.mac, group_concat(distinct u.full_name) as names, group_concat(distinct u.id) as ids from devices d"
+        " join users u on u.id = d.user_id where d.mac is not null and u.status != 'dismissed'"
+        " group by d.mac having count(distinct d.user_id) > 1")]
+
+
 @app.post("/admin/devices/unblock/<int:bid>")
 @login_required(staff=True)
 def admin_device_unblock(bid):
@@ -4614,6 +4674,7 @@ def admin():
         ctx["active_locations"] = conn.execute("select id, name from locations where is_active = 1 order by name").fetchall()
     if tab == "live":
         ctx["blocked_count"] = len(blocked_rows(conn))
+        ctx["mac_conflicts"] = mac_conflicts(conn)
         ctx["rows"] = live_monitor(conn)
         ctx["counts"] = {k: sum(1 for r in ctx["rows"] if r["state"] == k)
                          for k in LIVE_STATES}
@@ -4708,6 +4769,7 @@ def admin_employee(uid):
                            logs=conn.execute("select * from conn_log where user_id = ? order by id desc limit 15", (uid,)).fetchall(),
                            devices=conn.execute("select * from devices where user_id = ? order by id", (uid,)).fetchall(),
                            blocked_keys={r["device_key"] for r in blocked_rows(conn) if r["device_key"]},
+                           mac_conflict=[c for c in mac_conflicts(conn) if uid in c["ids"]],
                            blocked_macs={r["mac"] for r in blocked_rows(conn) if r["mac"]},
                            device_history=[{**dict(h), "owner": device_owner(conn, h["device_key"], h["fingerprint"], h["mac"], other_than=uid)}
                                            for h in conn.execute("select * from device_history h where user_id = ? and not exists"
