@@ -5,6 +5,7 @@
 
 {% if tab == 'clock' %}
 {% if net_offer %}{% with offer = net_offer, back = 'clock' %}{% include "_net_offer.html" %}{% endwith %}{% endif %}
+{% with force = False %}{% include "_mac_tip.html" %}{% endwith %}
 <div id="net" class="banner info">{{ icon('wifi') }}<span>Перевіряємо підключення…</span><span class="spacer"></span><button class="sm" id="refresh">{{ icon('refresh', 'sm') }}Оновити</button></div>
 <div class="grid-2">
   <div class="card clock-card">
@@ -410,6 +411,7 @@
   </div>
 </div>
 {% elif tab == 'app' %}
+{% with force = True %}{% include "_mac_tip.html" %}{% endwith %}
 <div class="card">
   <div class="card-head"><h3>{{ icon('phone') }} Код цього пристрою</h3></div>
   <p class="muted small" style="margin:0 0 8px">За цим кодом сервер знає, що це ваш телефон, і сам вмикає зміну. Новий телефон — покажіть код керівнику: він перезапише його у вашій картці.</p>

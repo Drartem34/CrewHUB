@@ -269,7 +269,7 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "outage_credit": "Сервер не працював: час зараховано", "shift_new_device": "Зміна з нового пристрою",
           "login_failed": "Невдалий вхід", "brute_force": "Підбір пароля", "account_hopping": "Вхід у різні акаунти",
           "blocked_device": "Заблокований пристрій", "phone_verified": "Номер підтверджено в WhatsApp",
-          "shared_mac": "Спільний MAC: кілька телефонів"}
+          "shared_mac": "Спільний MAC: кілька телефонів", "mac_changed": "Телефон змінив адресу Wi-Fi (MAC)"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні».
 # 17.11: підбір пароля, вхід у різні акаунти з одного пристрою, спроба із заблокованого пристрою
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device",
@@ -1129,6 +1129,14 @@ def note_usage(conn, user_id, key, fp=None, mac=None, phone=None, ip=None):
     t = now()
     ip = ip or (client_ip() if has_request_context() else None)
     model = request_model()
+    if mac:
+        # Той самий пристрій у тій самій мережі точки з новим MAC — телефон змінює «приватну адресу Wi-Fi» (iPhone:
+        # «Змінна»): у журнал, а людині — знову підказка «поставте Фіксована» (mac_tip, 17.15)
+        prev = conn.execute("select mac, last_ip from device_history where user_id = ? and device_key = ?", (user_id, key)).fetchone()
+        if prev and prev["mac"] and prev["mac"] != mac and not {prev["mac"], mac} & shared_macs() and prev["last_ip"] and ip:
+            a, b = match_location(conn, prev["last_ip"]), match_location(conn, ip)
+            if a and b and a["id"] == b["id"]:
+                log_clock(conn, user_id, None, "mac_changed", ip, b["id"], True, key, {"був MAC": prev["mac"], "став": mac})
     conn.execute("insert into device_history(user_id, device_key, mac, fingerprint, phone, last_ip, first_at, last_at, model)"
                  " values (?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict(user_id, device_key) do update set last_at = excluded.last_at,"
                  " last_ip = coalesce(excluded.last_ip, device_history.last_ip),"
@@ -3616,6 +3624,30 @@ def parse_dtinput(v):
     return int(d.timestamp()) if DATE_MIN <= d.date() <= DATE_MAX else None
 
 
+def mac_tip():
+    """Підказка «щоб сервер бачив телефон у Wi-Fi без сайту — фіксована адреса Wi-Fi для цієї мережі» (17.15). Сайт не
+    може сам відкрити налаштування телефона (Apple й Android не дозволяють) — тож інструкція з назвою мережі. iPhone у
+    браузері — завжди, поки людина не натисне «Зробив(ла)»; Android у браузері — якщо його адреса вже мінялась; знову —
+    коли сервер помітив, що адреса змінилась. Застосунку не треба. None — не показувати."""
+    ua = request.headers.get("User-Agent") or ""
+    plat = ua_platform(ua)
+    if "CrewHubApp" in ua or not plat or plat[0] not in ("ios", "android"):
+        return None
+    conn = db()
+    loc = match_location(conn, client_ip())
+    row = loc and conn.execute("select wifi_ssid from locations where id = ?", (loc["id"],)).fetchone()
+    ssid = row["wifi_ssid"] if row and row["wifi_ssid"] else None
+    if not ssid:  # не в мережі точки (реєструється вдома): якщо точка одна — її Wi-Fi
+        rows = conn.execute("select wifi_ssid from locations where is_active = 1 and coalesce(wifi_ssid, '') != ''").fetchall()
+        ssid = rows[0][0] if len(rows) == 1 else None
+    u = current_user()
+    changed = u and conn.execute("select max(created_at) from conn_log where user_id = ? and event = 'mac_changed' and created_at > ?",
+                                 (u["id"], now() - 14 * 86400)).fetchone()[0]
+    if plat[0] == "android" and not changed:
+        return None
+    return {"os": plat[0], "ssid": ssid, "changed": changed, "key": f"crewhub_mac_tip:{ssid or ''}:{changed or ''}"}
+
+
 @app.context_processor
 def _globals():
     u = current_user()
@@ -3637,7 +3669,7 @@ def _globals():
             "default_rate": float(setting("default_hourly_rate")),
             "in_app": "CrewHubApp" in (request.headers.get("User-Agent") or ""),
             "apk_ready": os.path.exists(APK_PATH), "demo_accounts": DEMO_ACCOUNTS,
-            "system_alert": workers_problem() if u and u["role"] in STAFF_ROLES else None,
+            "system_alert": workers_problem() if u and u["role"] in STAFF_ROLES else None, "mac_tip": mac_tip,
             "csrf_token": session.get("csrf", "")}
 
 

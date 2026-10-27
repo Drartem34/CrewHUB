@@ -1,0 +1,36 @@
+{# Підказка «фіксована адреса Wi-Fi для робочої мережі» (17.15): mac_tip() у crewhub_core. force — показувати й після
+   «Зробив(ла)» (вкладка «Налаштування додатку»). Сайт не може сам відкрити налаштування телефона — лише інструкція. #}
+{% from "_ui.html" import icon with context %}
+{% set tip = mac_tip() %}
+{% if tip %}
+{% set net = ('мережі «' ~ tip.ssid ~ '»') if tip.ssid else 'робочої мережі (до якої ви зараз підключені — з галочкою)' %}
+<div class="card" id="macTip" data-key="{{ tip.key }}" data-force="{{ '1' if force else '' }}" style="margin-bottom:14px">
+  <div class="card-head"><h3>{{ icon('wifi') }} {% if tip.changed %}Ваш телефон змінив адресу Wi-Fi{% else %}Щоб сервер бачив телефон на роботі сам{% endif %}</h3></div>
+  <p class="small" style="margin:0 0 8px">{% if tip.changed %}Через це сервер на якийсь час переставав вас бачити в Wi-Fi.{% endif %}
+    Сервер бачить ваш телефон у Wi-Fi без відкритого CrewHub, якщо адреса Wi-Fi телефона для цієї мережі не міняється.
+    Сайт не може сам відкрити налаштування телефона — {{ 'Apple' if tip.os == 'ios' else 'Android' }} цього не дозволяє, тож зробіть один раз (хвилина):</p>
+  {% if tip.os == 'ios' %}
+  <ol class="small" style="margin:0 0 10px;padding-left:20px">
+    <li>Відкрийте «Параметри» → «Wi-Fi».</li>
+    <li>Торкніться ⓘ біля {{ net }}.</li>
+    <li>«Приватна адреса Wi-Fi» → виберіть <b>«Фіксована»</b> (не «Змінна»).
+      На iOS 17 і старших там лише перемикач «Приватна адреса» — тоді нічого не міняйте.</li>
+    <li>Якщо iPhone перепідключиться до Wi-Fi — це нормально, поверніться сюди.</li>
+  </ol>
+  {% else %}
+  <ol class="small" style="margin:0 0 10px;padding-left:20px">
+    <li>Відкрийте «Налаштування» → «Wi-Fi» (чи «Підключення» → «Wi-Fi»).</li>
+    <li>Торкніться ⚙ біля {{ net }}.</li>
+    <li>«Додатково» чи «Конфіденційність» → «Тип MAC-адреси» → <b>«MAC телефона»</b> (чи «MAC-адреса пристрою»).
+      Варіант «щоразу нова» не вибирайте.</li>
+  </ol>
+  {% endif %}
+  <button class="sm" type="button" id="macTipDone">{{ icon('check', 'sm') }}Зробив(ла)</button>
+</div>
+<script>(function () {
+  var box = document.getElementById("macTip"); if (!box) return;
+  var key = box.dataset.key;
+  try { if (!box.dataset.force && localStorage.getItem(key)) { box.remove(); return; } } catch (e) {}
+  document.getElementById("macTipDone").onclick = function () { try { localStorage.setItem(key, "1"); } catch (e) {} box.remove(); };
+})();</script>
+{% endif %}

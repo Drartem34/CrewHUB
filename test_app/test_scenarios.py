@@ -1407,5 +1407,50 @@ class LeftWorkBehindRouter1715Test(ScenarioBase):
         self.live_until(20)
         self.assert_closed("ivan")
 
+class FixedMacTip1715Test(ScenarioBase):
+    """17.15: сайт не може відкрити налаштування телефона, тож після реєстрації й на «Зміні» — інструкція з назвою
+    робочої мережі: «Приватна адреса Wi-Fi → Фіксована». Помітив сервер, що адреса змінилась, — підказка знову."""
+    IPHONE = IPhoneWebPresence1715Test.IPHONE
+
+    def setUp(self):
+        super().setUp()
+        with core.connect() as c:
+            c.execute("update locations set wifi_ssid = 'Kava-Staff' where id = 1")
+            c.commit()
+        self.tick(10)
+
+    def test_registration_shows_how_to_fix_mac_for_this_network(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '1' where key = 'registration_open'")
+            c.commit()
+        phone = Phone(self.net, 70, ua=self.IPHONE)
+        page = phone.req("post", "/register", data={"full_name": "Петро Іванов", "phone": "0991112233", "password": "secret1",
+                                                    "password2": "secret1", "device_id": phone.key, "fp": phone.fp}).get_data(as_text=True)
+        self.assertIn("Заявку надіслано", page)
+        self.assertIn("«Kava-Staff»", page)
+        self.assertIn("«Фіксована»", page)
+
+    def test_clock_page_tip_for_iphone_only(self):
+        iphone = Phone(self.net, 71, ua=self.IPHONE)
+        iphone.login(IVAN)
+        self.assertIn("Приватна адреса Wi-Fi", iphone.req("get", "/me?tab=clock").get_data(as_text=True))
+        android = Phone(self.net, 72)
+        android.login(OLHA)
+        self.assertNotIn('id="macTip"', android.req("get", "/me?tab=clock").get_data(as_text=True))  # Android свій MAC не міняє
+
+    def test_mac_change_is_logged_and_tip_comes_back(self):
+        android = Phone(self.net, 73)
+        android.login(OLHA)
+        android.clock("check")
+        self.tick(10, 10)
+        android.mac = "da:00:00:00:02:73"  # той самий телефон у тій самій мережі — нова адреса Wi-Fi
+        android.clock("check")
+        ev = self.events("olha", "mac_changed")
+        self.assertEqual(len(ev), 1)
+        self.assertIn("da:00:00:00:00:49", ev[0][1])
+        page = android.req("get", "/me?tab=clock").get_data(as_text=True)
+        self.assertIn("Ваш телефон змінив адресу Wi-Fi", page)
+        self.assertIn("«MAC телефона»", page)
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@
       {% if verified %}<p class="center"><span class="pill ok">✓ номер підтверджено в WhatsApp</span></p>{% endif %}
       {% if wa_error %}<div class="banner warn small">{{ icon('alert', 'sm') }}<span>Код у WhatsApp не надіслано: {{ wa_error }}. Заявку однаково отримав адміністратор.</span></div>{% endif %}
       <p class="muted center">Заявка пішла адміністратору й модераторам. Поки її не перевірять і не підтвердять, увійти не вийде. Після підтвердження увійдіть зі своїм номером і паролем.</p>
+      {% with force = False %}{% include "_mac_tip.html" %}{% endwith %}
       <a class="btn primary xl" href="{{ url_for('login') }}">До входу</a>
     {% else %}
       <p class="muted" style="margin:0 0 20px">Реєстрація працівника. Номер телефону буде вашим логіном.</p>

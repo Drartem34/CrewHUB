@@ -48,6 +48,8 @@
 - `session["dev"]` з токена автовходу → `CREWHUB.device` → `clock.js` повертає код пристрою, якщо Safari стер `localStorage`.
 - Роутер не тримає змін: `mark_shared()`; у `different_devices` знову «телефони різних людей»; у `presence_step` — «кілька
   людей на зміні з одним MAC» і підсилювач (`note_mac_ips`, `repeater_macs`, `mark_repeaters`); `pause_close_note()` в «Огляді».
+- `mac_tip()` + `_mac_tip.html` — інструкція «фіксована адреса Wi-Fi» з назвою мережі (реєстрація, «Зміна», «Налаштування
+  додатку»); подія `mac_changed` у `note_usage`.
 
 ## Що нового у версії 17.14: блокування в одному місці, впізнавання з новими IP і MAC
 
