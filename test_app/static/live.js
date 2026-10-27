@@ -29,6 +29,8 @@
     else if (r.battery != null) p.push("заряд " + r.battery + "%" + (r.charging ? " ⚡" : ""));
     if (r.sched_start) p.push("за графіком " + hhmm(r.sched_start) + "–" + hhmm(r.sched_end));
     if (r.seen && !r.last_seen) p.push("пінг " + hhmm(r.seen) + " · " + esc(r.seen_ip));
+    // Чому сервер не бачить телефон зміни, коли сторінку закрито (iPhone без застосунку): MAC невідомий чи спільний
+    if (r.net_note) p.push('<span style="color:var(--warn-text)">' + esc(r.net_note) + "</span>");
     const line = alarm + p.join(" · ");  // alarm — блок: сам переносить рядок
     // Чому зміна не почалась сама — окремим рядком, щоб адмін одразу бачив, що виправити
     return r.why ? (line ? line + "<br>" : "") + '<span style="color:var(--warn-text)">Автозміна не почалась: ' + esc(r.why) + "</span>" : line;

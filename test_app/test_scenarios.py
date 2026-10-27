@@ -1031,5 +1031,181 @@ class DeviceIdentity1714Test(ScenarioBase):
         self.assertIn("Ольга Коваль (SM-A515F)", row["model"])
 
 
+
+class IPhoneWebPresence1715Test(ScenarioBase):
+    """17.15: iPhone без застосунку (браузер) не відвалюється. Сервер записує MAC, навіть якщо людина почала зміну й
+    одразу заблокувала екран; після «Перезаписати IP і MAC» сам знаходить MAC змін, що йдуть; сонний iPhone, що
+    відповів не з першого разу, — на місці; iPhone з двома браузерами — не «роутер зі спільним MAC»."""
+    IPHONE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+              "Version/18.6 Mobile/15E148 Safari/604.1")
+    VIBER = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+             "Mobile/15E148 Viber/25.6.0")
+
+    def setUp(self):
+        super().setUp()
+        core._mac_seen.clear()
+        core._shared.update(at=0.0, set=set())
+        self.addCleanup(core._shared.update, at=0.0, set=set())
+        self.states = {}  # ip → (mac, стан), як `ip neigh`: без запису — система нічого не каже
+        patcher = mock.patch.object(lan, "neighbour_states", lambda: dict(self.states))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tick(10)
+        self.iphone = Phone(self.net, 40, ua=self.IPHONE)
+
+    def stale(self, phone):
+        """Запис таблиці сусідів не підтверджено щойно (iPhone тільки прокинувся): MAC під час запиту невідомий."""
+        self.states[phone.ip] = (phone.mac, "STALE")
+
+    def mac_of(self, username):
+        return [r[0] for r in self.sql("select h.mac from device_history h join users u on u.id = h.user_id where u.username = ?", username)]
+
+    def admin(self):
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        page = admin.req("get", "/admin?tab=live").get_data(as_text=True)
+        return admin, re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+
+    def test_started_and_locked_at_once(self):
+        # Увійшов, почав зміну і заблокував екран за кілька секунд — раніше MAC так і лишався невідомим, і за 10 хв пауза
+        self.stale(self.iphone)
+        self.iphone.login(IVAN)
+        self.assertTrue(self.iphone.clock("start")["ok"])
+        self.assertIsNone(self.shift("ivan")["mac"])
+        self.live_until(10, 40)  # телефон у кишені 40 хв, сторінка спить
+        s = self.shift("ivan")
+        self.assertEqual((s["status"], s["mac"]), ("active", self.iphone.mac))
+        self.assertEqual(self.mac_of("ivan"), [self.iphone.mac])
+        self.assertEqual(self.sql("select count(*) from breaks")[0][0], 0)
+        # пішов з Wi-Fi — як і раніше, пауза
+        self.iphone.online = False
+        self.live_until(10, 55)
+        self.assertEqual(self.shift("ivan")["status"], "paused")
+
+    def test_known_mac_is_used_at_once(self):
+        # Учора MAC уже підтверджено; сьогодні запит прийшов, коли запис ще «застарілий» — зміна одразу знає MAC
+        self.states[self.iphone.ip] = (self.iphone.mac, "REACHABLE")
+        self.iphone.login(IVAN)
+        self.stale(self.iphone)
+        core._mac_cache.update(at=0.0, table={})
+        self.assertTrue(self.iphone.clock("start")["ok"])
+        self.assertEqual(self.shift("ivan")["mac"], self.iphone.mac)
+
+    def test_relearn_button_does_not_lose_iphone(self):
+        self.states[self.iphone.ip] = (self.iphone.mac, "REACHABLE")
+        self.iphone.login(IVAN)
+        self.assertTrue(self.iphone.clock("start")["ok"])
+        self.live_until(10, 10)
+        self.assertEqual(self.shift("ivan")["status"], "active")
+        admin, csrf = self.admin()
+        admin.req("post", "/admin/devices/relearn", data={"csrf": csrf}, headers={"Origin": "http://localhost"})
+        self.assertIsNone(self.shift("ivan")["mac"])  # «перезаписати» стерло MAC — а iPhone спить і сам не озветься
+        self.live_until(10, 45)
+        s = self.shift("ivan")
+        self.assertEqual((s["status"], s["mac"]), ("active", self.iphone.mac))  # сервер сам знайшов MAC за адресою зміни
+        self.assertEqual(self.mac_of("ivan"), [self.iphone.mac])
+
+    def test_relearn_after_outage_does_not_guess(self):
+        # Після відключення світла роутер міг роздати IP наново — MAC за старою адресою зміни не вгадуємо
+        self.iphone.login(IVAN)
+        self.assertTrue(self.iphone.clock("start")["ok"])
+        with core.connect() as c:
+            c.execute("update shifts set mac = null")
+            core.meta_set(c, "outage_end", self.at(10, 5))
+            c.commit()
+        olha = Phone(self.net, 41)
+        del self.net[olha.ip]
+        olha.ip = self.iphone.ip
+        self.net[olha.ip] = olha  # за адресою Івана тепер телефон Ольги
+        self.tick(10, 6)
+        core.presence_step()
+        self.assertIsNone(self.shift("ivan")["mac"])
+
+    def test_sleepy_iphone_answers_on_second_ask(self):
+        self.states[self.iphone.ip] = (self.iphone.mac, "REACHABLE")
+        self.iphone.login(IVAN)
+        self.assertTrue(self.iphone.clock("start")["ok"])
+        asked = []
+
+        def present(ips, wait=0):  # з першого разу сонний iPhone не відповідає, з другого — так
+            asked.append(wait)
+            return {ip: p.mac for ip, p in self.net.items() if p.online and (wait or p is not self.iphone)}
+        with mock.patch.object(lan, "present", present):
+            self.live_until(10, 40)
+        self.assertEqual(self.shift("ivan")["status"], "active")
+        self.assertIn(core.PRESENCE_RETRY[0], asked)
+
+    def test_iphone_with_two_browsers_is_not_a_router(self):
+        # Safari і браузер усередині Viber (чи іконка на екрані «Додому»): у кожного свій код і відбиток, а Safari ще й
+        # сам трохи змінює відбиток — це один iPhone, а не два телефони за роутером
+        self.states[self.iphone.ip] = (self.iphone.mac, "REACHABLE")
+        self.iphone.login(IVAN)
+        viber = Phone(self.net, 42, ua=self.VIBER)
+        del self.net[viber.ip]
+        viber.ip, viber.mac, viber.fp = self.iphone.ip, self.iphone.mac, "00000000deadbeef"
+        viber.login(IVAN)
+        home = Phone(self.net, 43, ua=self.IPHONE)
+        del self.net[home.ip]
+        home.ip, home.mac, home.fp = self.iphone.ip, self.iphone.mac, "00000000feedf00d"
+        home.login(IVAN)
+        self.assertEqual(self.sql("select count(*) from shared_macs")[0][0], 0)
+        self.assertEqual(self.mac_of("ivan"), [self.iphone.mac] * 3)
+
+    def test_android_chrome_and_samsung_internet_is_not_a_router(self):
+        chrome = Phone(self.net, 44, model="SM-A515F")
+        chrome.login(IVAN)
+        samsung = Phone(self.net, 45)
+        del self.net[samsung.ip]
+        samsung.ip, samsung.mac = chrome.ip, chrome.mac
+        samsung.ua = ("Mozilla/5.0 (Linux; Android 13; SM-A515F) AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "SamsungBrowser/23.0 Chrome/115.0 Mobile Safari/537.36")
+        samsung.login(IVAN)
+        self.assertEqual(self.sql("select count(*) from shared_macs")[0][0], 0)
+
+    def test_iphone_and_android_behind_a_router_still_shared(self):
+        android = Phone(self.net, 46)
+        del self.net[android.ip]
+        android.ip, android.mac = self.iphone.ip, self.iphone.mac
+        self.iphone.login(IVAN)
+        android.login(OLHA)
+        self.assertEqual([r[0] for r in self.sql("select why from shared_macs")], ["iPhone і Android"])
+
+    def test_old_mark_without_reason_lasts_an_hour(self):
+        with core.connect() as c:  # позначка 17.13–17.14: могла бути помилковою (один iPhone з двома браузерами)
+            c.execute("insert into shared_macs(mac, first_at, last_at, note) values (?, ?, ?, 'Іван, Іван')",
+                      (self.iphone.mac, self.at(8), self.at(8)))
+            c.execute("insert into shared_macs(mac, first_at, last_at, note, why) values ('da:00:00:00:00:77', ?, ?, 'x', 'iPhone і Android')",
+                      (self.at(8), self.at(8)))
+            c.commit()
+        core._shared.update(at=0.0)
+        self.assertEqual(core.shared_macs(), {"da:00:00:00:00:77"})
+        self.tick(8, 30)
+        core._shared.update(at=0.0)
+        self.assertEqual(core.shared_macs(), {"da:00:00:00:00:77", self.iphone.mac})
+
+    def test_not_a_router_button(self):
+        android = Phone(self.net, 47)
+        del self.net[android.ip]
+        android.ip, android.mac = self.iphone.ip, self.iphone.mac
+        self.iphone.login(IVAN)
+        android.login(OLHA)
+        admin, csrf = self.admin()
+        self.assertIn("Це не роутер", admin.req("get", "/admin?tab=live").get_data(as_text=True))
+        admin.req("post", "/admin/devices/unshare", data={"csrf": csrf, "mac": self.iphone.mac}, headers={"Origin": "http://localhost"})
+        self.assertEqual(self.sql("select count(*) from shared_macs")[0][0], 0)
+        self.assertNotIn("Це не роутер", admin.req("get", "/admin?tab=live").get_data(as_text=True))
+        self.assertTrue(self.sql("select 1 from audit where entity = 'shared_macs'"))
+
+    def test_overview_says_why_iphone_is_not_seen(self):
+        self.stale(self.iphone)
+        self.iphone.login(IVAN)
+        self.assertTrue(self.iphone.clock("start")["ok"])
+        admin, _ = self.admin()
+        row = [r for r in admin.req("get", "/api/live").get_json()["rows"] if r["name"] == "Іван Петренко"][0]
+        self.assertIn("MAC телефона ще не підтверджено", row["net_note"])
+        self.live_until(10, 2)
+        core._live_cache.update(at=0.0)
+        row = [r for r in admin.req("get", "/api/live").get_json()["rows"] if r["name"] == "Іван Петренко"][0]
+        self.assertIsNone(row["net_note"])  # MAC підтверджено — сервер бачить телефон
+
 if __name__ == "__main__":
     unittest.main()

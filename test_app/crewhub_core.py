@@ -589,6 +589,7 @@ def init_db(seed=True):
     # Кеші, що віддзеркалюють базу (спільні MAC, заблоковані пристрої): з новою базою — заново
     _shared.update(at=0.0, set=set())
     _mac_seen.clear()
+    _mac_pending.clear()
     _blocked["at"] = 0.0
     conn = connect()
     conn.executescript(SCHEMA)
@@ -604,6 +605,10 @@ def init_db(seed=True):
         conn.execute("alter table device_history add column model text")
     if "phone_verified_at" not in cols:  # коли номер підтверджено кодом у WhatsApp (17.11)
         conn.execute("alter table users add column phone_verified_at integer")
+    if "why" not in [r[1] for r in conn.execute("pragma table_info(shared_macs)")]:
+        # Чому MAC спільний (17.15): «iPhone і Android», «різні моделі Android»… Позначки без причини — з 17.13–17.14,
+        # коли спільним міг стати й MAC одного iPhone з двома браузерами: вони діють лише SHARED_LEGACY_KEEP
+        conn.execute("alter table shared_macs add column why text")
     if "grant_until" not in [r[1] for r in conn.execute("pragma table_info(requests)")]:
         conn.execute("alter table requests add column grant_until integer")
     bcols = [r[1] for r in conn.execute("pragma table_info(breaks)")]
@@ -937,9 +942,15 @@ def client_mac(ip, cached_only=False):
 
 
 _shared = {"at": 0.0, "set": set()}
-_mac_seen = {}  # MAC → {код пристрою: (відбиток, коли, хто)} за останні 15 хв — щоб помітити кілька пристроїв за одним MAC
+_mac_seen = {}  # MAC → {код пристрою: (відбиток, коли, хто, система, браузер)} за 15 хв — щоб помітити кілька пристроїв за одним MAC
 SHARED_WINDOW = 900     # с: два різні пристрої з одного MAC за цей час — MAC спільний
 SHARED_KEEP = 7 * 86400  # с: без нових доказів MAC перестає вважатись спільним
+SHARED_LEGACY_KEEP = 3600  # с: позначка 17.13–17.14 без причини (могла бути помилковою) — лише година без нових доказів
+SHARED_ACTIVE = "last_at > ? and (why is not null or last_at > ?)"  # умова SQL «MAC зараз спільний»
+
+
+def shared_args():
+    return now() - SHARED_KEEP, now() - SHARED_LEGACY_KEEP
 
 
 def shared_macs():
@@ -948,7 +959,7 @@ def shared_macs():
         try:
             c = connect()
             try:
-                rows = c.execute("select mac from shared_macs where last_at > ?", (now() - SHARED_KEEP,)).fetchall()
+                rows = c.execute(f"select mac from shared_macs where {SHARED_ACTIVE}", shared_args()).fetchall()
             finally:
                 c.close()
             _shared.update(at=time.time(), set={r[0] for r in rows})
@@ -979,20 +990,31 @@ def same_model(a, b):
     return a == b or a.endswith(" " + b) or b.endswith(" " + a)
 
 
-def different_devices(k1, fp1, k2, fp2, p1=None, p2=None):
-    """Чи це точно два різні фізичні пристрої. Різні системи (iPhone і Android) чи різні моделі Android — так. Два
-    різні коди застосунку — так (код — одна установка на телефоні). Два браузери (чи два застосунки) з різними
-    відбитками — так. Застосунок і браузер однієї моделі — не відомо: це може бути один телефон (у WebView і Chrome
-    відбитки різні). Без відбитка й моделі — не відомо."""
+def browser_sig(ua):
+    """Браузер без версій (як у відбитку): Chrome і Samsung Internet, Safari і вбудований браузер Viber — різні."""
+    return re.sub(r"\d+(\.\d+)+", "", re.sub(r"CrewHub\S*", "", ua or "")).strip() or None
+
+
+def different_devices(k1, fp1, k2, fp2, p1=None, p2=None, b1=None, b2=None):
+    """Чи це точно два різні фізичні пристрої — причина («iPhone і Android») або None. Різні системи (iPhone і
+    Android) чи різні моделі Android — так. Два різні коди застосунку — так (код — одна установка на телефоні). Два
+    браузери з різними відбитками — так, але лише той самий браузер не на iPhone (17.15): один телефон буває з двома
+    браузерами (Chrome і Samsung Internet, Safari і браузер усередині Viber) — у кожного свій код і свій відбиток, а
+    Safari в нових iOS сам трохи змінює відбиток, захищаючи від стеження. Застосунок і браузер однієї моделі — не
+    відомо: це може бути один телефон (у WebView і Chrome відбитки різні). Без відбитка й моделі — не відомо."""
     if k1 == k2:
-        return False
+        return None
     if p1 and p2 and {p1[0], p2[0]} == {"ios", "android"}:
-        return True  # (Linux чи Mac не порівнюємо: так себе показує телефон у режимі «версія для ПК»)
+        return "iPhone і Android"  # (Linux чи Mac не порівнюємо: так себе показує телефон у режимі «версія для ПК»)
     if p1 and p2 and p1[0] == p2[0] == "android" and p1[1] and p2[1] and not same_model(p1[1], p2[1]):
-        return True
+        return f"різні моделі: {p1[1]} і {p2[1]}"
     if k1.startswith("app-") and k2.startswith("app-"):
-        return True
-    return bool(fp1 and fp2 and fp1 != fp2 and k1[:4] == k2[:4])
+        return "два застосунки CrewHub"
+    if fp1 and fp2 and fp1 != fp2 and k1[:4] == k2[:4]:
+        if "ios" in ((p1 or (None,))[0], (p2 or (None,))[0]) or (b1 and b2 and b1 != b2):
+            return None
+        return "два браузери з різними відбитками"
+    return None
 
 
 def observe_mac(conn, user_id, key, fp, ip):
@@ -1002,27 +1024,34 @@ def observe_mac(conn, user_id, key, fp, ip):
     if not (mac and key):
         return
     t = time.time()
-    plat = ua_platform(request.headers.get("User-Agent")) if has_request_context() else None
+    ua = request.headers.get("User-Agent") if has_request_context() else None
+    plat, sig = ua_platform(ua) if ua else None, browser_sig(ua) if ua else None
     seen = {k: v for k, v in _mac_seen.get(mac, {}).items() if t - v[1] < SHARED_WINDOW}
-    other = next(((k, v) for k, v in seen.items() if different_devices(key, fp, k, v[0], plat, v[3])), None)
-    seen[key] = (fp or (seen.get(key) or (None,))[0], t, user_id, plat or (seen.get(key) or (None,) * 4)[3])
+    old = seen.get(key) or (None,) * 5
+    why, other = None, None
+    for k, v in seen.items():
+        if why := different_devices(key, fp, k, v[0], plat, v[3], sig, v[4] if len(v) > 4 else None):
+            other = (k, v)
+            break
+    seen[key] = (fp or old[0], t, user_id, plat or old[3], sig or (old[4] if len(old) > 4 else None))
     _mac_seen[mac] = seen
     if len(_mac_seen) > 5000:
         _mac_seen.clear()
     if not other:
         return
     names = [r[0] for r in conn.execute("select full_name from users where id in (?, ?)", (user_id, other[1][2]))]
-    first = not conn.execute("select 1 from shared_macs where mac = ?", (mac,)).fetchone()
-    conn.execute("insert into shared_macs(mac, first_at, last_at, note) values (?, ?, ?, ?)"
-                 " on conflict(mac) do update set last_at = excluded.last_at", (mac, now(), now(), ", ".join(names)))
+    first = mac not in shared_macs()  # нова позначка (або стара 17.13–17.14, що вже не діяла)
+    conn.execute("insert into shared_macs(mac, first_at, last_at, note, why) values (?, ?, ?, ?, ?) on conflict(mac) do update"
+                 " set last_at = excluded.last_at, why = excluded.why, note = case when ? then excluded.note else note end",
+                 (mac, now(), now(), ", ".join(names), why, first))
     _shared.update(at=time.time(), set=_shared["set"] | {mac})  # діє одразу, ще до збереження в базу
     if first:
         for table in ("devices", "device_history", "remember_tokens", "shifts"):  # за ним кілька телефонів — не впізнає жоден
             conn.execute(f"update {table} set mac = null where mac = ?", (mac,))
         conn.execute("update lan_devices set user_id = null where mac = ?", (mac,))
-        log_clock(conn, None, None, "shared_mac", ip, None, True, key, {"MAC": mac, "пристрої": ", ".join(names)})
+        log_clock(conn, None, None, "shared_mac", ip, None, True, key, {"MAC": mac, "пристрої": ", ".join(names), "чому": why})
         notify_staff(conn, "Спільний MAC: кілька телефонів",
-                     f"За MAC {mac} одночасно кілька телефонів ({', '.join(names)}) — мабуть, підсилювач Wi-Fi чи другий роутер. "
+                     f"За MAC {mac} одночасно кілька телефонів ({', '.join(names)}; {why}) — мабуть, підсилювач Wi-Fi чи другий роутер. "
                      "Сервер розрізняє людей за кодом пристрою й відбитком, а цей MAC ігнорує. Щоб бачити MAC кожного телефона, "
                      "переведіть підсилювач чи роутер у режим «точка доступу» / «міст»")
 
@@ -2351,6 +2380,19 @@ def browser_phone(conn, shift):
         "select 1 from device_history where user_id = ? and device_key = ? and phone = 1", (shift["user_id"], shift["device"])).fetchone())
 
 
+def net_note(conn, s):
+    """Чому сервер може не бачити телефон зміни, коли сторінку закрито (браузер на телефоні — напр., iPhone), — для
+    «Огляду» (17.15). None — бачить (за MAC) або це застосунок, який пінгує сам."""
+    if not s or not s["last_seen_ip"] or setting("lan_presence", conn) != "1" or not browser_phone(conn, s):
+        return None
+    if (s["mac"] or neighbour_mac(s["last_seen_ip"], cached_only=True)) in shared_macs():
+        return ("телефон за роутером чи підсилювачем (спільний MAC): поки сторінку закрито, сервер його не бачить — "
+                "переведіть підсилювач у режим «точка доступу»")
+    if not s["mac"]:
+        return "MAC телефона ще не підтверджено: поки сторінку закрито, сервер його не бачить (підтвердить сам, щойно телефон відповість у Wi-Fi)"
+    return None
+
+
 def sleepy_shift(shift):
     """Зміна з застосунку: телефон засинає і пінгує рідше (служба не тримає процесор увімкненим — бережемо батарею),
     тож його тишу можна простити. Вихід з Wi-Fi застосунок повідомляє окремо, з точним часом (away_since)."""
@@ -2821,6 +2863,55 @@ def soft_due(shift_id, t, soft):
     _soft_checked[shift_id] = w
     return True
 PRESENCE_SILENT = 40  # с без пінгу, після яких зміну перевіряємо в мережі
+# Хто не відповів одразу, того питаємо ще двічі (с очікування): сонний iPhone відповідає не з першого разу. Система
+# питає застарілий запис тричі за ~3 с, і якщо Wi-Fi телефона саме дрімав — запис «не відповів»; повторний стук
+# починає нове питання (широкомовне — його телефон чує навіть уві сні)
+PRESENCE_RETRY = (2, 4)
+MAC_PENDING_TTL = 180  # с: стільки чекаємо підтвердження MAC після запиту з телефона
+BLIND_MAX_AGE = 600  # с: зміні без MAC шукаємо його за адресою, з якої телефон озивався не раніше
+_mac_pending = {}  # IP → (хто, код пристрою, коли): запит з цього IP був, а його MAC система ще не підтвердила (17.15)
+
+
+def want_mac(ip, user_id, key):
+    """Запит з телефона пройшов, а таблиця сусідів ще не підтвердила його MAC (запис «застарілий»: iPhone щойно
+    прокинувся). Раніше MAC так і лишався невідомим, якщо людина одразу блокувала екран, — і сервер не бачив сонний
+    iPhone у мережі. Тепер фонова перевірка за пів хвилини постукає в цей IP і запише MAC цьому пристрою (17.15)."""
+    addr = work_ip(ip)
+    if not (addr and addr.version == 4 and addr.is_private and user_id and key):
+        return
+    if len(_mac_pending) > 1000:
+        _mac_pending.clear()
+    _mac_pending[ip] = (user_id, key, now())
+
+
+def known_mac(conn, user_id, key):
+    """Уже підтверджений MAC цього пристрою людини (з історії чи прив'язки), якщо він не спільний."""
+    if not key:
+        return None
+    for (mac,) in conn.execute("select mac from device_history where user_id = ? and device_key = ? and mac is not null union all"
+                               " select mac from devices where user_id = ? and device_key = ? and mac is not null",
+                               (user_id, key, user_id, key)):
+        if mac not in shared_macs():
+            return mac
+    return None
+
+
+def mac_taken(conn, user_id, mac):
+    """MAC уже знають як телефон іншої людини (прив'язка, відкрита зміна чи вхід за 3 дні) — не вгадуємо."""
+    return bool(conn.execute(
+        "select 1 from devices where mac = ? and user_id != ? union all select 1 from shifts where mac = ? and user_id != ?"
+        " and status != 'closed' union all select 1 from device_history where mac = ? and user_id != ? and last_at > ? limit 1",
+        (mac, user_id, mac, user_id, mac, user_id, now() - 3 * 86400)).fetchone())
+
+
+def learn_mac(conn, user_id, key, mac, overwrite=False):
+    """MAC пристрою, підтверджений фоновою перевіркою: в історію пристрою, прив'язку і відкриту зміну з нього.
+    overwrite — пристрій щойно сам робив запит з цього IP: його MAC важливіший за старий (iPhone міг змінити адресу)."""
+    if key:
+        conn.execute("update device_history set mac = ? where user_id = ? and device_key = ? and mac is not ?", (mac, user_id, key, mac))
+        note_device(conn, user_id, key, None, mac)
+    conn.execute("update shifts set mac = ? where user_id = ? and status != 'closed' and (device is ? or device is null)"
+                 + ("" if overwrite else " and mac is null") + " and mac is not ?", (mac, user_id, key, mac))
 
 
 def presence_step():
@@ -2843,11 +2934,30 @@ def presence_step():
                 # М'який облік: активну зміну, що мовчить, перевіряємо не щопівхвилини, а раз на soft у випадковий момент.
                 # Зміну на паузі — як і раніше, щопівхвилини: людина повернулась — зміна йде далі одразу
                 cands = [c for c in cands if c["status"] != "active" or soft_due(c["id"], now(), soft)]
+            # MAC, яких бракує (17.15): запити, чий MAC ще не підтверджено, і відкриті зміни без MAC (його не встигли
+            # підтвердити або стерла кнопка «Перезаписати IP і MAC») — з адреси, з якої телефон щойно озивався,
+            # і не раніше відновлення світла (тоді роутер міг роздати IP наново)
+            t = now()
+            for ip in [ip for ip, v in _mac_pending.items() if t - v[2] > MAC_PENDING_TTL]:
+                _mac_pending.pop(ip, None)
+            pending = dict(_mac_pending)
+            blind = [dict(s) for s in conn.execute(
+                "select * from shifts where status != 'closed' and mac is null and last_seen_ip is not null and last_seen_at >= ?",
+                (max(t - BLIND_MAX_AGE, int(meta_get(conn, "outage_end", 0))),))
+                if ip_in_location(conn, s["last_seen_ip"], s["location_id"])]
         finally:
             conn.close()
-    if not cands and not starters:
+    if not cands and not starters and not pending and not blind:
         return
-    ips = {c["last_seen_ip"] for c in cands} | {ip for st in starters for ip in st["ips"]}
+    want = {}  # IP → MAC, які там шукаємо
+    for x in cands:
+        want.setdefault(x["last_seen_ip"], set()).add(x["mac"])
+    for st in starters:
+        for ip in st["ips"]:
+            want.setdefault(ip, set()).add(st["mac"])
+    for ip in [*pending, *(b["last_seen_ip"] for b in blind)]:
+        want.setdefault(ip, set())
+    ips = set(want)
     seen = lan.present(sorted(ips))  # кілька секунд — поза _lock
     where = {}
     for ip, mac in seen.items():
@@ -2867,6 +2977,15 @@ def presence_step():
             for ip, mac in lan.present(rest).items():
                 seen.setdefault(ip, mac)
                 where.setdefault(mac, ip)
+    # Хто не відповів, — ще раз (сонний iPhone): адреси, де нікого немає і чиїх телефонів не знайшли деінде (17.15)
+    late = [ip for ip in sorted(ips) if ip not in seen and not (want[ip] and want[ip] <= where.keys())]
+    for wait in PRESENCE_RETRY:
+        if not late:
+            break
+        for ip, mac in lan.present(late, wait=wait).items():
+            seen.setdefault(ip, mac)
+            where.setdefault(mac, ip)
+        late = [ip for ip in late if ip not in seen]
     if soft:  # м'який облік: чий телефон не знайшовся — далі щопівхвилини, знайшовся — знову раз на вікно
         for c in cands:
             if c["status"] == "active":
@@ -2874,6 +2993,21 @@ def presence_step():
     with _lock:
         conn = connect()
         try:
+            shared = shared_macs()
+            for ip, (uid, key, _t) in pending.items():  # пристрій щойно робив запит з цього IP — це його MAC
+                mac = seen.get(ip)
+                cur = _mac_pending.get(ip)
+                if not mac or mac in shared or (cur and cur[:2] != (uid, key)):
+                    continue  # не відповів, роутер чи підсилювач, або з цього IP тим часом прийшов інший пристрій
+                v = _visits.get(ip)
+                if v and v.get("uid") not in (None, uid):
+                    continue  # з цього IP уже заходить інша людина — не вгадуємо
+                _mac_pending.pop(ip, None)
+                learn_mac(conn, uid, key, mac, overwrite=True)
+            for b in blind:  # зміна без MAC: телефон зміни нещодавно озивався з цього IP
+                mac = seen.get(b["last_seen_ip"])
+                if mac and mac not in shared and not mac_taken(conn, b["user_id"], mac):
+                    learn_mac(conn, b["user_id"], b["device"], mac)
             for st in starters:  # телефон з'явився в мережі точки в робочий час — зміна починається сама
                 ip = where.get(st["mac"])
                 user = conn.execute("select * from users where id = ?", (st["user_id"],)).fetchone()
@@ -3708,6 +3842,8 @@ def login():
                     else:
                         adopt_device(conn, u["id"], key, fp, mac, ip)
                     note_usage(conn, u["id"], key, fp, mac)
+                    if not mac:
+                        want_mac(ip, u["id"], key)  # MAC ще не підтверджено — підтвердить фонова перевірка (17.15)
                     check_account_hopping(conn, u, key, mac, ip)
                     val = issue_remember(conn, u["id"], key, device_name(), client_ip(), fp, mac)
                     conn.commit()
@@ -3947,8 +4083,15 @@ def api_clock(action):
         mac = client_mac(client_ip(), cached_only=True)
         res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
         note_usage(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
-        if mac and res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
-            conn.execute("update shifts set mac = ? where id = ? and mac is not ?", (mac, res["shift"]["id"], mac))
+        if not mac:  # система ще не підтвердила MAC — фонова перевірка підтвердить і запише (17.15)
+            want_mac(client_ip(), current_user()["id"], key)
+        if res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
+            if mac:
+                conn.execute("update shifts set mac = ? where id = ? and mac is not ?", (mac, res["shift"]["id"], mac))
+            elif old := known_mac(conn, current_user()["id"], key):
+                # iPhone почав зміну й одразу заблокував екран: MAC ще не підтверджено — беремо вже відомий MAC цього
+                # пристрою, інакше сонний телефон зміни сервер не побачив би в мережі (17.15)
+                conn.execute("update shifts set mac = ? where id = ? and mac is null", (old, res["shift"]["id"]))
         if res.get("shift"):
             note_battery(conn, res["shift"]["id"], body)
         conn.commit()
@@ -4319,7 +4462,27 @@ def admin_devices_relearn():
         import lan
         threading.Thread(target=lan.scan, daemon=True).start()  # «Пристрої в мережі» — одразу заново
     flash(f"IP і MAC {'пристроїв ' + u['full_name'] if u else 'усіх пристроїв'} перезаписуються: сервер запише їх наново, "
-          "щойно телефони озвуться (зазвичай за хвилину)")
+          "щойно телефони озвуться (зазвичай за хвилину). Зміни, що йдуть, сервер перевірить сам за пів хвилини")
+    return redirect(_safe_back(url_for("admin", tab="live") + "#lan"))
+
+
+@app.post("/admin/devices/unshare")
+@login_required(staff=True)
+def admin_devices_unshare():
+    """«Це не роутер»: MAC помилково вважався спільним (напр., один iPhone з двома браузерами) — знову впізнає свій
+    телефон і за ним сервер бачить його в мережі. Якщо за MAC справді кілька телефонів, сервер помітить це знову (17.15)."""
+    mac = (request.form.get("mac") or "").strip().lower().replace("-", ":")
+    if MAC_RE.fullmatch(mac):
+        with _lock:
+            conn = db()
+            row = conn.execute("select note from shared_macs where mac = ?", (mac,)).fetchone()
+            conn.execute("delete from shared_macs where mac = ?", (mac,))
+            audit(conn, current_user()["id"], "DELETE", "shared_macs", None, None,
+                  {"спільний MAC": [f"{mac} ({row['note']})" if row else mac, None]})
+            conn.commit()
+        _mac_seen.pop(mac, None)
+        _shared.update(at=0.0)
+        flash(f"MAC {mac} більше не вважається спільним: телефон знову видно за ним (перевірка — за пів хвилини)")
     return redirect(_safe_back(url_for("admin", tab="live") + "#lan"))
 
 
@@ -4783,6 +4946,7 @@ def _live_payload(conn):
             "power_lost": s["power_lost_at"] if s else None,
             "device_flag": s["device_flag"] if s else None,
             "device": shift_device(conn, s) if s else None, "start_ip": s["start_ip"] if s else None,
+            "net_note": net_note(conn, s) if s else None,
         })
     counts = {k: sum(1 for r in rows if r["state"] == k) for k in LIVE_STATES}
     return {"rows": out, "counts": counts, "stats": dashboard_stats(conn), "now": now()}
@@ -4857,8 +5021,8 @@ def admin():
     if tab == "live":
         ctx["blocked_count"] = len(blocked_rows(conn))
         ctx["mac_conflicts"] = mac_conflicts(conn)
-        ctx["shared_macs"] = conn.execute("select * from shared_macs where last_at > ? order by last_at desc",
-                                          (now() - SHARED_KEEP,)).fetchall()
+        ctx["shared_macs"] = conn.execute(f"select * from shared_macs where {SHARED_ACTIVE} order by last_at desc",
+                                          shared_args()).fetchall()
         ctx["rows"] = live_monitor(conn)
         ctx["counts"] = {k: sum(1 for r in ctx["rows"] if r["state"] == k)
                          for k in LIVE_STATES}

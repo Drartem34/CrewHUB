@@ -4,7 +4,7 @@
 (посилання «код» — уся програма саме такою, якою була в цій версії) або завантажити архівом (посилання «zip» —
 GitHub збирає його сам). Локально кожна версія ще й позначена тегом (`git checkout v17.3`); на GitHub теги не
 відправились — сесії дозволено пушити лише свою гілку (з власного комп'ютера: `git push origin --tags`).
-Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_9_full.zip`),
+Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_15_full.zip`),
 звірено з git файл у файл: кожен архів — рівно цей коміт (у «повних» архівах ще лежала копія історії `.git` і зібрані
 APK). APK усіх версій — у [`releases/`](../releases/README.md). Що змінювалось докладно — [CHANGELOG.md](CHANGELOG.md).
 
@@ -22,6 +22,12 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 | **v17.7** | 2026-10-26 | 2.3 | CrewHub_v17_7_full.zip | Червона плашка «Чужий акаунт на зміні», «Перезаписати код пристрою», чужий телефон не стає «своїм». | [код](https://github.com/Drartem34/CrewHUB/tree/ae84d034fa7fef31ee73fe5abc7d933207e934ff) · [zip](https://github.com/Drartem34/CrewHUB/archive/ae84d034fa7fef31ee73fe5abc7d933207e934ff.zip) |
 | **v17.8** | 2026-10-26 | 2.3 | CrewHub_v17_8_full.zip | Новий IP після DHCP не «сліпить» автостарт, iPhone у кишені — без фантомних пауз. | [код](https://github.com/Drartem34/CrewHUB/tree/187a2f49042106223b8ad7cb53de2f5d40cfc7df) · [zip](https://github.com/Drartem34/CrewHUB/archive/187a2f49042106223b8ad7cb53de2f5d40cfc7df.zip) |
 | **v17.9** | 2026-10-26 | 2.3 | CrewHub_v17_9_full.zip | М'який облік (перевірки у випадковий момент), HTTPS у локальній мережі через Caddy. | [код](https://github.com/Drartem34/CrewHUB/tree/d6c115c4c9213e120d5298ce45aa9e9e71b1f5a4) · [zip](https://github.com/Drartem34/CrewHUB/archive/d6c115c4c9213e120d5298ce45aa9e9e71b1f5a4.zip) |
+| **v17.10** | 2026-10-27 | 2.3 | CrewHub_v17_10_full.zip | Сервер у будь-якій мережі сам каже, що її не додано в «Точки і Wi-Fi», і пропонує створити точку. | [код](https://github.com/Drartem34/CrewHUB/tree/ed310899cffd162f26bfaa93ac2dbf6c6ae7bec3) · [zip](https://github.com/Drartem34/CrewHUB/archive/ed310899cffd162f26bfaa93ac2dbf6c6ae7bec3.zip) |
+| **v17.11** | 2026-10-27 | 2.3 | CrewHub_v17_11_full.zip | Блокування пристроїв «по залізу», підозрілі пристрої (підбір пароля, різні акаунти), підтвердження номера через WhatsApp. | [код](https://github.com/Drartem34/CrewHUB/tree/2cca22842b097838edb914e82aacf9daa73ce541) · [zip](https://github.com/Drartem34/CrewHUB/archive/2cca22842b097838edb914e82aacf9daa73ce541.zip) |
+| **v17.12** | 2026-10-27 | 2.3 | CrewHub_v17_12_full.zip | Після відключення світла в двох людей однакові IP і MAC — виправлено; кнопка «Перезаписати IP і MAC». | [код](https://github.com/Drartem34/CrewHUB/tree/9b0c0424b9f9a6d059bebb89a67103f27f5eb562) · [zip](https://github.com/Drartem34/CrewHUB/archive/9b0c0424b9f9a6d059bebb89a67103f27f5eb562.zip) |
+| **v17.13** | 2026-10-27 | 2.3 | CrewHub_v17_13_full.zip | Сервер розрізняє людей з однаковими MAC і IP (підсилювач Wi-Fi, другий роутер; iPhone і Android). | [код](https://github.com/Drartem34/CrewHUB/tree/91d8fa8a3ef5fe8f543ed47c5f3a3aadac4b72b3) · [zip](https://github.com/Drartem34/CrewHUB/archive/91d8fa8a3ef5fe8f543ed47c5f3a3aadac4b72b3.zip) |
+| **v17.14** | 2026-10-27 | 2.3 | CrewHub_v17_14_full.zip | Блокування в одному місці, телефон упізнається з новими IP і MAC, Android не показується як iPhone. | [код](https://github.com/Drartem34/CrewHUB/tree/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6) · [zip](https://github.com/Drartem34/CrewHUB/archive/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6.zip) |
+| **v17.15** | 2026-10-27 | 2.3 | CrewHub_v17_15_full.zip | iPhone без застосунку не відвалюється: сервер сам підтверджує MAC, повертає його після «Перезаписати», «спільний MAC» лише з доказом. | [код](https://github.com/Drartem34/CrewHUB/tree/claude/laughing-tesla-r4ufbs) (гілка) |
 
 Застосунок — версія Android-застосунку в цій версії (`android/AndroidManifest.xml`). Ключ підпису в git
 не потрапляв ніколи (`android/crewhub.keystore` і `android/keystore.pass` — у `.gitignore`).
@@ -146,4 +152,41 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 
 ## Після 17.9
 
-Коміти після `d6c115c` (v17.9) — ця хронологія, `releases/` з APK усіх версій і подальші зміни.
+Коміти після `d6c115c` (v17.9): ця хронологія (`1be9a62`, `b3ca410`), `releases/` з APK усіх версій, далі — версії нижче.
+
+### v17.10 — Сервер у будь-якій мережі сам каже, що її не додано в «Точки і Wi-Fi», і пропонує створити точку.
+
+Коміт [`ed31089`](https://github.com/Drartem34/CrewHUB/commit/ed31089) · [код](https://github.com/Drartem34/CrewHUB/tree/ed310899cffd162f26bfaa93ac2dbf6c6ae7bec3) · архів: CrewHub_v17_10_full.zip · застосунок 2.3
+
+- `50edc93` 2026-10-27 — 17.10: сервер сам каже, що його мережу не додано в «Точки і Wi-Fi»
+- `ed31089` 2026-10-27 — 17.10: сервер у будь-якій мережі сам пропонує створити точку
+
+### v17.11 — Блокування пристроїв «по залізу», підозрілі пристрої (підбір пароля, різні акаунти), підтвердження номера через WhatsApp.
+
+Коміт [`2cca228`](https://github.com/Drartem34/CrewHUB/commit/2cca228) · [код](https://github.com/Drartem34/CrewHUB/tree/2cca22842b097838edb914e82aacf9daa73ce541) · архів: CrewHub_v17_11_full.zip · застосунок 2.3
+
+- `2cca228` 2026-10-27 — 17.11: блокування пристроїв «по залізу», підозрілі пристрої, підтвердження номера через WhatsApp
+
+### v17.12 — Після відключення світла в двох людей однакові IP і MAC — виправлено; кнопка «Перезаписати IP і MAC».
+
+Коміт [`9b0c042`](https://github.com/Drartem34/CrewHUB/commit/9b0c042) · [код](https://github.com/Drartem34/CrewHUB/tree/9b0c0424b9f9a6d059bebb89a67103f27f5eb562) · архів: CrewHub_v17_12_full.zip · застосунок 2.3
+
+- `9b0c042` 2026-10-27 — 17.12: після відключення світла в двох людей однакові IP і MAC — виправлено, «Перезаписати IP і MAC»
+
+### v17.13 — Сервер розрізняє людей з однаковими MAC і IP (підсилювач Wi-Fi, другий роутер; iPhone і Android).
+
+Коміт [`91d8fa8`](https://github.com/Drartem34/CrewHUB/commit/91d8fa8) · [код](https://github.com/Drartem34/CrewHUB/tree/91d8fa8a3ef5fe8f543ed47c5f3a3aadac4b72b3) · архів: CrewHub_v17_13_full.zip · застосунок 2.3
+
+- `47c5bd8` 2026-10-27 — 17.13: сервер розрізняє людей з однаковим MAC і IP (підсилювач Wi-Fi, другий роутер)
+- `91d8fa8` 2026-10-27 — 17.13: iPhone і Android з одним MAC — точно два різні телефони
+
+### v17.14 — Блокування в одному місці, телефон упізнається з новими IP і MAC, Android не показується як iPhone.
+
+Коміт [`eedecdd`](https://github.com/Drartem34/CrewHUB/commit/eedecdd) · [код](https://github.com/Drartem34/CrewHUB/tree/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6) · архів: CrewHub_v17_14_full.zip · застосунок 2.3
+
+- `eedecdd` 2026-10-27 — 17.14: блокування в одному місці, телефон упізнається з новими IP і MAC, Android не показується як iPhone
+
+### v17.15 — iPhone без застосунку не відвалюється: сервер сам підтверджує MAC, повертає його після «Перезаписати», «спільний MAC» лише з доказом.
+
+Останній коміт гілки `claude/laughing-tesla-r4ufbs` · архів: CrewHub_v17_15_full.zip · застосунок 2.3
+

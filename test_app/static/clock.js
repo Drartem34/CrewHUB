@@ -229,13 +229,26 @@
   if ($("ccConfirm")) $("ccConfirm").onclick = () => { $("closeConfirm").close(); call("stop"); };
   if ($("ccEdit")) $("ccEdit").onclick = () => { $("closeConfirm").close(); closeThenEdit(); };
   $("refresh").onclick = () => call("check");
-  const onVisible = () => { if (!document.hidden) call("check"); };
+  // Телефон блокують чи перемикають на іншу програму: останній пінг перед сном (keepalive — дійде, навіть коли
+  // сторінку вже заморожено). Після нього сервер встигає підтвердити MAC телефона і далі бачить сонний iPhone у Wi-Fi
+  let lastBye = 0;
+  const bye = () => {
+    if (!state || !state.shift || Date.now() - lastBye < 10000) return;
+    lastBye = Date.now();
+    try {
+      fetch("/api/clock/heartbeat", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: deviceId, fp: window.crewFingerprint ? window.crewFingerprint() : undefined }) }).catch(() => {});
+    } catch (e) {}
+  };
+  const onVisible = () => { if (!document.hidden) call("check"); else bye(); };
   document.addEventListener("visibilitychange", onVisible);
+  addEventListener("pagehide", bye);
   const ticker = setInterval(tick, 1000);
   // Перехід на іншу вкладку без перезавантаження (nav.js): прибираємо таймери цієї сторінки
   addEventListener("crewhub:leave", () => {
     alive = false; clearInterval(ticker); clearTimeout(hbTimer);
     document.removeEventListener("visibilitychange", onVisible);
+    removeEventListener("pagehide", bye);
   }, { once: true });
   call("check");
 })();
