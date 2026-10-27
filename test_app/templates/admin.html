@@ -84,6 +84,9 @@
       data-confirm="Перезаписати IP і MAC усіх пристроїв? Сервер забуде їх і запише наново, щойно телефони озвуться. Прив'язки «Телефон людини» лишаються.">
       <button class="sm" title="Після відключення світла роутер міг перемішати IP — і стара пара IP-MAC дісталась не тій людині">{{ icon('refresh', 'sm') }}Перезаписати IP і MAC</button></form>
   </div>
+  {% for m in shared_macs %}<div class="banner warn">{{ icon('wifi') }}<span>Спільний MAC <span class="mono">{{ m.mac }}</span>: за ним кілька телефонів
+    ({{ m.note }}) — мабуть, підсилювач Wi-Fi чи другий роутер. Сервер розрізняє цих людей за кодом пристрою, відбитком і акаунтом,
+    а сам MAC ігнорує. Щоб бачити MAC кожного телефона, переведіть підсилювач чи роутер у режим «точка доступу» / «міст».</span></div>{% endfor %}
   {% for c in mac_conflicts %}<div class="banner bad">{{ icon('alert') }}<span>Один MAC <span class="mono">{{ c.mac }}</span> прив'язаний до кількох людей: <b>{{ c.names }}</b>.
     Так не буває — мабуть, після відключення світла роутер перемішав IP. Натисніть «Перезаписати IP і MAC».</span></div>{% endfor %}
   {% if lan.error %}<div class="banner warn">{{ icon('alert') }}<span>{{ lan.error }}</span></div>{% endif %}
@@ -100,7 +103,8 @@
       </div>
       {% if d.user_id %}<a class="pill ok" href="{{ url_for('admin_employee', uid=d.user_id) }}">{{ d.full_name }}</a>
       {% else %}<span class="pill warn">не в CrewHub</span>{% endif %}
-      {% if d.blocked %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(None, d.mac, None, d.label) }}{% endif %}
+      {% if d.shared %}<span class="pill warn" title="За цим MAC кілька телефонів (підсилювач Wi-Fi чи роутер): за ним людей не розрізнити — сервер розрізняє їх за кодом пристрою">спільний MAC</span>
+      {% elif d.blocked %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(None, d.mac, None, d.label) }}{% endif %}
     </div>
     {% endfor %}
   </div>

@@ -268,7 +268,8 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "device_recognised": "Свій телефон упізнано", "battery_dead": "Телефон розрядився",
           "outage_credit": "Сервер не працював: час зараховано", "shift_new_device": "Зміна з нового пристрою",
           "login_failed": "Невдалий вхід", "brute_force": "Підбір пароля", "account_hopping": "Вхід у різні акаунти",
-          "blocked_device": "Заблокований пристрій", "phone_verified": "Номер підтверджено в WhatsApp"}
+          "blocked_device": "Заблокований пристрій", "phone_verified": "Номер підтверджено в WhatsApp",
+          "shared_mac": "Спільний MAC: кілька телефонів"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні».
 # 17.11: підбір пароля, вхід у різні акаунти з одного пристрою, спроба із заблокованого пристрою
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device",
@@ -326,6 +327,10 @@ create index if not exists device_history_mac on device_history(mac);
 -- блокує: в однакових телефонів він однаковий. Такий пристрій не увійде, не зареєструється і не почне зміну
 create table if not exists blocked_devices (id integer primary key, device_key text, mac text, fingerprint text,
   label text, reason text, user_id integer, created_by integer, created_at integer not null);
+-- Спільні MAC (17.13): за одним MAC кілька телефонів — підсилювач Wi-Fi підміняє MAC телефонів своїм, або другий
+-- роутер на точці ховає всі телефони за своїм IP і MAC. Такий MAC не впізнає телефон — людей розрізняємо за кодом
+-- пристрою, відбитком і акаунтом
+create table if not exists shared_macs (mac text primary key, first_at integer not null, last_at integer not null, note text);
 -- Коди підтвердження номера через WhatsApp (17.11): хеш коду, термін, спроби
 create table if not exists phone_codes (user_id integer primary key references users(id) on delete cascade,
   code_hash text not null, sent_at integer not null, expires_at integer not null, attempts integer not null default 0,
@@ -581,6 +586,10 @@ def init_db(seed=True):
     except Exception:  # noqa: BLE001 — стара база лишається на місці, сервер стартує з новою
         log.exception("Перенесення даних зі старої папки")
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+    # Кеші, що віддзеркалюють базу (спільні MAC, заблоковані пристрої): з новою базою — заново
+    _shared.update(at=0.0, set=set())
+    _mac_seen.clear()
+    _blocked["at"] = 0.0
     conn = connect()
     conn.executescript(SCHEMA)
     cols = [r[1] for r in conn.execute("pragma table_info(users)")]
@@ -918,6 +927,76 @@ MAC_TRUSTED = ("REACHABLE", "PERMANENT", "NOARP")  # стани запису, я
 
 
 def client_mac(ip, cached_only=False):
+    """MAC, за яким можна впізнавати телефон: з таблиці сусідів (neighbour_mac), але не спільний (shared_macs) —
+    за спільним MAC кілька телефонів, тож він нікого не впізнає (17.13)."""
+    mac = neighbour_mac(ip, cached_only)
+    return None if mac and mac in shared_macs() else mac
+
+
+_shared = {"at": 0.0, "set": set()}
+_mac_seen = {}  # MAC → {код пристрою: (відбиток, коли, хто)} за останні 15 хв — щоб помітити кілька пристроїв за одним MAC
+SHARED_WINDOW = 900     # с: два різні пристрої з одного MAC за цей час — MAC спільний
+SHARED_KEEP = 7 * 86400  # с: без нових доказів MAC перестає вважатись спільним
+
+
+def shared_macs():
+    """Спільні MAC (кеш на 30 с)."""
+    if time.time() - _shared["at"] > 30:
+        try:
+            c = connect()
+            try:
+                rows = c.execute("select mac from shared_macs where last_at > ?", (now() - SHARED_KEEP,)).fetchall()
+            finally:
+                c.close()
+            _shared.update(at=time.time(), set={r[0] for r in rows})
+        except sqlite3.Error:
+            pass
+    return _shared["set"]
+
+
+def different_devices(k1, fp1, k2, fp2):
+    """Чи це точно два різні фізичні пристрої. Два різні коди застосунку — так (код — одна установка на телефоні).
+    Два браузери (чи два застосунки) з різними відбитками — так. Застосунок і браузер — не відомо: це може бути
+    один телефон (у WebView і Chrome відбитки різні). Без відбитка — не відомо."""
+    if k1 == k2:
+        return False
+    if k1.startswith("app-") and k2.startswith("app-"):
+        return True
+    return bool(fp1 and fp2 and fp1 != fp2 and k1[:4] == k2[:4])
+
+
+def observe_mac(conn, user_id, key, fp, ip):
+    """Запит з пристрою key: якщо з цього ж MAC щойно (15 хв) був інший пристрій — MAC спільний. Тоді MAC
+    стирається з усіх записів (він не впізнає жоден телефон) і адмінам — пояснення (раз)."""
+    mac = neighbour_mac(ip, cached_only=True)
+    if not (mac and key):
+        return
+    t = time.time()
+    seen = {k: v for k, v in _mac_seen.get(mac, {}).items() if t - v[1] < SHARED_WINDOW}
+    other = next(((k, v) for k, v in seen.items() if different_devices(key, fp, k, v[0])), None)
+    seen[key] = (fp or (seen.get(key) or (None,))[0], t, user_id)
+    _mac_seen[mac] = seen
+    if len(_mac_seen) > 5000:
+        _mac_seen.clear()
+    if not other:
+        return
+    names = [r[0] for r in conn.execute("select full_name from users where id in (?, ?)", (user_id, other[1][2]))]
+    first = not conn.execute("select 1 from shared_macs where mac = ?", (mac,)).fetchone()
+    conn.execute("insert into shared_macs(mac, first_at, last_at, note) values (?, ?, ?, ?)"
+                 " on conflict(mac) do update set last_at = excluded.last_at", (mac, now(), now(), ", ".join(names)))
+    _shared.update(at=time.time(), set=_shared["set"] | {mac})  # діє одразу, ще до збереження в базу
+    if first:
+        for table in ("devices", "device_history", "remember_tokens", "shifts"):  # за ним кілька телефонів — не впізнає жоден
+            conn.execute(f"update {table} set mac = null where mac = ?", (mac,))
+        conn.execute("update lan_devices set user_id = null where mac = ?", (mac,))
+        log_clock(conn, None, None, "shared_mac", ip, None, True, key, {"MAC": mac, "пристрої": ", ".join(names)})
+        notify_staff(conn, "Спільний MAC: кілька телефонів",
+                     f"За MAC {mac} одночасно кілька телефонів ({', '.join(names)}) — мабуть, підсилювач Wi-Fi чи другий роутер. "
+                     "Сервер розрізняє людей за кодом пристрою й відбитком, а цей MAC ігнорує. Щоб бачити MAC кожного телефона, "
+                     "переведіть підсилювач чи роутер у режим «точка доступу» / «міст»")
+
+
+def neighbour_mac(ip, cached_only=False):
     """MAC пристрою з таблиці сусідів (ARP) сервера. Лише в локальній мережі: через роутер чи тунель MAC не видно.
     Таблицю перечитуємо не рідше раз на MAC_TTL с (новий IP — не частіше раз на 5 с). Читання таблиці на Windows —
     окрема програма `arp`, тож під _lock кличемо з cached_only=True, а свіжу таблицю беремо до блокування.
@@ -2691,8 +2770,8 @@ def presence_step():
                 "select s.* from shifts s where s.status != 'closed' and s.mac is not null and s.last_seen_ip is not null"
                 " and s.last_seen_at < ? and (s.status = 'active' or exists (select 1 from breaks b where b.shift_id = s.id"
                 " and b.ended_at is null and b.kind = 'wifi_loss'))", (now() - PRESENCE_SILENT,))
-                if not (s["status"] == "paused" and sleepy_shift(s))]
-            starters = presence_starters(conn, now())
+                if not (s["status"] == "paused" and sleepy_shift(s)) and s["mac"] not in shared_macs()]
+            starters = [st for st in presence_starters(conn, now()) if st["mac"] not in shared_macs()]
             soft = setting_int("soft_check_minutes", conn) * 60
             if soft:
                 # М'який облік: активну зміну, що мовчить, перевіряємо не щопівхвилини, а раз на soft у випадковий момент.
@@ -3548,6 +3627,8 @@ def login():
                 # «Запам'ятати мене»: один раз увійшов — далі входить сам, навіть якщо IP зміниться
                 with _lock:
                     conn = db()
+                    observe_mac(conn, u["id"], key, fp, ip)  # кілька телефонів за одним MAC — він більше не впізнає
+                    mac = client_mac(ip, cached_only=True)
                     # Пристрій не власника (телефон колеги чи невідомий) — підозріло: у журнал і сповіщення
                     if what := foreign_device(conn, u["id"], key, fp, mac):
                         flag_foreign(conn, u, key, ip, "login_other_device" if what[0] == "other" else "login_new_device", what, fp, mac)
@@ -3619,6 +3700,8 @@ def register():
                           {"registration": [None, f"{name} {format_phone(phone)}"], "ip": [None, client_ip()]})
                     # Телефон, з якого зареєструвались, стає телефоном людини: з нього вмикається автозміна
                     reg_key, reg_fp = device_key(form.get("device_id")), clean_fp(form.get("fp"))
+                    observe_mac(conn, cur.lastrowid, reg_key, reg_fp, client_ip())
+                    reg_mac = client_mac(client_ip(), cached_only=True)
                     # Телефон колеги (прив'язаний до неї чи вона з нього заходила) — не прив'язуємо: новачку його лише позичили
                     if not conn.execute("select 1 from devices where device_key = ?", (reg_key,)).fetchone() \
                             and not device_owner(conn, reg_key, reg_fp, reg_mac, other_than=cur.lastrowid):
@@ -3794,6 +3877,8 @@ def api_clock(action):
             blocked_attempt(conn, row, client_ip(), key, mac, f"зміна ({action})", current_user()["id"])
             conn.commit()
             return jsonify({"ok": False, "error": "Цей пристрій заблоковано адміністратором"}), 403
+        observe_mac(conn, current_user()["id"], key, clean_fp(body.get("fp")), client_ip())
+        mac = client_mac(client_ip(), cached_only=True)
         res = clock_action(conn, current_user(), action, client_ip(), key, body.get("kind"), body)
         note_usage(conn, current_user()["id"], key, clean_fp(body.get("fp")), mac)
         if mac and res.get("shift") and res.get("on_work_network"):  # MAC з мережі точки: за ним presence_step
@@ -4106,6 +4191,11 @@ def admin_device_block():
     if not key and not mac:
         flash("Немає ні коду пристрою, ні MAC — блокувати нічого")
         return redirect(back)
+    if mac and mac in shared_macs():
+        flash(f"MAC {mac} спільний для кількох телефонів (підсилювач чи роутер) — блокую лише за кодом пристрою")
+        mac = None
+        if not key:
+            return redirect(back)
     mine_key, mine_mac = device_key() or session.get("dev"), client_mac(client_ip(), cached_only=True)
     if (key and key == mine_key) or (mac and mac == mine_mac):
         flash("Це пристрій, з якого ви зараз працюєте, — його не можна заблокувати")
@@ -4170,7 +4260,7 @@ def mac_conflicts(conn):
     return [{"mac": r["mac"], "names": r["names"], "ids": [int(x) for x in r["ids"].split(",")]} for r in conn.execute(
         "select d.mac, group_concat(distinct u.full_name) as names, group_concat(distinct u.id) as ids from devices d"
         " join users u on u.id = d.user_id where d.mac is not null and u.status != 'dismissed'"
-        " group by d.mac having count(distinct d.user_id) > 1")]
+        " group by d.mac having count(distinct d.user_id) > 1") if r["mac"] not in shared_macs()]
 
 
 @app.post("/admin/devices/unblock/<int:bid>")
@@ -4675,6 +4765,8 @@ def admin():
     if tab == "live":
         ctx["blocked_count"] = len(blocked_rows(conn))
         ctx["mac_conflicts"] = mac_conflicts(conn)
+        ctx["shared_macs"] = conn.execute("select * from shared_macs where last_at > ? order by last_at desc",
+                                          (now() - SHARED_KEEP,)).fetchall()
         ctx["rows"] = live_monitor(conn)
         ctx["counts"] = {k: sum(1 for r in ctx["rows"] if r["state"] == k)
                          for k in LIVE_STATES}

@@ -833,5 +833,79 @@ class DhcpShuffleAfterOutageTest(ScenarioBase):
                                   self.ivan.mac)[0][0], "ivan")
 
 
+class SharedMacTest(ScenarioBase):
+    """17.13: за одним MAC кілька телефонів (другий роутер на точці — однакові IP і MAC; підсилювач Wi-Fi — однаковий MAC,
+    різні IP). Сервер помічає це сам і розрізняє людей за кодом пристрою й відбитком, а MAC ігнорує."""
+
+    def setUp(self):
+        super().setUp()
+        core._mac_seen.clear()
+        core._shared.update(at=0.0, set=set())
+        self.addCleanup(core._shared.update, at=0.0, set=set())
+        self.tick(10)
+
+    def behind(self, first, n, app=None):
+        """Телефон за тим самим роутером, що й first: той самий IP і MAC, свій код і відбиток."""
+        p = Phone(self.net, n, app=app)
+        del self.net[p.ip]
+        p.ip, p.mac = first.ip, first.mac
+        return p
+
+    def shared(self):
+        return [r[0] for r in self.sql("select mac from shared_macs")]
+
+    def test_two_phones_behind_a_router(self):
+        ivan = Phone(self.net, 60)
+        ivan.login(IVAN)
+        olha = self.behind(ivan, 61)
+        olha.login(OLHA)
+        self.assertEqual(self.shared(), [ivan.mac])
+        self.assertEqual(self.events("olha", "login_other_device"), [])  # Ольга не «на телефоні Івана»
+        self.assertEqual(self.sql("select count(*) from device_history where mac = ?", ivan.mac)[0][0], 0)  # MAC нічий
+        self.assertIn("Спільний MAC: кілька телефонів",
+                      [r[0] for r in self.sql("select n.title from notifications n join users u on u.id = n.user_id where u.username = 'admin'")])
+        # кожна людина — свій пристрій за кодом
+        keys = dict(self.sql("select u.username, h.device_key from device_history h join users u on u.id = h.user_id"))
+        self.assertEqual((keys["ivan"], keys["olha"]), (ivan.key, olha.key))
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        self.assertIn("Спільний MAC", admin.req("get", "/admin?tab=live").get_data(as_text=True))
+
+    def test_repeater_same_mac_different_ips(self):
+        a = Phone(self.net, 62, app="phonea0001")
+        a.login(IVAN)
+        b = Phone(self.net, 63, app="phoneb0001")
+        b.mac = a.mac
+        self.net[b.ip] = b
+        b.login(OLHA)
+        self.assertEqual(self.shared(), [a.mac])
+
+    def test_one_phone_two_accounts_is_not_shared(self):
+        phone = Phone(self.net, 64)
+        phone.login(IVAN)
+        phone.logout()
+        phone.login(OLHA)  # той самий браузер — той самий код: це один телефон
+        self.assertEqual(self.shared(), [])
+        self.assertEqual(len(self.events("olha", "login_other_device")), 1)  # і далі «чужий акаунт»
+
+    def test_app_and_browser_on_one_phone_is_not_shared(self):
+        web = Phone(self.net, 65)
+        web.login(IVAN)
+        app = self.behind(web, 66, app="ivanapp001")
+        app.login(IVAN)
+        self.assertEqual(self.shared(), [])
+
+    def test_shared_mac_is_not_blocked(self):
+        ivan = Phone(self.net, 67)
+        ivan.login(IVAN)
+        self.behind(ivan, 68).login(OLHA)
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        page = admin.req("get", "/admin?tab=logs").get_data(as_text=True)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        admin.req("post", "/admin/devices/block", data={"csrf": csrf, "mac": ivan.mac}, headers={"Origin": "http://localhost"})
+        self.assertEqual(self.sql("select count(*) from blocked_devices")[0][0], 0)  # заблокувало б усіх за роутером
+        admin.req("post", "/admin/devices/block", data={"csrf": csrf, "mac": ivan.mac, "device_key": ivan.key}, headers={"Origin": "http://localhost"})
+        self.assertEqual(tuple(self.sql("select device_key, mac from blocked_devices")[0]), (ivan.key, None))
+
+
 if __name__ == "__main__":
     unittest.main()

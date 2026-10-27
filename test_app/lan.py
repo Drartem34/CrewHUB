@@ -460,7 +460,8 @@ def record(conn, seen, names):
     dev_macs = {}
     for r in conn.execute("select mac, user_id from devices where mac is not null union all select mac, user_id from"
                           " device_history where mac is not null and phone = 1 and last_at > ? order by 1", (t - 3 * 86400,)):
-        dev_macs.setdefault(r["mac"], r["user_id"])
+        if r["mac"] not in core.shared_macs():  # за спільним MAC кілька телефонів — він нічий
+            dev_macs.setdefault(r["mac"], r["user_id"])
     vend = vendors(seen.values())
     with core._lock:
         for ip, mac in seen.items():
@@ -490,7 +491,7 @@ def devices(conn):
     out = []
     for r in rows:
         out.append({**dict(r), "online": r["last_seen"] >= fresh, "private": private_mac(r["mac"]),
-                    "blocked": bool(core.device_blocked(conn, None, r["mac"])),
+                    "blocked": bool(core.device_blocked(conn, None, r["mac"])), "shared": r["mac"] in core.shared_macs(),
                     "label": r["name"] or r["model"] or r["vendor"] or ("Телефон чи ноутбук" if private_mac(r["mac"]) else "Невідомий пристрій")})
     return out
 
