@@ -599,6 +599,9 @@ def init_db(seed=True):
         conn.execute("alter table users add column folder text")
     if "whatsapp" not in cols:
         conn.execute("alter table users add column whatsapp text")
+    if "model" not in [r[1] for r in conn.execute("pragma table_info(device_history)")]:
+        # модель пристрою з його власного User-Agent (17.14): «iPhone», «samsung SM-A515F» — не з того, хто заходив з того ж IP
+        conn.execute("alter table device_history add column model text")
     if "phone_verified_at" not in cols:  # коли номер підтверджено кодом у WhatsApp (17.11)
         conn.execute("alter table users add column phone_verified_at integer")
     if "grant_until" not in [r[1] for r in conn.execute("pragma table_info(requests)")]:
@@ -1078,15 +1081,17 @@ def note_usage(conn, user_id, key, fp=None, mac=None, phone=None, ip=None):
         return
     t = now()
     ip = ip or (client_ip() if has_request_context() else None)
-    conn.execute("insert into device_history(user_id, device_key, mac, fingerprint, phone, last_ip, first_at, last_at)"
-                 " values (?, ?, ?, ?, ?, ?, ?, ?) on conflict(user_id, device_key) do update set last_at = excluded.last_at,"
+    model = request_model()
+    conn.execute("insert into device_history(user_id, device_key, mac, fingerprint, phone, last_ip, first_at, last_at, model)"
+                 " values (?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict(user_id, device_key) do update set last_at = excluded.last_at,"
                  " last_ip = coalesce(excluded.last_ip, device_history.last_ip),"
                  " mac = coalesce(excluded.mac, device_history.mac), fingerprint = coalesce(excluded.fingerprint, device_history.fingerprint),"
-                 " phone = max(device_history.phone, excluded.phone)"
+                 " phone = max(device_history.phone, excluded.phone), model = coalesce(excluded.model, device_history.model)"
                  " where device_history.last_at < excluded.last_at - 300 or device_history.mac is not coalesce(excluded.mac, device_history.mac)"
                  " or device_history.fingerprint is not coalesce(excluded.fingerprint, device_history.fingerprint)"
-                 " or device_history.phone < excluded.phone or device_history.last_ip is not coalesce(excluded.last_ip, device_history.last_ip)",
-                 (user_id, key, mac, fp, int(is_phone() if phone is None else phone), ip, t, t))
+                 " or device_history.phone < excluded.phone or device_history.last_ip is not coalesce(excluded.last_ip, device_history.last_ip)"
+                 " or device_history.model is not coalesce(excluded.model, device_history.model)",
+                 (user_id, key, mac, fp, int(is_phone() if phone is None else phone), ip, t, t, model))
     note_device(conn, user_id, key, fp, mac)
 
 
@@ -1161,16 +1166,47 @@ def adopt_device(conn, user_id, key, fp, mac, ip=None):
     """Свій телефон з новим кодом (очистили браузер, перевстановили застосунок): MAC і відбиток збіглися з
     прив'язаним телефоном людини — переносимо прив'язку на новий код, щоб автозміна впізнавала телефон і далі.
     Лише після входу з паролем і лише в межах одного виду (застосунок → застосунок, браузер → браузер)."""
-    if not (key and fp and mac) or conn.execute("select 1 from devices where device_key = ?", (key,)).fetchone():
+    if not (key and fp) or conn.execute("select 1 from devices where device_key = ?", (key,)).fetchone():
         return False
-    row = conn.execute("select id, device_key from devices where user_id = ? and fingerprint = ? and mac = ?"
-                       " order by last_seen_at desc limit 1", (user_id, fp, mac)).fetchone()
+    row = mac and conn.execute("select id, device_key from devices where user_id = ? and fingerprint = ? and mac = ?"
+                               " order by last_seen_at desc limit 1", (user_id, fp, mac)).fetchone()
+    if not row and (old := own_by_fingerprint(conn, user_id, key, fp)):
+        # MAC змінився чи невідомий (iPhone міняє «приватну адресу», інший роутер): той самий відбиток і модель,
+        # і відбиток лише в цієї людини (17.14)
+        row = conn.execute("select id, device_key from devices where user_id = ? and device_key = ?", (user_id, old)).fetchone()
     if not row or row["device_key"][:4] != key[:4]:
         return False
     conn.execute("update devices set device_key = ?, last_ip = coalesce(?, last_ip), last_seen_at = ? where id = ?",
                  (key, ip, now(), row["id"]))
-    log_clock(conn, user_id, None, "device_recognised", ip, None, True, key, {"був код": row["device_key"], "MAC": mac})
+    log_clock(conn, user_id, None, "device_recognised", ip, None, True, key,
+              {"був код": row["device_key"], **({"MAC": mac} if mac else {"упізнано": "за відбитком і моделлю"})})
     return True
+
+
+def request_model():
+    """Модель пристрою, що робить цей запит, з його User-Agent: «iPhone», «samsung SM-A515F», «Android», «Windows ПК»."""
+    if not has_request_context():
+        return None
+    import lan
+    return lan.ua_info(request.headers.get("User-Agent"))[0]
+
+
+def own_by_fingerprint(conn, user_id, key, fp):
+    """Свій пристрій, у якого змінились і код (Safari сам чистить дані сайту, перевстановили застосунок), і MAC
+    (iPhone міняє «приватну адресу Wi-Fi», роутер — IP): той самий відбиток і та сама модель, що в пристрою цієї
+    людини того ж виду (браузер — браузер, застосунок — застосунок). Лише якщо цього відбитка немає в інших людей:
+    в однакових телефонів він однаковий, і тоді за ним не відрізнити свій від чужого (17.14). Повертає код того
+    пристрою або None."""
+    if not (key and fp):
+        return None
+    if conn.execute("select 1 from device_history where fingerprint = ? and user_id != ? limit 1", (fp, user_id)).fetchone():
+        return None
+    model = request_model()
+    for r in conn.execute("select device_key, model from device_history where user_id = ? and fingerprint = ? and device_key != ?"
+                          " order by last_at desc", (user_id, fp, key)):
+        if r["device_key"][:4] == key[:4] and (not model or not r["model"] or same_model(model, r["model"])):
+            return r["device_key"]
+    return None
 
 
 def device_name():
@@ -1201,6 +1237,8 @@ def foreign_device(conn, user_id, key, fp=None, mac=None):
     for table in ("devices", "device_history"):
         if conn.execute(f"select 1 from {table} x where x.user_id = ? and ({where.format(key='device_key')})", (user_id, *args)).fetchone():
             return None  # свій (у т. ч. той самий телефон з новим кодом після очищення браузера)
+    if own_by_fingerprint(conn, user_id, key, fp):
+        return None  # свій телефон: новий код і новий MAC, але той самий відбиток і модель (17.14)
     known = mine + [r[0] for r in conn.execute("select device_key from device_history where user_id = ? and phone = 1", (user_id,))]
     if known and key and not (key.startswith("app-") and all(k.startswith("web-") for k in known)):
         return "new", None  # (зареєструвався в браузері, а тепер увійшов у застосунку — це той самий телефон)
@@ -4212,6 +4250,9 @@ def admin_device_block():
     акаунт, зареєструватись чи почати зміну; хто вже в акаунті з нього — вилітає на наступній сторінці."""
     f = request.form
     back = _safe_back(url_for("admin", tab="logs"))
+    pick = (f.get("pick") or "").split("|", 3) if f.get("pick") else None  # зі списку: код|MAC|людина|назва
+    if pick and len(pick) == 4:
+        f = {**f.to_dict(), "device_key": pick[0], "mac": pick[1], "user_id": pick[2], "label": pick[3]}
     key = (f.get("device_key") or "").strip()[:80] or None
     key = key if key and re.fullmatch(r"[\w .:-]{4,80}", key) else None
     mac = (f.get("mac") or "").strip().lower().replace("-", ":") or None
@@ -4280,6 +4321,29 @@ def admin_devices_relearn():
     flash(f"IP і MAC {'пристроїв ' + u['full_name'] if u else 'усіх пристроїв'} перезаписуються: сервер запише їх наново, "
           "щойно телефони озвуться (зазвичай за хвилину)")
     return redirect(_safe_back(url_for("admin", tab="live") + "#lan"))
+
+
+def block_candidates(conn):
+    """Список «виберіть пристрій» для блокування: спершу підозрілі за 3 дні (підбір пароля, різні акаунти), далі
+    пристрої людей за 30 днів — з ім'ям, моделлю, кодом і MAC. Уже заблоковані не показуємо."""
+    out, seen, t = [], set(), now()
+    shared = shared_macs()
+
+    def add(key, mac, uid, label):
+        mac = mac if mac and mac not in shared else None
+        if (not key and not mac) or (key, mac) in seen or device_blocked(conn, key, mac):
+            return
+        seen.add((key, mac))
+        tail = " · ".join(x for x in (f"код {key}" if key else None, f"MAC {mac}" if mac else None) if x)
+        out.append({"value": f"{key or ''}|{mac or ''}|{uid or ''}|{label.replace('|', '/')[:80]}", "label": f"{label} · {tail}"})
+    for r in conn.execute("select event, device, details, ip, created_at from conn_log where event in ('brute_force', 'account_hopping')"
+                          " and created_at > ? order by id desc limit 30", (t - 3 * 86400,)):
+        d = json.loads(r["details"]) if r["details"] else {}
+        add(r["device"], d.get("MAC"), None, f"⚠ {EVENTS[r['event']]}: {d.get('пристрій') or 'пристрій'} (IP {r['ip']})")
+    for r in conn.execute("select h.device_key, h.mac, h.model, h.phone, h.user_id, u.full_name from device_history h"
+                          " join users u on u.id = h.user_id where h.last_at > ? order by u.full_name, h.last_at desc limit 300", (t - 30 * 86400,)):
+        add(r["device_key"], r["mac"], r["user_id"], f"{r['full_name']} — {r['model'] or ('телефон' if r['phone'] else 'комп' + chr(39) + 'ютер')}")
+    return out
 
 
 def mac_conflicts(conn):
@@ -4848,6 +4912,7 @@ def admin():
             x["count"] += 1
         ctx["unknown"] = list(unknown.values())[:10]
     elif tab == "logs":
+        ctx["block_candidates"] = block_candidates(conn)
         ctx["blocked"] = conn.execute(
             "select b.*, x.full_name as actor, o.full_name as owner from blocked_devices b left join users x on x.id = b.created_by"
             " left join users o on o.id = b.user_id order by b.id desc").fetchall()

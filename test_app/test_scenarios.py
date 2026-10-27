@@ -724,7 +724,11 @@ class DeviceSecurityTest(ScenarioBase):
         live = self.admin.req("get", "/admin?tab=live").get_data(as_text=True)
         security = live.split("<h3>Безпека сьогодні</h3>")[1]
         self.assertIn("Підбір пароля", security)
-        self.assertIn(f'name="mac" value="{bad.mac}"', security)  # кнопка «Заблокувати» з MAC цього пристрою
+        # 17.14: кнопки «Заблокувати» біля подій немає — блокують в одному місці, «Підключення» → «Заблоковані пристрої»,
+        # і цей пристрій там першим у списку
+        self.assertNotIn("/admin/devices/block", security.split('id="lan"')[0])
+        logs = self.admin.req("get", "/admin?tab=logs").get_data(as_text=True)
+        self.assertIn(f"{bad.key}|{bad.mac}||⚠ Підбір пароля", logs)
 
     def test_many_accounts_from_one_device(self):
         with core.connect() as c:
@@ -947,6 +951,84 @@ class SharedMacTest(ScenarioBase):
         self.assertEqual(self.sql("select count(*) from blocked_devices")[0][0], 0)  # заблокувало б усіх за роутером
         admin.req("post", "/admin/devices/block", data={"csrf": csrf, "mac": ivan.mac, "device_key": ivan.key}, headers={"Origin": "http://localhost"})
         self.assertEqual(tuple(self.sql("select device_key, mac from blocked_devices")[0]), (ivan.key, None))
+
+
+class DeviceIdentity1714Test(ScenarioBase):
+    """17.14: блокування — в одному місці; свій телефон упізнається, навіть коли змінились і код, і MAC;
+    «Пристрої в мережі» не видають Android за iPhone за спільним MAC."""
+    IPHONE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+              "Version/17.4 Mobile/15E148 Safari/604.1")
+
+    def setUp(self):
+        super().setUp()
+        self.admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+
+    def test_block_buttons_moved_to_one_place(self):
+        phone = Phone(self.net, 80)
+        phone.login(IVAN)
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        self.assertNotIn("/admin/devices/block", self.admin.req("get", f"/admin/employee/{uid}").get_data(as_text=True))
+        self.assertNotIn("/admin/devices/block", self.admin.req("get", "/admin?tab=live").get_data(as_text=True))
+        logs = self.admin.req("get", "/admin?tab=logs").get_data(as_text=True)
+        self.assertIn("— виберіть пристрій —", logs)
+        pick = re.search(r'<option value="([^"]*' + re.escape(phone.key) + r'[^"]*)">Іван Петренко', logs)[1]
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', logs)[1]
+        self.admin.req("post", "/admin/devices/block", data={"csrf": csrf, "pick": pick.replace("&#39;", "'")},
+                       headers={"Origin": "http://localhost"})
+        self.assertEqual(tuple(self.sql("select device_key, user_id from blocked_devices")[0]), (phone.key, uid))
+
+    def test_iphone_new_code_and_new_mac_still_his(self):
+        iphone = Phone(self.net, 81, ua=self.IPHONE)
+        iphone.login(IVAN)
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.connect() as c:
+            core.remember_device(c, uid, iphone.key, iphone.ip)
+            core.note_device(c, uid, iphone.key, iphone.fp, iphone.mac)
+            c.commit()
+        self.assertEqual(self.sql("select model from device_history where device_key = ?", iphone.key)[0][0], "iPhone")
+        iphone.logout()
+        # Safari сам почистив дані сайту (новий код), iPhone змінив «приватну адресу Wi-Fi» (новий MAC) і отримав новий IP
+        del self.net[iphone.ip]
+        iphone.key, iphone.ip, iphone.mac = "web-0000f00d", "192.168.1.181", "da:00:00:00:01:81"
+        self.net[iphone.ip] = iphone
+        iphone.login(IVAN)
+        self.assertEqual(self.events("ivan", "login_new_device"), [])
+        self.assertEqual(self.sql("select device_key from devices where user_id = ?", uid)[0][0], "web-0000f00d")  # прив'язка перейшла
+        self.assertTrue(self.events("ivan", "device_recognised"))
+
+    def test_same_model_twins_are_not_guessed(self):
+        # Такий самий відбиток є в колеги (однакові iPhone) — за відбитком не вгадуємо: новий пристрій
+        olha_phone = Phone(self.net, 82, ua=self.IPHONE)
+        iphone = Phone(self.net, 83, ua=self.IPHONE)
+        olha_phone.fp = iphone.fp
+        olha_phone.login(OLHA)
+        iphone.login(IVAN)
+        uid = self.sql("select id from users where username = 'ivan'")[0][0]
+        with core.connect() as c:
+            core.remember_device(c, uid, iphone.key, iphone.ip)
+            c.commit()
+        iphone.logout()
+        iphone.key, iphone.mac = "web-0000beef", "da:00:00:00:01:83"
+        self.net[iphone.ip] = iphone
+        iphone.login(IVAN)
+        self.assertEqual(len(self.events("ivan", "login_new_device")), 1)
+
+    def test_shared_mac_row_is_a_router_not_an_iphone(self):
+        core._mac_seen.clear()
+        iphone = Phone(self.net, 84, ua=self.IPHONE)
+        iphone.login(IVAN)
+        android = Phone(self.net, 85, model="SM-A515F")
+        del self.net[android.ip]
+        android.ip, android.mac = iphone.ip, iphone.mac
+        android.login(OLHA)
+        with core.connect() as c:
+            lan.record(c, {iphone.ip: iphone.mac}, {})
+            rows = lan.devices(c)
+        row = [r for r in rows if r["mac"] == iphone.mac][0]
+        self.assertEqual(row["label"], "Роутер чи підсилювач Wi-Fi (спільний MAC)")
+        self.assertIsNone(row["user_id"])
+        self.assertIn("Іван Петренко (iPhone)", row["model"])
+        self.assertIn("Ольга Коваль (SM-A515F)", row["model"])
 
 
 if __name__ == "__main__":

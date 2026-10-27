@@ -36,6 +36,12 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
+## Що нового у версії 17.14: блокування в одному місці, впізнавання з новими IP і MAC
+
+- `block_candidates()` + вибір `pick` у `admin_device_block`; макрос `block_btn` більше ніде не використовується.
+- `own_by_fingerprint()` у `foreign_device` і `adopt_device`; `device_history.model`, `request_model()`.
+- `lan.devices()`: спільний MAC — «Роутер чи підсилювач» і хто за ним (з `_mac_seen`).
+
 ## Що нового у версії 17.13: спільний MAC (підсилювач, другий роутер)
 
 - `shared_macs` (таблиця) + `shared_macs()` (кеш 30 с), `observe_mac()`, `different_devices()`; `client_mac()` = не спільний

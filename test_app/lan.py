@@ -465,7 +465,9 @@ def record(conn, seen, names):
     vend = vendors(seen.values())
     with core._lock:
         for ip, mac in seen.items():
-            v = visits.get(ip)
+            # За спільним MAC (роутер чи підсилювач) кілька телефонів: модель і людину з останнього візиту з цього IP
+            # не беремо — інакше Android показувався б як iPhone того, хто відкрив сайт останнім (17.14)
+            v = visits.get(ip) if mac not in core.shared_macs() else None
             model, phone_name = ua_info(v["ua"]) if v else (None, None)
             uid = (v or {}).get("uid") or dev_macs.get(mac)
             name = phone_name or names.get(ip)
@@ -489,7 +491,18 @@ def devices(conn):
     rows = conn.execute("select ld.*, u.full_name, u.status as user_status from lan_devices ld left join users u on u.id = ld.user_id"
                         " order by ld.last_seen >= ? desc, ld.user_id is null desc, ld.last_seen desc limit 200", (fresh,)).fetchall()
     out = []
+    shared = core.shared_macs()
     for r in rows:
+        if r["mac"] in shared:  # роутер чи підсилювач: хто за ним — з останніх запитів (код пристрою, модель)
+            behind = []
+            for k, v in core._mac_seen.get(r["mac"], {}).items():
+                u = conn.execute("select full_name from users where id = ?", (v[2],)).fetchone() if v[2] else None
+                h = conn.execute("select model from device_history where device_key = ? and model is not null limit 1", (k,)).fetchone()
+                behind.append(f"{u['full_name'] if u else '?'} ({h['model'] if h else 'пристрій'})")
+            out.append({**dict(r), "online": r["last_seen"] >= fresh, "private": private_mac(r["mac"]), "blocked": False,
+                        "shared": True, "user_id": None, "label": "Роутер чи підсилювач Wi-Fi (спільний MAC)",
+                        "model": ("за ним: " + ", ".join(behind)) if behind else "за ним кілька телефонів", "vendor": None})
+            continue
         out.append({**dict(r), "online": r["last_seen"] >= fresh, "private": private_mac(r["mac"]),
                     "blocked": bool(core.device_blocked(conn, None, r["mac"])), "shared": r["mac"] in core.shared_macs(),
                     "label": r["name"] or r["model"] or r["vendor"] or ("Телефон чи ноутбук" if private_mac(r["mac"]) else "Невідомий пристрій")})

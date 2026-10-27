@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_ui.html" import icon, avatar, empty, month_nav, bars, block_btn with context %}
+{% from "_ui.html" import icon, avatar, empty, month_nav, bars with context %}
 {% block title %}{{ u.full_name }}{% endblock %}
 {% block actions %}
   <a class="btn sm" href="{{ url_for('admin', tab='employees') }}">{{ icon('left', 'sm') }}<span class="hide-mobile">Усі працівники</span></a>
@@ -49,7 +49,7 @@
         <div class="grow"><b>{{ d.name or 'Пристрій' }}</b><div class="muted small">прив'язано {{ d.created_at|dt }} · IP тоді {{ d.first_ip or '?' }}{% if d.last_seen_at %} · востаннє {{ d.last_seen_at|dt }}, IP {{ d.last_ip }}{% endif %}</div>
           <div class="muted small mono">код {{ d.device_key }}{% if d.mac %} · MAC {{ d.mac }}{% endif %}{% if d.fingerprint %} · відбиток {{ d.fingerprint }}{% endif %}</div></div>
         <form method="post" action="{{ url_for('admin_device_delete', uid=u.id, did=d.id) }}" data-confirm="Відв'язати {{ d.name or 'пристрій' }}? Наступний телефон, з якого прийде автопінг, прив'яжеться сам."><button class="sm">{{ icon('x', 'sm') }}Відв'язати</button></form>
-        {% if d.device_key in blocked_keys or (d.mac and d.mac in blocked_macs) %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(d.device_key, d.mac, d.fingerprint, d.name, u.id) }}{% endif %}
+        {% if d.device_key in blocked_keys or (d.mac and d.mac in blocked_macs) %}<span class="pill bad">заблоковано</span>{% endif %}
       </div>
       {% else %}<div class="muted small">Ще не прив'язано. Телефон запам'ятається під час реєстрації або з першого автопінгу з робочого Wi-Fi.</div>{% endfor %}
       {% for c in mac_conflict %}<div class="banner bad small" style="margin-top:8px">{{ icon('alert', 'sm') }}<span>Цей MAC <span class="mono">{{ c.mac }}</span> прив'язаний і до інших: <b>{{ c.names }}</b>.
@@ -74,12 +74,12 @@
         Якщо це насправді її телефон (напр., застосунок налаштовував керівник) — «Прив'язати»; не її і більше не знадобиться — «Забути».</div>
       {% for h in device_history %}
       <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
-        <div class="grow"><b>{{ 'Телефон' if h.phone else "Комп'ютер / інше" }}</b>{% if h.owner %} <span class="pill bad">чужий: {{ h.owner.full_name }}</span>{% endif %}
+        <div class="grow"><b>{{ h.model or ('Телефон' if h.phone else "Комп'ютер / інше") }}</b>{% if h.owner %} <span class="pill bad">чужий: {{ h.owner.full_name }}</span>{% endif %}
           <div class="muted small">уперше {{ h.first_at|dt }} · востаннє {{ h.last_at|dt }}{% if h.last_ip %}, IP {{ h.last_ip }}{% endif %}</div>
           <div class="muted small mono">код {{ h.device_key }}{% if h.mac %} · MAC {{ h.mac }}{% endif %}{% if h.fingerprint %} · відбиток {{ h.fingerprint }}{% endif %}</div></div>
         <form method="post" action="{{ url_for('admin_device_history', uid=u.id, hid=h.id, action='bind') }}" data-confirm="Прив'язати цей пристрій як телефон {{ u.full_name }}?"><button class="sm">{{ icon('check', 'sm') }}Прив'язати</button></form>
         <form method="post" action="{{ url_for('admin_device_history', uid=u.id, hid=h.id, action='forget') }}"><button class="sm">{{ icon('x', 'sm') }}Забути</button></form>
-        {% if h.device_key in blocked_keys or (h.mac and h.mac in blocked_macs) %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(h.device_key, h.mac, h.fingerprint, ('Телефон' if h.phone else "Комп'ютер") ~ ' (' ~ u.full_name ~ ')', u.id) }}{% endif %}
+        {% if h.device_key in blocked_keys or (h.mac and h.mac in blocked_macs) %}<span class="pill bad">заблоковано</span>{% endif %}
       </div>
       {% endfor %}{% endif %}
     </div>

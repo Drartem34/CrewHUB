@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_ui.html" import icon, avatar, person, state_pill, req_pill, empty, month_nav, bars, week_table, month_table, STATE_LABELS, block_btn with context %}
+{% from "_ui.html" import icon, avatar, person, state_pill, req_pill, empty, month_nav, bars, week_table, month_table, STATE_LABELS with context %}
 {% block title %}{{ {'live': 'Огляд', 'employees': 'Працівники', 'requests': 'Запити', 'schedule': 'Графік змін', 'zones': 'Точки і Wi-Fi', 'logs': 'Журнал підключень', 'audit': 'Журнал редагувань', 'payroll': 'Зарплата', 'settings': 'Правила компанії'}[tab] }}{% endblock %}
 {% block actions %}
   {% if tab in ('employees', 'payroll') and me.role == 'admin' %}<button class="sm" data-dialog="rateDlg">{{ icon('wallet', 'sm') }}<span class="hide-mobile">Загальна ставка</span></button>{% endif %}
@@ -68,9 +68,9 @@
       {% for x in stats.suspicious %}
       <div class="banner bad" style="margin:10px 0 0;flex-wrap:wrap">{{ icon('alert') }}<div style="flex:1 1 200px"><b>{{ x.full_name or x.dev_label or 'Невідомий пристрій' }}</b> · {{ EVENTS.get(x.event, x.event) }}, {{ x.created_at|tm }}
         <div class="small">{{ x.details|logdetails }}{% if x.ip %} · IP {{ x.ip }}{% endif %}</div></div>
-        {% if x.event != 'blocked_device' and not x.blocked %}{{ block_btn(x.device, x.mac, None, x.dev_label) }}{% endif %}</div>
+        {% if x.blocked %}<span class="pill bad">заблоковано</span>{% endif %}</div>
       {% endfor %}
-      {% if blocked_count %}<div class="muted small" style="margin-top:8px">Заблоковано пристроїв: {{ blocked_count }} · <a href="{{ url_for('admin', tab='logs') }}#blocked">керувати</a></div>{% endif %}
+      <div class="muted small" style="margin-top:8px">{% if blocked_count %}Заблоковано пристроїв: {{ blocked_count }} · {% endif %}<a href="{{ url_for('admin', tab='logs') }}#blocked">Заблокувати пристрій</a> — у «Підключеннях»</div>
     </div>
   </div>
 </div>
@@ -104,7 +104,7 @@
       {% if d.user_id %}<a class="pill ok" href="{{ url_for('admin_employee', uid=d.user_id) }}">{{ d.full_name }}</a>
       {% else %}<span class="pill warn">не в CrewHub</span>{% endif %}
       {% if d.shared %}<span class="pill warn" title="За цим MAC кілька телефонів (підсилювач Wi-Fi чи роутер): за ним людей не розрізнити — сервер розрізняє їх за кодом пристрою">спільний MAC</span>
-      {% elif d.blocked %}<span class="pill bad">заблоковано</span>{% else %}{{ block_btn(None, d.mac, None, d.label) }}{% endif %}
+      {% elif d.blocked %}<span class="pill bad">заблоковано</span>{% endif %}
     </div>
     {% endfor %}
   </div>
@@ -350,6 +350,18 @@
 <div class="card" id="blocked">
   <div class="card-head"><h3>{{ icon('shield') }} Заблоковані пристрої · {{ blocked|length }}</h3>
     <span class="muted small">блокування «по залізу»: за MAC і кодом пристрою, а не за акаунтом</span></div>
+  <form method="post" action="{{ url_for('admin_device_block') }}" class="row" style="flex-wrap:wrap;margin-bottom:12px"
+    data-confirm="Заблокувати вибраний пристрій? З нього не можна буде увійти в жоден акаунт, зареєструватись чи почати зміну, доки не розблокуєте.">
+    <input type="hidden" name="back" value="{{ url_for('admin', tab='logs') }}#blocked">
+    <select name="pick" style="flex:1 1 340px">
+      <option value="">— виберіть пристрій —</option>
+      {% for c in block_candidates %}<option value="{{ c.value }}">{{ c.label }}</option>{% endfor %}
+    </select>
+    <input name="device_key" placeholder="або код пристрою" style="flex:0 1 170px" autocomplete="off">
+    <input name="mac" placeholder="або MAC" style="flex:0 1 150px" autocomplete="off">
+    <input name="reason" placeholder="Причина (необов'язково)" style="flex:1 1 180px">
+    <button class="danger">{{ icon('x', 'sm') }}Заблокувати</button>
+  </form>
   {% for b in blocked %}
   <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
     <div class="grow" style="flex:1 1 240px"><b>{{ b.label or 'Пристрій' }}</b>{% if b.owner %} <span class="muted small">· {{ b.owner }}</span>{% endif %}
@@ -358,8 +370,7 @@
     <form method="post" action="{{ url_for('admin_device_unblock', bid=b.id) }}" data-confirm="Розблокувати {{ b.label or b.device_key or b.mac }}?">
       <button class="sm">{{ icon('check', 'sm') }}Розблокувати</button></form>
   </div>
-  {% else %}<div class="muted small">Немає. Заблокувати пристрій можна в «Огляді» → «Безпека сьогодні» (біля підозрілої події),
-    у «Пристроях у мережі» або в картці працівника — біля його пристроїв.</div>{% endfor %}
+  {% else %}<div class="muted small">Немає заблокованих. Підозрілі пристрої (підбір пароля, вхід у різні акаунти) — першими в списку вище.</div>{% endfor %}
 </div>
 <div class="card">
   <div class="card-head"><div class="segmented">
