@@ -36,6 +36,12 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
+## Що нового у версії 17.16: безкоштовне підтвердження номера через Telegram
+
+- `tg_api()`, `telegram_on()`, `telegram_check()` (getMe + deleteWebhook), `new_tg_link()` / `tg_links`, `tg_handle()`,
+  `telegram_step()` (фон «telegram», getUpdates довгим опитуванням, лише поки є посилання, що чекають), `tg_state()`.
+- Маршрути: `/register/telegram/<код>`, `/me/phone/telegram`, `/admin/telegram/test`; токен — `meta.telegram_token`.
+
 ## Що нового у версії 17.15: iPhone без застосунку не відвалюється і видно в мережі без сайту
 
 - `want_mac()` / `_mac_pending` → `presence_step` підтверджує MAC стуком і записує `learn_mac()`; `known_mac()` — зміна

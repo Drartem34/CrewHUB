@@ -13,7 +13,7 @@
   {% for p in pending_users %}
   <form method="post" action="{{ url_for('admin_registration', uid=p.id, decision='approve') }}" class="row" style="padding:10px 0;border-bottom:1px solid var(--line)">
     {{ person(p, (p.phone|phone) ~ ' · ' ~ (p.hire_date or '') ~ ((' · ' ~ p.device) if p.device else '')) }}
-    {% if p.phone_verified_at %}<span class="pill ok" title="Код з WhatsApp введено {{ p.phone_verified_at|dt }}">✓ номер підтверджено</span>
+    {% if p.phone_verified_at %}<span class="pill ok" title="Номер підтверджено (Telegram чи WhatsApp) {{ p.phone_verified_at|dt }}">✓ номер підтверджено</span>
     {% elif wa_verify %}<span class="pill warn" title="Код з WhatsApp не введено">номер не підтверджено</span>{% endif %}<span class="spacer"></span>
     <input name="job_title" placeholder="Посада" style="flex:1 1 120px;max-width:170px">
     <select name="location_id" style="flex:1 1 120px;max-width:170px">{% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
@@ -524,6 +524,23 @@
   <div class="card">
     <div class="card-head"><h3>{{ icon('shield') }} Дисципліна і доступ</h3></div>
     <label class="check"><input type="checkbox" name="registration_open" {{ 'checked' if settings.registration_open == '1' }}>Дозволити самостійну реєстрацію (з підтвердженням)</label>
+    <div id="telegram" style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px">
+      <label class="check"><input type="checkbox" name="telegram_verify" {{ 'checked' if settings.telegram_verify == '1' }}><span><b>Підтверджувати номер через Telegram — безкоштовно.</b>
+        Після реєстрації людина відкриває вашого бота і натискає «Поділитися номером»: Telegram сам надсилає номер її акаунта (він підтверджений SMS),
+        і сервер звіряє його з номером у заявці. Потрібен лише інтернет на сервері. Бота створює @BotFather за хвилину — див. docs/14-telegram.md</span></label>
+      {% if settings.telegram_verify == '1' and not tg_bot %}<div class="banner warn small" style="margin:8px 0 0">{{ icon('alert', 'sm') }}Не налаштовано: вставте токен бота і натисніть «Перевірити бота» — поки що реєстрація йде без підтвердження{% if settings.whatsapp_verify == '1' %} (або через WhatsApp){% endif %}</div>{% endif %}
+      <div class="form-grid" style="margin-top:8px">
+        <div class="full"><label>Токен бота від @BotFather{% if tg_token %} — збережено {{ tg_token }}{% endif %}{% if tg_bot %} · бот <b>@{{ tg_bot }}</b>{% endif %}</label>
+          <input name="telegram_token_new" type="password" autocomplete="new-password" placeholder="{{ 'вставте новий, щоб замінити' if tg_token else '123456789:AA…' }}"></div>
+      </div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap">
+        {% if tg_token %}<label class="check"><input type="checkbox" name="telegram_token_clear">Стерти токен</label>{% endif %}
+        <span class="spacer"></span>
+        <button class="sm" formaction="{{ url_for('admin_telegram_test') }}" title="Спершу збережіть правила">{{ icon('refresh', 'sm') }}Перевірити бота</button>
+      </div>
+      <p class="muted small" style="margin:6px 0 0">Якщо ввімкнено і Telegram, і WhatsApp, людина підтверджує номер у Telegram (WhatsApp платний).
+        Ті, хто зареєструвався раніше, можуть підтвердити номер у «Профілі».</p>
+    </div>
     <div id="whatsapp" style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px">
       <label class="check"><input type="checkbox" name="whatsapp_verify" {{ 'checked' if settings.whatsapp_verify == '1' }}><span><b>Підтверджувати номер через WhatsApp.</b>
         Після реєстрації людині приходить код у WhatsApp, вона вводить його, і в заявці видно «✓ номер підтверджено». Потрібні інтернет на сервері й

@@ -32,3 +32,4 @@
 | [CrewHub_Demo-17.8.apk](demo/CrewHub_Demo-17.8.apk) | v17.8 | з архіву `CrewHub_v17_8_full.zip` |
 | [CrewHub_Demo-17.9.apk](demo/CrewHub_Demo-17.9.apk) | v17.9 | з архіву `CrewHub_v17_9_full.zip` |
 | [CrewHub_Demo-17.15.apk](demo/CrewHub_Demo-17.15.apk) | v17.15 | зібрано з коду 17.15 (`android/demo/build.sh`), у `CrewHub_v17_15_full.zip` |
+| [CrewHub_Demo-17.16.apk](demo/CrewHub_Demo-17.16.apk) | v17.16 | зібрано з коду 17.16, у `CrewHub_v17_16_full.zip` |

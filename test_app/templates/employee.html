@@ -27,7 +27,7 @@
       <p style="margin:0"><b>{{ tenure_text(u.hire_date) }}</b></p>
       <div class="row" style="justify-content:center;margin-top:12px">
         {% if u.phone %}<a class="btn sm" href="tel:{{ u.phone }}">{{ icon('phone', 'sm') }}{{ u.phone|phone }}</a>{% endif %}
-        {% if u.phone_verified_at %}<span class="pill ok" title="Код з WhatsApp введено {{ u.phone_verified_at|dt }}">✓ номер підтверджено</span>{% endif %}
+        {% if u.phone_verified_at %}<span class="pill ok" title="Номер підтверджено (Telegram чи WhatsApp) {{ u.phone_verified_at|dt }}">✓ номер підтверджено</span>{% endif %}
         {% if u.telegram %}<a class="btn sm" href="https://t.me/{{ u.telegram|replace('@', '') }}" target="_blank">{{ icon('send', 'sm') }}{{ u.telegram }}</a>{% endif %}
         {% if u.whatsapp|walink %}<a class="btn sm" href="{{ u.whatsapp|walink }}" target="_blank" rel="noopener">{{ icon('phone', 'sm') }}WhatsApp</a>{% endif %}
       </div>

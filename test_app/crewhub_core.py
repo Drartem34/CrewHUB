@@ -125,6 +125,7 @@ DEFAULT_SETTINGS = {
     "whatsapp_phone_id": "",         # Phone number ID з кабінету Meta (токен — окремо, не в settings.ini)
     "whatsapp_template": "crewhub_code",  # назва шаблону «Authentication» з кодом
     "whatsapp_lang": "uk",           # мова шаблону
+    "telegram_verify": "0",          # підтверджувати номер через Telegram-бота — безкоштовно (17.16; токен — не в settings.ini)
     "foreign_phone_action": "flag",  # чужий акаунт (телефон іншої людини): flag — позначати й повідомляти (як у v17); block_shift — не дати почати / вести зміну; block_login — ще й не пустити в акаунт
     "work_start": "09:00",           # звичайні години зміни (якщо в «Графіку» на цей день нічого немає)
     "work_end": "18:00",             # кінець раніше за початок = нічна зміна через північ
@@ -180,6 +181,7 @@ SETTING_RULES = {
     "whatsapp_phone_id": ("text", 40, "WhatsApp: Phone number ID"),
     "whatsapp_template": ("text", 60, "WhatsApp: назва шаблону"),
     "whatsapp_lang": ("text", 10, "WhatsApp: мова шаблону"),
+    "telegram_verify": ("bool", "Підтвердження номера в Telegram"),
     "work_start": ("time", "Початок робочого дня"),
     "work_end": ("time", "Кінець робочого дня"),
     "work_weekends": ("bool", "Робочі вихідні"),
@@ -269,7 +271,8 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "outage_credit": "Сервер не працював: час зараховано", "shift_new_device": "Зміна з нового пристрою",
           "login_failed": "Невдалий вхід", "brute_force": "Підбір пароля", "account_hopping": "Вхід у різні акаунти",
           "blocked_device": "Заблокований пристрій", "phone_verified": "Номер підтверджено в WhatsApp",
-          "shared_mac": "Спільний MAC: кілька телефонів", "mac_changed": "Телефон змінив адресу Wi-Fi (MAC)"}
+          "shared_mac": "Спільний MAC: кілька телефонів", "mac_changed": "Телефон змінив адресу Wi-Fi (MAC)",
+          "phone_verified_tg": "Номер підтверджено в Telegram"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні».
 # 17.11: підбір пароля, вхід у різні акаунти з одного пристрою, спроба із заблокованого пристрою
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device",
@@ -331,6 +334,9 @@ create table if not exists blocked_devices (id integer primary key, device_key t
 -- роутер на точці ховає всі телефони за своїм IP і MAC. Такий MAC не впізнає телефон — людей розрізняємо за кодом
 -- пристрою, відбитком і акаунтом
 create table if not exists shared_macs (mac text primary key, first_at integer not null, last_at integer not null, note text);
+-- Підтвердження номера через Telegram-бота (17.16): одноразовий код у посиланні t.me/бот?start=код, чат, результат
+create table if not exists tg_links (token text primary key, user_id integer not null references users(id) on delete cascade,
+  created_at integer not null, expires_at integer not null, chat_id integer, verified_at integer, result text);
 -- Коди підтвердження номера через WhatsApp (17.11): хеш коду, термін, спроби
 create table if not exists phone_codes (user_id integer primary key references users(id) on delete cascade,
   code_hash text not null, sent_at integer not null, expires_at integer not null, attempts integer not null default 0,
@@ -1434,6 +1440,157 @@ def check_phone_code(conn, uid, code):
     conn.execute("update users set phone_verified_at = ? where id = ?", (now(), uid))
     log_clock(conn, uid, None, "phone_verified", client_ip() if has_request_context() else None, None, True, None, None)
     return None
+
+
+# ── Підтвердження номера через Telegram (17.16) — безкоштовно ─────────────────────────────────────
+# Бот з @BotFather (безкоштовно, хвилина). Людина відкриває бота за посиланням t.me/<бот>?start=<одноразовий код> і
+# натискає «Поділитися номером» — Telegram сам надсилає номер її акаунта (його Telegram підтвердив через SMS), і сервер
+# звіряє його з номером у CrewHub. Повідомлення бота сервер забирає сам («довге опитування» getUpdates): потрібен
+# лише вихід в інтернет, публічна адреса не потрібна. Токен бота — як і WhatsApp: у базі (meta) або змінна
+# CREWHUB_TG_TOKEN, не в settings.ini і не в журналі. Див. docs/14-telegram.md.
+TG_API = "https://api.telegram.org"
+TG_TTL = 1800  # с: посилання на бота діє 30 хв
+TG_POLL = 20   # с: довге опитування — запит до Telegram чекає нових повідомлень до стільки
+TG_SHARE = "📱 Поділитися номером"
+
+
+class TelegramError(Exception):
+    pass
+
+
+def tg_api(token, method, payload=None, timeout=10):
+    """Виклик Telegram Bot API → result. TelegramError з текстом для адміна, якщо не вийшло."""
+    req = urllib.request.Request(f"{TG_API}/bot{token}/{method}", data=json.dumps(payload or {}).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read().decode("utf-8", "replace"))
+        except ValueError:
+            raise TelegramError(f"Telegram відповів HTTP {e.code}") from None
+    except (urllib.error.URLError, OSError, ValueError):
+        raise TelegramError("немає зв'язку з Telegram (сервер без інтернету?)") from None
+    if not data.get("ok"):
+        raise TelegramError(f"Telegram: {(data.get('description') or 'помилка')[:200]}")
+    return data.get("result")
+
+
+def telegram_token(conn):
+    return os.environ.get("CREWHUB_TG_TOKEN") or meta_get(conn, "telegram_token")
+
+
+def telegram_on(conn):
+    """Підтвердження через Telegram увімкнено і бот перевірений (відоме його ім'я для посилання)."""
+    return setting("telegram_verify", conn) == "1" and bool(telegram_token(conn)) and bool(meta_get(conn, "telegram_bot"))
+
+
+def telegram_check(token):
+    """Перевірка бота (getMe) → ім'я бота. Знімає webhook, якщо його колись ставили: інакше getUpdates не працює."""
+    me = tg_api(token, "getMe")
+    try:
+        tg_api(token, "deleteWebhook")
+    except TelegramError:
+        pass
+    return me.get("username")
+
+
+def new_tg_link(conn, uid):
+    """Нове посилання на бота для людини (старі перестають діяти): (код, посилання)."""
+    token = secrets.token_urlsafe(12)
+    conn.execute("delete from tg_links where user_id = ? and verified_at is null", (uid,))
+    conn.execute("insert into tg_links(token, user_id, created_at, expires_at) values (?, ?, ?, ?)", (token, uid, now(), now() + TG_TTL))
+    return token, f"https://t.me/{meta_get(conn, 'telegram_bot')}?start={token}"
+
+
+def tg_state(conn, token):
+    """Стан підтвердження за кодом посилання — для сторінки, що чекає: wait / ok / mismatch / expired."""
+    row = conn.execute("select * from tg_links where token = ?", (token,)).fetchone()
+    if not row:
+        return {"state": "expired"}
+    if row["verified_at"]:
+        return {"state": "ok"}
+    if row["result"]:
+        return {"state": "mismatch", "text": row["result"]}
+    return {"state": "expired" if now() > row["expires_at"] else "wait"}
+
+
+def tg_handle(conn, upd):
+    """Одне повідомлення боту → [(chat_id, текст, клавіатура)] — що відповісти (надсилаємо поза _lock)."""
+    msg = upd.get("message") or {}
+    chat, frm = (msg.get("chat") or {}).get("id"), msg.get("from") or {}
+    if not chat or msg.get("chat", {}).get("type", "private") != "private":
+        return []
+    if msg.get("date") and msg["date"] < now() - TG_TTL:
+        return []  # давнє повідомлення (бот довго ніхто не слухав) — посилання з нього однаково застаріло
+    share = {"keyboard": [[{"text": TG_SHARE, "request_contact": True}]], "resize_keyboard": True, "one_time_keyboard": True}
+    t = now()
+    text = (msg.get("text") or "").strip()
+    if text.startswith("/start"):
+        token = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
+        row = token and conn.execute("select l.*, u.full_name from tg_links l join users u on u.id = l.user_id where l.token = ?",
+                                     (token,)).fetchone()
+        if not row or row["verified_at"] or t > row["expires_at"]:
+            return [(chat, "Посилання застаріло або вже використане. Відкрийте нове з CrewHub (після реєстрації чи в «Профілі»).", None)]
+        conn.execute("update tg_links set chat_id = ?, result = null where token = ?", (chat, token))
+        return [(chat, f"Вітаю, {row['full_name'].split()[0]}! Щоб підтвердити номер у CrewHub, натисніть кнопку «{TG_SHARE}» внизу.", share)]
+    row = conn.execute("select l.*, u.phone, u.full_name, u.telegram from tg_links l join users u on u.id = l.user_id where l.chat_id = ?"
+                       " and l.verified_at is null and l.expires_at > ? order by l.created_at desc limit 1", (chat, t)).fetchone()
+    contact = msg.get("contact")
+    if not row:
+        return [(chat, "Щоб підтвердити номер, відкрийте посилання з CrewHub (після реєстрації чи в «Профілі»).", None)] if contact or text else []
+    if not contact:
+        return [(chat, f"Натисніть кнопку «{TG_SHARE}» внизу — вона надішле номер вашого Telegram.", share)]
+    if contact.get("user_id") != frm.get("id"):
+        return [(chat, f"Це чужий контакт. Натисніть кнопку «{TG_SHARE}» — вона надсилає ваш власний номер.", share)]
+    tg_phone = normalize_phone(contact.get("phone_number"))
+    if tg_phone != row["phone"]:
+        why = (f"Номер вашого Telegram ({format_phone(tg_phone) if tg_phone else contact.get('phone_number')}) не збігається з номером "
+               f"у CrewHub ({format_phone(row['phone'])}). Зареєструйтесь з номером, до якого прив'язаний Telegram, або попросіть адміністратора.")
+        conn.execute("update tg_links set result = ? where token = ?", (why, row["token"]))
+        return [(chat, why, {"remove_keyboard": True})]
+    conn.execute("update tg_links set verified_at = ?, result = null where token = ?", (t, row["token"]))
+    conn.execute("update users set phone_verified_at = ? where id = ?", (t, row["user_id"]))
+    if frm.get("username") and not row["telegram"]:
+        conn.execute("update users set telegram = ? where id = ?", ("@" + frm["username"][:64], row["user_id"]))
+    log_clock(conn, row["user_id"], None, "phone_verified_tg", None, None, True, None, {"номер": format_phone(tg_phone)})
+    return [(chat, f"✓ Номер {format_phone(tg_phone)} підтверджено. Можна повертатися в CrewHub.", {"remove_keyboard": True})]
+
+
+def telegram_step():
+    """Фон: забирає повідомлення бота, поки є посилання, що чекають підтвердження (інакше Telegram не турбуємо)."""
+    with _lock:
+        conn = connect()
+        try:
+            token = telegram_token(conn) if telegram_on(conn) else None
+            waiting = token and conn.execute("select 1 from tg_links where verified_at is null and expires_at > ? limit 1",
+                                             (now(),)).fetchone()
+            offset = int(meta_get(conn, "telegram_offset", 0))
+        finally:
+            conn.close()
+    if not waiting:
+        return
+    updates = tg_api(token, "getUpdates", {"offset": offset, "timeout": TG_POLL, "allowed_updates": ["message"]}, timeout=TG_POLL + 15)
+    replies = []
+    with _lock:
+        conn = connect()
+        try:
+            for upd in updates or []:
+                replies += tg_handle(conn, upd)
+                meta_set(conn, "telegram_offset", upd["update_id"] + 1)
+            conn.commit()
+        finally:
+            conn.close()
+    for chat, text, kb in replies:
+        try:
+            tg_api(token, "sendMessage", {"chat_id": chat, "text": text, **({"reply_markup": kb} if kb else {})})
+        except TelegramError as e:
+            log.warning("Telegram: не надіслано відповідь: %s", e)
+
+
+def start_telegram(interval=2):
+    run_worker("telegram", interval, telegram_step)
 
 
 # ── Заблоковані пристрої й підозрілі спроби входу (17.11) ─────────────────────────────────────────
@@ -2825,7 +2982,7 @@ def list_backups(manual=False):
 # /health і банер в адмінці показують, якщо котрийсь замовк чи падає (раніше помилка лише друкувалась у консоль).
 WORKERS = {}
 WORKER_NAMES = {"sweep": "Контроль Wi-Fi", "backup": "Автобекап", "people": "Особові папки", "config": "Файл settings.ini",
-                "lan": "Пристрої в мережі", "presence": "Телефони в Wi-Fi"}
+                "lan": "Пристрої в мережі", "presence": "Телефони в Wi-Fi", "telegram": "Telegram-бот"}
 
 
 def config_changed(conn):
@@ -3670,6 +3827,7 @@ def _globals():
             "in_app": "CrewHubApp" in (request.headers.get("User-Agent") or ""),
             "apk_ready": os.path.exists(APK_PATH), "demo_accounts": DEMO_ACCOUNTS,
             "system_alert": workers_problem() if u and u["role"] in STAFF_ROLES else None, "mac_tip": mac_tip,
+            "tg_verify_on": bool(u) and telegram_on(db()),
             "csrf_token": session.get("csrf", "")}
 
 
@@ -4065,9 +4223,13 @@ def register():
                         remember_device(conn, cur.lastrowid, reg_key, client_ip())
                     note_usage(conn, cur.lastrowid, reg_key, reg_fp, reg_mac)
                     notify_staff(conn, "Нова реєстрація", f"{name}, {format_phone(phone)} чекає підтвердження")
-                    cfg = whatsapp_config(conn) if setting("whatsapp_verify", conn) == "1" else None
+                    # Підтвердження номера: Telegram (безкоштовно, 17.16) — якщо ввімкнено, інакше код у WhatsApp
+                    tg = new_tg_link(conn, cur.lastrowid) if telegram_on(conn) else None
+                    cfg = whatsapp_config(conn) if setting("whatsapp_verify", conn) == "1" and not tg else None
                     code = new_phone_code(conn, cur.lastrowid)[0] if cfg else None
                     conn.commit()
+                    if tg:
+                        return render_template("register.html", tg_verify=tg[1], tg_token=tg[0], name=name, verify_phone=format_phone(phone))
                     if not cfg:
                         return render_template("register.html", done=True, name=name)
                     # Підтвердження номера: код у WhatsApp (запит в інтернет — поза _lock)
@@ -4077,6 +4239,51 @@ def register():
                     return render_template("register.html", verify=True, name=name, verify_phone=format_phone(phone))
         flash(error)
     return render_template("register.html", done=False, form=form)
+
+
+@app.get("/register/telegram/<token>")
+def register_tg_state(token):
+    """Сторінка після реєстрації чекає, поки людина поділиться номером у Telegram (опитує раз на 3 с)."""
+    with _lock:
+        return jsonify(tg_state(db(), token[:40]))
+
+
+@app.post("/me/phone/telegram")
+@login_required()
+def me_phone_telegram():
+    """«Підтвердити номер через Telegram» у профілі (для тих, хто зареєструвався раніше): посилання на бота."""
+    with _lock:
+        conn = db()
+        if not telegram_on(conn) or current_user()["phone_verified_at"]:
+            return redirect(url_for("me", tab="profile"))
+        _token, link = new_tg_link(conn, current_user()["id"])
+        conn.commit()
+    return redirect(link)
+
+
+@app.post("/admin/telegram/test")
+@login_required(staff=True)
+def admin_telegram_test():
+    """«Перевірити бота»: getMe — ім'я бота для посилань (без нього підтвердження через Telegram не вмикається)."""
+    if current_user()["role"] != "admin":
+        abort(403)
+    with _lock:
+        token = telegram_token(db())
+    if not token:
+        flash("Telegram не налаштовано: вставте токен бота від @BotFather і збережіть правила")
+        return redirect(url_for("admin", tab="settings") + "#telegram")
+    try:
+        name = telegram_check(token)
+    except TelegramError as e:
+        flash(f"Бот не відповідає: {e}")
+        return redirect(url_for("admin", tab="settings") + "#telegram")
+    with _lock:
+        conn = db()
+        meta_set(conn, "telegram_bot", name)
+        conn.commit()
+    flash(f"Бот @{name} працює: люди підтверджуватимуть номер у ньому" + ("" if setting("telegram_verify") == "1"
+                                                                          else ". Увімкніть «Підтверджувати номер через Telegram»"))
+    return redirect(url_for("admin", tab="settings") + "#telegram")
 
 
 @app.post("/register/verify")
@@ -5255,6 +5462,9 @@ def admin():
         ctx["settings"] = {k: setting(k) for k in DEFAULT_SETTINGS}
         tok = os.environ.get("CREWHUB_WA_TOKEN") or meta_get(conn, "whatsapp_token")
         ctx["wa_token"] = ("•••• " + tok[-4:] + (" (зі змінної CREWHUB_WA_TOKEN)" if os.environ.get("CREWHUB_WA_TOKEN") else "")) if tok else None
+        tg = telegram_token(conn)
+        ctx["tg_token"] = ("•••• " + tg[-4:] + (" (зі змінної CREWHUB_TG_TOKEN)" if os.environ.get("CREWHUB_TG_TOKEN") else "")) if tg else None
+        ctx["tg_bot"] = meta_get(conn, "telegram_bot")
         # У списку — і щоденні копії, і зроблені кнопкою «Завантажити зараз» (як в оригінальній версії)
         ctx.update(backups=sorted(list_backups()[:10] + list_backups(manual=True), key=lambda b: -b["mtime"]), backup_dir=BACKUP_DIR, backup_keep=BACKUP_KEEP, people_dir=PEOPLE_DIR,
                    data_dir=DATA_DIR, settings_file=SETTINGS_FILE, db_path=DB_PATH,
@@ -5970,7 +6180,8 @@ def _zones_back(f):
 
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
-                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence", "outage_credit", "whatsapp_verify")
+                     "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence", "outage_credit", "whatsapp_verify",
+                     "telegram_verify")
 
 
 @app.post("/admin/backup_mirror")
@@ -6033,10 +6244,30 @@ def admin_settings():
         elif request.form.get("whatsapp_token_clear"):
             conn.execute("delete from meta where key = 'whatsapp_token'")
             changes["whatsapp_token"] = ["***", None]
+        tg_new = (request.form.get("telegram_token_new") or "").strip()
+        if tg_new and re.fullmatch(r"\d{5,15}:[\w-]{30,60}", tg_new):
+            meta_set(conn, "telegram_token", tg_new)
+            conn.execute("delete from meta where key = 'telegram_bot'")  # новий бот — ім'я перевіримо нижче
+            changes["telegram_token"] = ["***", "*** (новий)"]
+        elif tg_new:
+            bad.append("токен Telegram-бота (вигляд 123456789:AA…)")
+            tg_new = None
+        elif request.form.get("telegram_token_clear"):
+            conn.execute("delete from meta where key in ('telegram_token', 'telegram_bot')")
+            changes["telegram_token"] = ["***", None]
         if changes:
             audit(conn, current_user()["id"], "UPDATE", "settings", None, None, changes)
         conn.commit()
         config_changed(conn)
+    if tg_new:  # новий токен бота — одразу перевіряємо (запит в інтернет — поза _lock)
+        try:
+            name = telegram_check(tg_new)
+            with _lock:
+                meta_set(db(), "telegram_bot", name)
+                db().commit()
+            flash(f"Бот @{name} підключено")
+        except TelegramError as e:
+            flash(f"Токен збережено, але бот не відповідає: {e}. Натисніть «Перевірити бота», коли з'явиться інтернет")
     if bad:
         flash("Збережено, крім неправильних значень (лишились попередні): " + ", ".join(bad))
         return redirect(url_for("admin", tab="settings"))

@@ -15,6 +15,32 @@
       </form>
       <form method="post" action="{{ url_for('register_resend') }}" style="margin-top:10px"><button class="ghost" style="width:100%">Надіслати код ще раз</button></form>
       <p class="muted small center" style="margin:12px 0 0">Код не приходить? Перевірте, що на цьому номері є WhatsApp. Заявка вже в адміністратора — він може підтвердити її й без коду.</p>
+    {% elif tg_verify %}
+      <div class="empty" style="padding:18px 0">{{ icon('phone') }}<b>Підтвердіть номер, {{ name.split()[0] }}</b></div>
+      <p class="muted center" style="margin-top:0">Заявку вже надіслано адміністратору. Підтвердіть, що номер <b>{{ verify_phone }}</b> — ваш:
+        відкрийте нашого бота в Telegram і натисніть «📱 Поділитися номером». Це безкоштовно.</p>
+      <div id="tgBox">
+        <a class="btn primary xl" style="width:100%;justify-content:center" href="{{ tg_verify }}" target="_blank" rel="noopener" id="tgOpen">{{ icon('phone') }}Підтвердити в Telegram</a>
+        <p class="muted small center" id="tgState" style="margin:12px 0 0">Чекаємо на підтвердження з Telegram…</p>
+      </div>
+      <p class="muted small center" style="margin:12px 0 0">Немає Telegram? Можна й без підтвердження — адміністратор перевірить заявку сам.</p>
+      <a class="btn ghost" style="width:100%;margin-top:8px" href="{{ url_for('login') }}" id="tgDone">До входу</a>
+      <script>(function () {
+        var st = document.getElementById("tgState"), url = {{ url_for('register_tg_state', token=tg_token)|tojson }}, stop = false;
+        async function poll() {
+          if (stop) return;
+          try {
+            var r = await (await fetch(url, { cache: "no-store" })).json();
+            if (r.state === "ok") { stop = true; document.getElementById("tgOpen").remove();
+              st.innerHTML = '<span class="pill ok">✓ номер підтверджено в Telegram</span>'; return; }
+            if (r.state === "mismatch") st.textContent = r.text;
+            if (r.state === "expired") { stop = true; st.textContent = "Посилання застаріло. Увійдіть після підтвердження заявки — підтвердити номер можна в «Профілі»."; return; }
+          } catch (e) {}
+          setTimeout(poll, 3000);
+        }
+        poll();
+        document.addEventListener("visibilitychange", function () { if (!document.hidden) poll(); });
+      })();</script>
     {% elif done %}
       <div class="empty" style="padding:18px 0">{{ icon('check') }}<b>Заявку надіслано, {{ name.split()[0] }}!</b></div>
       {% if verified %}<p class="center"><span class="pill ok">✓ номер підтверджено в WhatsApp</span></p>{% endif %}

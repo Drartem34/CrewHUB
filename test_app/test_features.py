@@ -842,6 +842,149 @@ class WhatsAppVerifyTest(CrewHubBase):
             self.assertNotIn("EAAG", f.read())
 
 
+class TelegramVerifyTest(CrewHubBase):
+    """17.16: безкоштовне підтвердження номера через Telegram-бота: людина відкриває бота за посиланням і натискає
+    «Поділитися номером» — Telegram надсилає номер її акаунта, сервер звіряє його з номером у заявці. Telegram тут
+    імітований (getUpdates / sendMessage)."""
+    TOKEN = "123456789:AA" + "x" * 33
+
+    def setUp(self):
+        super().setUp()
+        with core.connect() as c:
+            for k, v in (("registration_open", "1"), ("telegram_verify", "1"), ("whatsapp_verify", "1"), ("whatsapp_phone_id", "1234567890")):
+                c.execute("insert or replace into settings(key, value) values (?, ?)", (k, v))
+            core.meta_set(c, "telegram_token", self.TOKEN)
+            core.meta_set(c, "telegram_bot", "crewhub_test_bot")
+            core.meta_set(c, "whatsapp_token", "EAAG" + "x" * 40)
+            c.commit()
+        self.updates, self.sent, self.calls = [], [], []
+
+        def tg_api(token, method, payload=None, timeout=10):
+            self.calls.append((token, method, payload))
+            if method == "getUpdates":
+                out, self.updates[:] = list(self.updates), []
+                return out
+            if method == "sendMessage":
+                self.sent.append(payload)
+                return {"message_id": len(self.sent)}
+            if method == "getMe":
+                return {"username": "crewhub_test_bot"}
+            return True
+        patcher = mock.patch.object(core, "tg_api", tg_api)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def register(self, client, phone="0991112233"):
+        return client.post("/register", data={"full_name": "Петро Новий", "phone": phone, "password": "123456",
+                                              "password2": "123456"}).get_data(as_text=True)
+
+    def msg(self, chat=777, uid=777, **kw):
+        self.updates.append({"update_id": 1000 + len(self.calls), "message": {"chat": {"id": chat, "type": "private"},
+                                                                              "from": {"id": uid, "username": "petro_n"}, **kw}})
+        core.telegram_step()
+
+    def token_from(self, page):
+        return re.search(r"https://t\.me/crewhub_test_bot\?start=([\w-]+)", page)[1]
+
+    def test_register_and_share_number(self):
+        c = core.app.test_client()
+        page = self.register(c)
+        self.assertIn("Підтвердити в Telegram", page)
+        token = self.token_from(page)
+        self.assertNotIn("graph.facebook.com", "".join(str(x) for x in self.calls))  # WhatsApp (платний) не чіпали
+        self.assertEqual(c.get(f"/register/telegram/{token}").get_json()["state"], "wait")
+        self.msg(text=f"/start {token}")
+        kb = self.sent[-1]["reply_markup"]["keyboard"][0][0]
+        self.assertTrue(kb["request_contact"])
+        self.msg(contact={"phone_number": "380991112233", "user_id": 777, "first_name": "Петро"})
+        self.assertIn("підтверджено", self.sent[-1]["text"])
+        self.assertEqual(c.get(f"/register/telegram/{token}").get_json()["state"], "ok")
+        u = self.sql("select phone_verified_at, telegram from users where phone = '+380991112233'")[0]
+        self.assertTrue(u[0])
+        self.assertEqual(u[1], "@petro_n")
+        self.assertTrue(self.sql("select 1 from conn_log where event = 'phone_verified_tg'"))
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        self.assertIn("✓ номер підтверджено", admin.get("/admin?tab=employees").get_data(as_text=True))
+
+    def test_someone_elses_contact_or_other_number(self):
+        c = core.app.test_client()
+        token = self.token_from(self.register(c))
+        self.msg(text=f"/start {token}")
+        self.msg(contact={"phone_number": "380991112233", "user_id": 555})  # переслав чужий контакт
+        self.assertIn("чужий контакт", self.sent[-1]["text"])
+        self.msg(contact={"phone_number": "+380671111111", "user_id": 777})  # Telegram на інший номер
+        self.assertIn("не збігається", self.sent[-1]["text"])
+        self.assertEqual(c.get(f"/register/telegram/{token}").get_json()["state"], "mismatch")
+        self.assertIsNone(self.sql("select phone_verified_at from users where phone = '+380991112233'")[0][0])
+
+    def test_expired_or_unknown_link(self):
+        c = core.app.test_client()
+        token = self.token_from(self.register(c))
+        self.sql("update tg_links set expires_at = 0")
+        self.assertEqual(c.get(f"/register/telegram/{token}").get_json()["state"], "expired")
+        self.msg(text=f"/start {token}")  # нових посилань, що чекають, немає — бота не опитуємо
+        self.assertEqual(self.sent, [])
+        token2 = self.token_from(self.register(core.app.test_client(), phone="0991112244"))
+        self.msg(text="/start wrongtoken")
+        self.assertIn("застаріло", self.sent[-1]["text"])
+        self.assertTrue(token2)
+
+    def test_no_polling_without_waiting_links(self):
+        core.telegram_step()
+        self.assertEqual(self.calls, [])
+
+    def test_profile_button_for_earlier_users(self):
+        ivan = self.login("ivan", "1234", client=core.app.test_client())
+        self.assertIn("Підтвердити номер у Telegram", ivan.get("/me?tab=profile").get_data(as_text=True))
+        r = ivan.post("/me/phone/telegram")
+        self.assertTrue(r.headers["Location"].startswith("https://t.me/crewhub_test_bot?start="))
+        token = r.headers["Location"].split("start=")[1]
+        phone = self.sql("select phone from users where username = 'ivan'")[0][0]
+        self.msg(chat=9, uid=9, text=f"/start {token}")
+        self.msg(chat=9, uid=9, contact={"phone_number": phone.lstrip("+"), "user_id": 9})
+        self.assertTrue(self.sql("select phone_verified_at from users where username = 'ivan'")[0][0])
+        self.assertNotIn("Підтвердити номер у Telegram", ivan.get("/me?tab=profile").get_data(as_text=True))
+
+    def test_settings_token_and_check(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        page = admin.get("/admin?tab=settings").get_data(as_text=True)
+        self.assertIn("@crewhub_test_bot", page)
+        self.assertNotIn("x" * 33, page)  # токен не показується
+        new = "987654321:BB" + "y" * 33
+        admin.post("/admin/settings", data={"telegram_token_new": new, "telegram_verify": "on"})
+        with core.connect() as c:
+            self.assertEqual(core.meta_get(c, "telegram_token"), new)
+            self.assertEqual(core.meta_get(c, "telegram_bot"), "crewhub_test_bot")  # перевірено getMe одразу
+        self.assertNotIn("y" * 33, "".join(r[0] or "" for r in self.sql("select changes from audit")))
+        with open(core.SETTINGS_FILE, encoding="utf-8") as f:
+            self.assertNotIn(new, f.read())
+        self.assertIn("працює", admin.post("/admin/telegram/test", follow_redirects=True).get_data(as_text=True))
+
+    def test_telegram_off_whatsapp_as_before(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '0' where key = 'telegram_verify'")
+            c.commit()
+        sent = []
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{}'
+
+        def urlopen(req, timeout=None):
+            sent.append(req.full_url)
+            return Resp()
+        with mock.patch("urllib.request.urlopen", urlopen):
+            page = self.register(core.app.test_client())
+        self.assertIn("Ми надіслали код у WhatsApp", page)
+        self.assertIn("graph.facebook.com", sent[0])
+
+
 class ServerNetworkTest(CrewHubBase):
     """Сервер перенесли в іншу мережу (інший роутер, приміщення), а в «Точки і Wi-Fi» лишилась стара: телефони бачать
     «Не в робочій мережі». Адмінка (і консоль) нагадує додати мережу сервера — однією кнопкою."""

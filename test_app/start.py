@@ -13,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 
 import settings_file
 from crewhub_core import (DATA_DIR, DB_PATH, LOG_DIR, app, check_db, get_local_ip, init_db, local_ips, migrate_legacy_data,
-                          start_backups, start_presence, start_sweeper)
+                          start_backups, start_presence, start_sweeper, start_telegram)
 
 # Порт: змінна середовища → [server] port у settings.ini (папка даних) → 5000
 PORT = int(os.environ.get("CREWHUB_PORT") or settings_file.port() or settings_file.DEFAULT_PORT)
@@ -239,6 +239,8 @@ if __name__ == "__main__":
     print_status("Пошук пристроїв у мережі (фон)", True, "раз на 5 хв, вимикається в «Правилах»")
     start_presence()
     print_status("Телефони змін у Wi-Fi (фон)", True, "зміна в браузері не стає на паузу, коли телефон спить")
+    start_telegram()
+    print_status("Telegram-бот (фон)", True, "підтвердження номера — коли ввімкнено в «Правилах»")
     try:
         import waitress
     except ImportError:

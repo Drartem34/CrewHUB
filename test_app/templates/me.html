@@ -395,11 +395,16 @@
   <div class="card">
     <div class="card-head"><h3>Контакти</h3></div>
     <form method="post" action="{{ url_for('me_profile') }}" class="stack">
-      <div><label>Телефон (ваш логін)</label><input value="{{ me.phone|phone }}" disabled title="Номер змінює адміністратор"></div>
+      <div><label>Телефон (ваш логін){% if me.phone_verified_at %} <span class="pill ok" title="Номер підтверджено {{ me.phone_verified_at|dt }}">✓ підтверджено</span>{% endif %}</label>
+        <input value="{{ me.phone|phone }}" disabled title="Номер змінює адміністратор"></div>
       <div><label>Telegram</label><input name="telegram" value="{{ me.telegram or '' }}" placeholder="@username"></div>
       <div><label>WhatsApp</label><input name="whatsapp" type="tel" value="{{ me.whatsapp or '' }}" placeholder="067 123 45 67"></div>
       <button class="primary">Зберегти</button>
     </form>
+    {% if tg_verify_on and not me.phone_verified_at and me.phone %}
+    <form method="post" action="{{ url_for('me_phone_telegram') }}" target="_blank" style="margin-top:12px">
+      <button class="sm" title="Відкриється наш бот у Telegram: натисніть «Поділитися номером» — безкоштовно">{{ icon('phone', 'sm') }}Підтвердити номер у Telegram</button>
+    </form>{% endif %}
   </div>
   <div class="card">
     <div class="card-head"><h3>Пароль</h3></div>

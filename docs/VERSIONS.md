@@ -4,7 +4,7 @@
 (посилання «код» — уся програма саме такою, якою була в цій версії) або завантажити архівом (посилання «zip» —
 GitHub збирає його сам). Локально кожна версія ще й позначена тегом (`git checkout v17.3`); на GitHub теги не
 відправились — сесії дозволено пушити лише свою гілку (з власного комп'ютера: `git push origin --tags`).
-Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_15_full.zip`),
+Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_16_full.zip`),
 звірено з git файл у файл: кожен архів — рівно цей коміт (у «повних» архівах ще лежала копія історії `.git` і зібрані
 APK). APK усіх версій — у [`releases/`](../releases/README.md). Що змінювалось докладно — [CHANGELOG.md](CHANGELOG.md).
 
@@ -27,7 +27,8 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 | **v17.12** | 2026-10-27 | 2.3 | CrewHub_v17_12_full.zip | Після відключення світла в двох людей однакові IP і MAC — виправлено; кнопка «Перезаписати IP і MAC». | [код](https://github.com/Drartem34/CrewHUB/tree/9b0c0424b9f9a6d059bebb89a67103f27f5eb562) · [zip](https://github.com/Drartem34/CrewHUB/archive/9b0c0424b9f9a6d059bebb89a67103f27f5eb562.zip) |
 | **v17.13** | 2026-10-27 | 2.3 | CrewHub_v17_13_full.zip | Сервер розрізняє людей з однаковими MAC і IP (підсилювач Wi-Fi, другий роутер; iPhone і Android). | [код](https://github.com/Drartem34/CrewHUB/tree/91d8fa8a3ef5fe8f543ed47c5f3a3aadac4b72b3) · [zip](https://github.com/Drartem34/CrewHUB/archive/91d8fa8a3ef5fe8f543ed47c5f3a3aadac4b72b3.zip) |
 | **v17.14** | 2026-10-27 | 2.3 | CrewHub_v17_14_full.zip | Блокування в одному місці, телефон упізнається з новими IP і MAC, Android не показується як iPhone. | [код](https://github.com/Drartem34/CrewHUB/tree/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6) · [zip](https://github.com/Drartem34/CrewHUB/archive/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6.zip) |
-| **v17.15** | 2026-10-27 | 2.3 | CrewHub_v17_15_full.zip | iPhone без застосунку не відвалюється і видно в мережі без сайту: сервер сам підтверджує MAC, упізнає новий MAC за назвою чи «Це телефон працівника?», «спільний MAC» лише з доказом. | [код](https://github.com/Drartem34/CrewHUB/tree/claude/laughing-tesla-r4ufbs) (гілка) |
+| **v17.15** | 2026-10-27 | 2.3 | CrewHub_v17_15_full.zip | iPhone без застосунку не відвалюється і видно в мережі без сайту: сервер сам підтверджує MAC, упізнає новий MAC за назвою чи «Це телефон працівника?», «спільний MAC» лише з доказом; роутер не тримає зміни. | [код](https://github.com/Drartem34/CrewHUB/tree/622a2c3) · [zip](https://github.com/Drartem34/CrewHUB/archive/622a2c3.zip) |
+| **v17.16** | 2026-10-28 | 2.3 | CrewHub_v17_16_full.zip | Безкоштовне підтвердження номера через Telegram-бота («Поділитися номером»). | [код](https://github.com/Drartem34/CrewHUB/tree/claude/laughing-tesla-r4ufbs) (гілка) |
 
 Застосунок — версія Android-застосунку в цій версії (`android/AndroidManifest.xml`). Ключ підпису в git
 не потрапляв ніколи (`android/crewhub.keystore` і `android/keystore.pass` — у `.gitignore`).
@@ -188,5 +189,9 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 
 ### v17.15 — iPhone без застосунку не відвалюється і видно в мережі без сайту: сервер сам підтверджує MAC, упізнає новий MAC за назвою чи «Це телефон працівника?», «спільний MAC» лише з доказом.
 
-Останній коміт гілки `claude/laughing-tesla-r4ufbs` · архів: CrewHub_v17_15_full.zip · застосунок 2.3
+Коміти [`7c66898`](https://github.com/Drartem34/CrewHUB/commit/7c66898), [`e2fba68`](https://github.com/Drartem34/CrewHUB/commit/e2fba68), [`88748db`](https://github.com/Drartem34/CrewHUB/commit/88748db), [`622a2c3`](https://github.com/Drartem34/CrewHUB/commit/622a2c3) · [код](https://github.com/Drartem34/CrewHUB/tree/622a2c3) · архів: CrewHub_v17_15_full.zip · застосунок 2.3
+
+### v17.16 — Безкоштовне підтвердження номера через Telegram-бота.
+
+Останній коміт гілки `claude/laughing-tesla-r4ufbs` · архів: CrewHub_v17_16_full.zip · застосунок 2.3
 
