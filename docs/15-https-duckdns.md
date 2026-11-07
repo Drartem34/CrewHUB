@@ -50,7 +50,8 @@ root), сервер сам візьме 5443: адреса буде `https://cre
 
 | Що бачите в «Правилах» | Причина |
 |---|---|
-| «немає бібліотек cryptography і cheroot» | перезапустіть сервер з інтернетом — `start.sh` / `start.bat` поставлять їх самі (чи `pip install cryptography cheroot`) |
+| «немає бібліотек cryptography і cheroot» | сервер запущено не через `start.sh` / `start.bat` (вони ставлять бібліотеки самі) чи без інтернету. Поставте вручну: `test_app/.venv/bin/python -m pip install cryptography cheroot` (якщо є `.venv`), інакше через систему — Fedora `sudo dnf install python3-cryptography python3-cheroot`, Arch `sudo pacman -S python-cryptography python-cheroot`, Ubuntu `sudo apt install python3-cryptography python3-cheroot`, Windows `python -m pip install cryptography cheroot`. Потім перезапустіть сервер |
+| «Працює», але з телефона не відкривається | брандмауер не пускає порт: `start.sh` відкриває 5443 сам (firewalld, ufw); вручну — `sudo firewall-cmd --permanent --add-port=5443/tcp && sudo firewall-cmd --reload` чи `sudo ufw allow 5443/tcp`; Windows спитає дозволу для Python — «Дозволити» |
 | «DuckDNS не прийняв назву чи токен» | токен чи назва з помилкою; на duckdns.org перевірте, що назва ваша, і вставте токен заново |
 | «немає зв'язку з DuckDNS / Let's Encrypt» | на сервері немає інтернету; сервер спробує знову за годину |
 | «Let's Encrypt не підтвердив назву» | запис у DuckDNS не встиг розійтися — «Перевірити зараз» за кілька хвилин |

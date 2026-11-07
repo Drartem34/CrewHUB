@@ -14,15 +14,18 @@ if [ "$(cat "$MARK" 2>/dev/null)" != "$REQ_HASH" ] || ! $PY -c "import flask, wa
     && echo "$REQ_HASH" > "$MARK" \
     || echo "Не вдалося встановити бібліотеки. Перевірте інтернет."
 fi
-# Брандмауер: відкриваємо порт 5000 для телефонів у мережі (firewalld або ufw)
+# Брандмауер: відкриваємо порт 5000 для телефонів у мережі і 5443 для шифрування HTTPS (17.18; firewalld або ufw)
 if systemctl is-active --quiet firewalld 2>/dev/null; then
-  if ! firewall-cmd --query-port=5000/tcp >/dev/null 2>&1; then
-    echo "Відкриваю порт 5000 у firewalld (може запитати пароль)..."
-    sudo firewall-cmd --permanent --add-port=5000/tcp >/dev/null && sudo firewall-cmd --reload >/dev/null \
-      || echo "Не вдалося. Виконайте: sudo firewall-cmd --permanent --add-port=5000/tcp && sudo firewall-cmd --reload"
-  fi
+  for P in 5000 5443; do
+    if ! firewall-cmd --query-port=$P/tcp >/dev/null 2>&1; then
+      echo "Відкриваю порт $P у firewalld (може запитати пароль)..."
+      sudo firewall-cmd --permanent --add-port=$P/tcp >/dev/null && sudo firewall-cmd --reload >/dev/null \
+        || echo "Не вдалося. Виконайте: sudo firewall-cmd --permanent --add-port=$P/tcp && sudo firewall-cmd --reload"
+    fi
+  done
 elif command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
   sudo ufw allow 5000/tcp >/dev/null
+  sudo ufw allow 5443/tcp >/dev/null
 fi
 [ "$1" = "--deps-only" ] && exit 0
 # Якщо сервер впаде, він сам підніметься через 3 секунди. Ctrl+C зупиняє повністю.
