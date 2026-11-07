@@ -274,7 +274,7 @@ if __name__ == "__main__":
         time.sleep(1.5)
         threading.Thread(target=live_monitor, args=(url,), daemon=True).start()
     else:  # служба systemd: журнал без перемальовування екрана
-        print(f" Сервер працює: {url}", flush=True)
+        print(f" CrewHub {crewhub_core.VERSION} · Сервер працює: {url}", flush=True)
 
     import logging
     logging.getLogger("werkzeug").setLevel(logging.ERROR)

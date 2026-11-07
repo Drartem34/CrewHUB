@@ -260,6 +260,7 @@ def setting_label(key):
 ROLES = {"employee": "Працівник", "teamlead": "Тімлід", "moderator": "Модератор", "admin": "Адміністратор"}
 STAFF_ROLES = ("moderator", "admin")                # повне керування (вкладки «Керування»)
 DAYOFF_ROLES = ("teamlead", "moderator", "admin")   # дають і редагують дей-оффи
+VERSION = "17.18"  # версія сервера — видно в «Правилах» і у вікні сервера (щоб знати, чи оновлення справді запустилось)
 DAYOFF_PICK_DAYS = 3                                # стільки днів після дозволу людина може обрати день
 STATUSES = {"active": "Активний", "vacation": "У відпустці", "sick_leave": "На лікарняному", "dismissed": "Звільнений",
             "pending": "Чекає підтвердження"}
@@ -4026,7 +4027,7 @@ def _globals():
             "in_app": "CrewHubApp" in (request.headers.get("User-Agent") or ""),
             "apk_ready": os.path.exists(APK_PATH), "demo_accounts": DEMO_ACCOUNTS,
             "system_alert": workers_problem() if u and u["role"] in STAFF_ROLES else None, "mac_tip": mac_tip,
-            "tg_verify_on": bool(u) and telegram_on(db()), "https_url": https_probe_url(),
+            "tg_verify_on": bool(u) and telegram_on(db()), "https_url": https_probe_url(), "crewhub_version": VERSION,
             "csrf_token": session.get("csrf", "")}
 
 

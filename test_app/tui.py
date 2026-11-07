@@ -146,7 +146,8 @@ class Dashboard:
     # ---- частини екрана ------------------------------------------------------
     def header(self, company):
         up = int(time.time() - self.started)
-        left = Text.assemble((" ◆ CrewHub ", f"bold white on {ACCENT}"), ("  ", ""), (company, "bold"))
+        from crewhub_core import VERSION
+        left = Text.assemble((f" ◆ CrewHub {VERSION} ", f"bold white on {ACCENT}"), ("  ", ""), (company, "bold"))
         right = Text.assemble(("● ONLINE", "bold #22c55e"), ("   працює ", "dim"), (f"{up // 3600}:{up % 3600 // 60:02d}:{up % 60:02d}", "bold"),
                               ("   ", ""), (datetime.now().strftime("%d.%m.%Y  %H:%M:%S"), "bold"))
         t = Table.grid(expand=True)
