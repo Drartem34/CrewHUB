@@ -9,7 +9,7 @@ if errorlevel 1 (
   exit /b 1
 )
 rem Бібліотеки ставимо лише якщо їх ще немає: звичайний запуск не потребує інтернету
-python -c "import flask, waitress" >nul 2>nul || python -m pip install -q -r requirements.txt
+python -c "import flask, waitress, cryptography, cheroot" >nul 2>nul || python -m pip install -q -r requirements.txt
 rem Якщо сервер впаде, він сам підніметься через 5 секунд
 :loop
 python start.py

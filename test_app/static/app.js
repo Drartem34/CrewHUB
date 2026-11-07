@@ -270,6 +270,18 @@
     fpCache = (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
     return fpCache;
   };
+  // Шифрування (17.18): сторінку відкрили по звичайному http, а сервер уже працює й по https з безкоштовним сертифікатом.
+  // Якщо https з цього телефона відкривається (роутер пускає назву DuckDNS), переходимо туди; ні — лишаємось на http
+  (function () {
+    const m = document.querySelector('meta[name="crewhub-https"]');
+    if (!m || location.protocol !== "http:" || !window.fetch) return;
+    const url = m.content.replace(/\/$/, "");
+    const ctl = window.AbortController ? new AbortController() : null;
+    const t = setTimeout(() => ctl && ctl.abort(), 3000);
+    fetch(url + "/health", { mode: "no-cors", cache: "no-store", signal: ctl ? ctl.signal : undefined })
+      .then(() => { clearTimeout(t); location.replace(url + location.pathname + location.search + location.hash); })
+      .catch(() => clearTimeout(t));
+  })();
   // Форми входу й реєстрації несуть відбиток (поле fp): заповнюємо перед відправкою
   document.addEventListener("submit", (e) => {
     const i = e.target && e.target.querySelector && e.target.querySelector('input[name="fp"]');

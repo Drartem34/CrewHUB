@@ -241,6 +241,10 @@ if __name__ == "__main__":
     print_status("Телефони змін у Wi-Fi (фон)", True, "зміна в браузері не стає на паузу, коли телефон спить")
     start_telegram()
     print_status("Telegram-бот (фон)", True, "підтвердження номера — коли ввімкнено в «Правилах»")
+    import tls
+    tls.start()
+    print_status("Шифрування HTTPS (фон)", tls.available(), "коли ввімкнено в «Правилах»" if tls.available() else "pip install cryptography cheroot",
+                 optional=True)
     try:
         import waitress
     except ImportError:

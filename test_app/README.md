@@ -36,6 +36,12 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
+## Що нового у версії 17.18: шифрування (HTTPS) безкоштовно
+
+- `tls.py`: `duckdns()`, `Acme` (ACME v2, ES256, dns-01), `obtain()`, `need_cert()`, `save_cert()`, `start_server()` (cheroot),
+  `reload_cert()`, `step()` (фон «tls»), `status()`; `crewhub_core.https_probe_url()` (meta + CSP), `/admin/https/check`.
+- Залежності: `cryptography`, `cheroot`. Змінні: `CREWHUB_DUCKDNS_TOKEN`, `CREWHUB_ACME_DIR` (інший сервер ACME, напр. staging).
+
 ## Що нового у версії 17.17: зміни закриваються, роутер, дей-офи, телефон, застосунок 2.4
 
 - `end_checks` / `end_check_shifts()` / `end_check_result()` — перевірки телефона після кінця зміни в `presence_step`.

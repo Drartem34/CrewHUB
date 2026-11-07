@@ -10,6 +10,7 @@
   <meta name="theme-color" content="#e8173d">
   <meta name="crewhub-company" content="{{ company }}">
   <meta name="crewhub-csrf" content="{{ csrf_token }}">
+  {% if https_url %}<meta name="crewhub-https" content="{{ https_url }}">{% endif %}
   <title>{% block title %}{{ company }}{% endblock %} · {{ company }}</title>
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
   <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}">
@@ -93,7 +94,7 @@
 {% endif %}
 
 <div class="toasts" id="toasts">{% for m in get_flashed_messages() %}<div class="toast">{{ m }}</div>{% endfor %}</div>
-<script src="{{ url_for('static', filename='app.js') }}?v=14"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=15"></script>
 <script src="{{ url_for('static', filename='motion.js') }}?v=5"></script>
 <script src="{{ url_for('static', filename='nav.js') }}?v=2"></script>
 {% block scripts %}{% endblock %}

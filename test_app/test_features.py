@@ -1136,6 +1136,214 @@ class PhoneUi1717Test(CrewHubBase):
         self.assertNotIn("crewhub://notifications", self.login("olha", client=core.app.test_client()).get("/me?tab=app").get_data(as_text=True))
 
 
+def _self_signed(name="crewhub.duckdns.org", days=90, public_key=None, sign_key=None):
+    """Самопідписаний сертифікат для тестів HTTPS: (PEM сертифіката, PEM ключа)."""
+    from datetime import timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = sign_key or ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now_ = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(public_key or key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now_ - timedelta(days=1)).not_valid_after(now_ + timedelta(days=days))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(name), x509.DNSName("localhost")]), critical=False).sign(key, hashes.SHA256()))
+    return (cert.public_bytes(serialization.Encoding.PEM),
+            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+
+
+class FakeAcme:
+    """Імітація Let's Encrypt (ACME v2) і DuckDNS для тестів: перевіряє підписи JWS, nonce і запис TXT за RFC 8555."""
+    D = "https://acme.test/dir"
+
+    def __init__(self):
+        self.nonce, self.jwk, self.txt, self.validated, self.cert, self.duck = "n0", None, None, False, None, []
+
+    class Resp:
+        def __init__(self, body=b"", status=200, headers=None):
+            self.body, self.status, self.code, self.headers = body, status, status, headers or {}
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def reply(self, obj=None, status=200, headers=None, raw=None):
+        self.nonce = f"n{int(self.nonce[1:]) + 1}"
+        body = raw if raw is not None else (json.dumps(obj).encode() if obj is not None else b"")
+        return self.Resp(body, status, {"Replay-Nonce": self.nonce, **(headers or {})})
+
+    @staticmethod
+    def unb64(v):
+        import base64
+        return base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))
+
+    def __call__(self, req, timeout=None):
+        from urllib.parse import parse_qs, urlsplit
+        url = req if isinstance(req, str) else req.full_url
+        if url.startswith("https://www.duckdns.org/update"):
+            q = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+            self.duck.append(q)
+            if "txt" in q and "clear" not in q:
+                self.txt = q["txt"]
+            return self.Resp(b"OK")
+        d = self.D.rsplit("/", 1)[0]
+        if url == self.D:
+            return self.Resp(json.dumps({"newNonce": d + "/nonce", "newAccount": d + "/acct", "newOrder": d + "/order"}).encode())
+        if url == d + "/nonce":
+            return self.reply()
+        import hashlib
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+        body = json.loads(req.data)
+        prot = json.loads(self.unb64(body["protected"]))
+        assert prot["alg"] == "ES256" and prot["url"] == url and prot["nonce"] == self.nonce, prot
+        if "jwk" in prot:
+            self.jwk = prot["jwk"]
+        else:
+            assert prot["kid"] == d + "/acct/1"
+        pub = ec.EllipticCurvePublicNumbers(int.from_bytes(self.unb64(self.jwk["x"]), "big"), int.from_bytes(self.unb64(self.jwk["y"]), "big"),
+                                            ec.SECP256R1()).public_key()
+        sig = self.unb64(body["signature"])
+        pub.verify(encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")),
+                   f"{body['protected']}.{body['payload']}".encode(), ec.ECDSA(hashes.SHA256()))
+        payload = json.loads(self.unb64(body["payload"])) if body["payload"] else None
+        if url == d + "/acct":
+            assert payload == {"termsOfServiceAgreed": True}
+            return self.reply({"status": "valid"}, 201, {"Location": d + "/acct/1"})
+        if url == d + "/order":
+            return self.reply({"status": "pending", "authorizations": [d + "/authz/1"], "finalize": d + "/fin"}, 201, {"Location": d + "/order/1"})
+        if url == d + "/authz/1":
+            return self.reply({"status": "valid" if self.validated else "pending",
+                               "challenges": [{"type": "http-01", "url": d + "/ch/h", "token": "x"}, {"type": "dns-01", "url": d + "/ch/1", "token": "tok-123"}]})
+        if url == d + "/ch/1":
+            thumb = FakeAcme.b64(hashlib.sha256(json.dumps(self.jwk, sort_keys=True, separators=(",", ":")).encode()).digest())
+            assert self.txt == FakeAcme.b64(hashlib.sha256(f"tok-123.{thumb}".encode()).digest()), "TXT не за RFC 8555"
+            self.validated = True
+            return self.reply({"status": "processing"})
+        if url == d + "/fin":
+            from cryptography import x509
+            csr = x509.load_der_x509_csr(self.unb64(payload["csr"]))
+            assert csr.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName) == ["crewhub.duckdns.org"]
+            self.cert = _self_signed(public_key=csr.public_key())[0]
+            return self.reply({"status": "processing"})
+        if url == d + "/order/1":
+            return self.reply({"status": "valid" if self.cert else "pending", "certificate": d + "/cert"})
+        if url == d + "/cert":
+            return self.reply(raw=self.cert)
+        raise AssertionError(url)
+
+    @staticmethod
+    def b64(data):
+        import base64
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+class HttpsDuckdnsTest(CrewHubBase):
+    """17.18: шифрування — безкоштовна назва DuckDNS + сертифікат Let's Encrypt, які сервер отримує й продовжує сам;
+    на телефонах нічого не встановлюється. Let's Encrypt і DuckDNS тут імітовані."""
+
+    def setUp(self):
+        super().setUp()
+        import tls
+        if not tls.available():
+            self.skipTest("немає cryptography / cheroot")
+        self.tls = tls
+        tls.stop_server()
+        tls._state.update(error=None, info=None, url=None, ip=None, ip_at=0.0, next_try=0.0, domain=None, expires=None)
+        self.addCleanup(tls.stop_server)
+        for name in ("cert.pem", "key.pem", "domain.txt", "account.key"):
+            try:
+                os.remove(os.path.join(tls.tls_dir(), name))
+            except OSError:
+                pass
+        patcher = mock.patch.object(tls, "_sleep", lambda s: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_domain_names(self):
+        n = self.tls.normalize_domain
+        self.assertEqual(n("crewhub"), "crewhub.duckdns.org")
+        self.assertEqual(n("https://CrewHub.duckdns.org/"), "crewhub.duckdns.org")
+        self.assertIsNone(n("crewhub.example.com"))
+        self.assertIsNone(n("bad name"))
+
+    def test_lets_encrypt_dns01_through_duckdns(self):
+        fake = FakeAcme()
+        with mock.patch.object(self.tls.urllib.request, "urlopen", fake):
+            cert_pem, key_pem = self.tls.obtain("crewhub.duckdns.org", "tok-secret", wait=0, directory=FakeAcme.D)
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        key = serialization.load_pem_private_key(key_pem, None)
+        self.assertEqual(cert.public_key().public_numbers(), key.public_key().public_numbers())  # сертифікат на наш ключ
+        self.assertEqual([q.get("clear") for q in fake.duck], [None, "true"])  # TXT поставили, а потім прибрали
+        self.assertTrue(all(q["domains"] == "crewhub" and q["token"] == "tok-secret" for q in fake.duck))
+
+    def test_https_server_answers_and_page_moves_to_it(self):
+        import ssl
+        import socket
+        import urllib.request
+        self.tls.save_cert("crewhub.duckdns.org", *_self_signed())
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            port = sk.getsockname()[1]
+        self.assertEqual(self.tls.start_server(port), port)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        with urllib.request.urlopen(f"https://127.0.0.1:{port}/login", context=ctx, timeout=10) as r:
+            self.assertEqual(r.status, 200)
+            self.assertIn("CrewHub", r.read().decode())
+        self.tls.reload_cert()  # новий сертифікат — без перезапуску
+        self.tls._state["url"] = f"https://crewhub.duckdns.org:{port}"
+        r = self.client.get("/login")
+        self.assertIn(f'name="crewhub-https" content="https://crewhub.duckdns.org:{port}"', r.get_data(as_text=True))
+        self.assertIn(f"connect-src 'self' https://crewhub.duckdns.org:{port}", r.headers["Content-Security-Policy"])
+        app = self.client.get("/login", headers={"User-Agent": "Mozilla/5.0 CrewHubApp/2.4"})  # застосунок — не перекидаємо
+        self.assertNotIn("crewhub-https", app.get_data(as_text=True))
+
+    def test_step_updates_duckdns_gets_cert_and_starts(self):
+        with core.connect() as c:
+            for k, v in (("https_enabled", "1"), ("https_domain", "crewhub"), ("https_port", "443")):
+                c.execute("insert or replace into settings(key, value) values (?, ?)", (k, v))
+            core.meta_set(c, "duckdns_token", "11111111-2222-3333-4444-555555555555")
+            c.commit()
+        calls = []
+        with mock.patch.object(self.tls, "duckdns", lambda d, t, **p: calls.append((d, p)) or True), \
+                mock.patch.object(self.tls, "obtain", lambda d, t, **k: _self_signed(d)), \
+                mock.patch.object(self.tls, "start_server", lambda port, app=None: self.tls._state.update(server=object(), port=5443) or 5443), \
+                mock.patch.object(core, "get_local_ip", lambda: "192.168.0.9"):
+            self.tls.step(force=True)
+        st = self.tls.status()
+        self.assertEqual(st["url"], "https://crewhub.duckdns.org:5443")  # 443 без прав — працює на 5443
+        self.assertIn("працює на 5443", st["info"])
+        self.assertEqual(calls[0], ("crewhub.duckdns.org", {"ip": "192.168.0.9"}))  # DuckDNS — внутрішня адреса сервера
+        self.assertFalse(self.tls.need_cert("crewhub.duckdns.org"))  # сертифікат на 90 днів — продовжувати ще не треба
+        self.tls._state.update(server=None, url=None)
+
+    def test_settings_token_secret_and_errors_shown(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        token = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        with mock.patch.object(self.tls, "step", lambda force=False: None):
+            admin.post("/admin/settings", data={"https_enabled": "on", "https_domain": "crewhub", "duckdns_token_new": token})
+        with core.connect() as c:
+            self.assertEqual(core.meta_get(c, "duckdns_token"), token)
+        self.assertNotIn(token, "".join(r[0] or "" for r in self.sql("select changes from audit")))
+        with open(core.SETTINGS_FILE, encoding="utf-8") as f:
+            self.assertNotIn(token, f.read())
+        self.tls._state["error"] = "DuckDNS не прийняв назву чи токен — перевірте їх у «Правилах»"
+        page = admin.get("/admin?tab=settings").get_data(as_text=True)
+        self.assertIn("•••• eeee", page)
+        self.assertNotIn(token, page)
+        self.assertIn("DuckDNS не прийняв назву чи токен", page)
+
+
 class ServerNetworkTest(CrewHubBase):
     """Сервер перенесли в іншу мережу (інший роутер, приміщення), а в «Точки і Wi-Fi» лишилась стара: телефони бачать
     «Не в робочій мережі». Адмінка (і консоль) нагадує додати мережу сервера — однією кнопкою."""

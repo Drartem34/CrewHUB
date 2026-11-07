@@ -543,6 +543,28 @@
       <p class="muted small" style="margin:6px 0 0">Якщо ввімкнено і Telegram, і WhatsApp, людина підтверджує номер у Telegram (WhatsApp платний).
         Ті, хто зареєструвався раніше, можуть підтвердити номер у «Профілі».</p>
     </div>
+    <div id="https" style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px">
+      <label class="check"><input type="checkbox" name="https_enabled" {{ 'checked' if settings.https_enabled == '1' }}><span><b>Шифрування (HTTPS) — безкоштовно.</b>
+        Усе між телефоном і сервером зашифровано: навіть хто знає пароль від Wi-Fi, не прочитає паролі й дані. На телефонах нічого встановлювати не треба.
+        Потрібні інтернет на сервері й безкоштовна назва на duckdns.org — див. docs/15-https-duckdns.md</span></label>
+      {% if https %}
+        {% if https.url %}<div class="banner ok small" style="margin:8px 0 0">{{ icon('check', 'sm') }}<span>Працює: <b>{{ https.url }}</b>{% if https.expires %} · сертифікат до {{ https.expires.strftime('%d.%m.%Y') }}, продовжиться сам{% endif %}</span></div>{% endif %}
+        {% if https.info %}<div class="banner info small" style="margin:8px 0 0">{{ icon('refresh', 'sm') }}<span>{{ https.info }}</span></div>{% endif %}
+        {% if https.error and settings.https_enabled == '1' %}<div class="banner warn small" style="margin:8px 0 0">{{ icon('alert', 'sm') }}<span>{{ https.error }}</span></div>{% endif %}
+      {% endif %}
+      <div class="form-grid" style="margin-top:8px">
+        <div><label>Назва на duckdns.org</label><input name="https_domain" value="{{ settings.https_domain }}" placeholder="crewhub" autocomplete="off"></div>
+        <div><label>Токен DuckDNS{% if dd_token %} — збережено {{ dd_token }}{% endif %}</label><input name="duckdns_token_new" type="password" autocomplete="new-password" placeholder="{{ 'вставте новий, щоб замінити' if dd_token else 'з duckdns.org (угорі сторінки)' }}"></div>
+        <div><label>Порт</label><input name="https_port" type="number" min="1" max="65535" value="{{ settings.https_port }}"></div>
+      </div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap">
+        {% if dd_token %}<label class="check"><input type="checkbox" name="duckdns_token_clear">Стерти токен</label>{% endif %}
+        <span class="spacer"></span>
+        <button class="sm" formaction="{{ url_for('admin_https_check') }}" title="Спершу збережіть правила">{{ icon('refresh', 'sm') }}Перевірити зараз</button>
+      </div>
+      <p class="muted small" style="margin:6px 0 0">Сервер сам каже DuckDNS свою адресу в мережі й сам отримує та продовжує сертифікат Let's Encrypt.
+        Звичайний вхід (http://IP:5000) лишається; сторінка сама переходить на https, якщо він з телефона відкривається.</p>
+    </div>
     <div id="whatsapp" style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px">
       <label class="check"><input type="checkbox" name="whatsapp_verify" {{ 'checked' if settings.whatsapp_verify == '1' }}><span><b>Підтверджувати номер через WhatsApp.</b>
         Після реєстрації людині приходить код у WhatsApp, вона вводить його, і в заявці видно «✓ номер підтверджено». Потрібні інтернет на сервері й

@@ -4,7 +4,7 @@
 (посилання «код» — уся програма саме такою, якою була в цій версії) або завантажити архівом (посилання «zip» —
 GitHub збирає його сам). Локально кожна версія ще й позначена тегом (`git checkout v17.3`); на GitHub теги не
 відправились — сесії дозволено пушити лише свою гілку (з власного комп'ютера: `git push origin --tags`).
-Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_17_full.zip`),
+Архіви, які ми робили (`CrewHub_v16.zip`, `CrewHub_v17_full.zip`, `CrewHub_v17_1_full.zip` … `CrewHub_v17_18_full.zip`),
 звірено з git файл у файл: кожен архів — рівно цей коміт (у «повних» архівах ще лежала копія історії `.git` і зібрані
 APK). APK усіх версій — у [`releases/`](../releases/README.md). Що змінювалось докладно — [CHANGELOG.md](CHANGELOG.md).
 
@@ -29,7 +29,8 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 | **v17.14** | 2026-10-27 | 2.3 | CrewHub_v17_14_full.zip | Блокування в одному місці, телефон упізнається з новими IP і MAC, Android не показується як iPhone. | [код](https://github.com/Drartem34/CrewHUB/tree/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6) · [zip](https://github.com/Drartem34/CrewHUB/archive/eedecdd496e45ae8bc528e2b3c7d44eae4f671c6.zip) |
 | **v17.15** | 2026-10-27 | 2.3 | CrewHub_v17_15_full.zip | iPhone без застосунку не відвалюється і видно в мережі без сайту: сервер сам підтверджує MAC, упізнає новий MAC за назвою чи «Це телефон працівника?», «спільний MAC» лише з доказом; роутер не тримає зміни. | [код](https://github.com/Drartem34/CrewHUB/tree/622a2c3) · [zip](https://github.com/Drartem34/CrewHUB/archive/622a2c3.zip) |
 | **v17.16** | 2026-10-28 | 2.3 | CrewHub_v17_16_full.zip | Безкоштовне підтвердження номера через Telegram-бота («Поділитися номером»). | [код](https://github.com/Drartem34/CrewHUB/tree/c111ff5) · [zip](https://github.com/Drartem34/CrewHUB/archive/c111ff5.zip) |
-| **v17.17** | 2026-11-07 | 2.4 | CrewHub_v17_17_full.zip | Зміни закриваються, коли люди пішли; роутер упав — час зараховано; дей-офи заявкою зі збором і авторозстановкою; графік списком на телефоні; застосунок 2.4 — тихі сповіщення, менше батареї. | [код](https://github.com/Drartem34/CrewHUB/tree/claude/laughing-tesla-r4ufbs) (гілка) |
+| **v17.17** | 2026-11-07 | 2.4 | CrewHub_v17_17_full.zip | Зміни закриваються, коли люди пішли; роутер упав — час зараховано; дей-офи заявкою зі збором і авторозстановкою; графік списком на телефоні; застосунок 2.4 — тихі сповіщення, менше батареї. | [код](https://github.com/Drartem34/CrewHUB/tree/e105c8f) · [zip](https://github.com/Drartem34/CrewHUB/archive/e105c8f.zip) |
+| **v17.18** | 2026-11-07 | 2.4 | CrewHub_v17_18_full.zip | Шифрування (HTTPS) безкоштовно: DuckDNS + Let's Encrypt, без нічого на телефонах; адмін не в «Колегах». | [код](https://github.com/Drartem34/CrewHUB/tree/claude/laughing-tesla-r4ufbs) (гілка) |
 
 Застосунок — версія Android-застосунку в цій версії (`android/AndroidManifest.xml`). Ключ підпису в git
 не потрапляв ніколи (`android/crewhub.keystore` і `android/keystore.pass` — у `.gitignore`).
@@ -198,5 +199,9 @@ APK). APK усіх версій — у [`releases/`](../releases/README.md). Щ�
 
 ### v17.17 — Зміни закриваються, коли люди пішли; роутер упав — час зараховано; дей-офи; телефонний інтерфейс; застосунок 2.4.
 
-Останній коміт гілки `claude/laughing-tesla-r4ufbs` · архів: CrewHub_v17_17_full.zip · застосунок 2.4
+Коміт [`e105c8f`](https://github.com/Drartem34/CrewHUB/commit/e105c8f) · [код](https://github.com/Drartem34/CrewHUB/tree/e105c8f) · архів: CrewHub_v17_17_full.zip · застосунок 2.4
+
+### v17.18 — Шифрування (HTTPS) безкоштовно: DuckDNS + Let's Encrypt; адмін не в «Колегах».
+
+Останній коміт гілки `claude/laughing-tesla-r4ufbs` · архів: CrewHub_v17_18_full.zip · застосунок 2.4
 

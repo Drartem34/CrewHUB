@@ -126,6 +126,9 @@ DEFAULT_SETTINGS = {
     "whatsapp_template": "crewhub_code",  # назва шаблону «Authentication» з кодом
     "whatsapp_lang": "uk",           # мова шаблону
     "telegram_verify": "0",          # підтверджувати номер через Telegram-бота — безкоштовно (17.16; токен — не в settings.ini)
+    "https_enabled": "0",            # 17.18: шифрування — HTTPS з безкоштовною назвою DuckDNS і сертифікатом Let's Encrypt (tls.py)
+    "https_domain": "",              # назва DuckDNS: crewhub або crewhub.duckdns.org (токен — не в settings.ini)
+    "https_port": "443",             # порт HTTPS; зайнятий чи без прав — 5443
     "foreign_phone_action": "flag",  # чужий акаунт (телефон іншої людини): flag — позначати й повідомляти (як у v17); block_shift — не дати почати / вести зміну; block_login — ще й не пустити в акаунт
     "work_start": "09:00",           # звичайні години зміни (якщо в «Графіку» на цей день нічого немає)
     "work_end": "18:00",             # кінець раніше за початок = нічна зміна через північ
@@ -184,6 +187,9 @@ SETTING_RULES = {
     "whatsapp_template": ("text", 60, "WhatsApp: назва шаблону"),
     "whatsapp_lang": ("text", 10, "WhatsApp: мова шаблону"),
     "telegram_verify": ("bool", "Підтвердження номера в Telegram"),
+    "https_enabled": ("bool", "Шифрування (HTTPS)"),
+    "https_domain": ("text", 80, "HTTPS: назва DuckDNS"),
+    "https_port": ("int", 1, 65535, "HTTPS: порт"),
     "work_start": ("time", "Початок робочого дня"),
     "work_end": ("time", "Кінець робочого дня"),
     "work_weekends": ("bool", "Робочі вихідні"),
@@ -3071,7 +3077,7 @@ def list_backups(manual=False):
 # /health і банер в адмінці показують, якщо котрийсь замовк чи падає (раніше помилка лише друкувалась у консоль).
 WORKERS = {}
 WORKER_NAMES = {"sweep": "Контроль Wi-Fi", "backup": "Автобекап", "people": "Особові папки", "config": "Файл settings.ini",
-                "lan": "Пристрої в мережі", "presence": "Телефони в Wi-Fi", "telegram": "Telegram-бот"}
+                "lan": "Пристрої в мережі", "presence": "Телефони в Wi-Fi", "telegram": "Telegram-бот", "tls": "Шифрування (HTTPS)"}
 
 
 def config_changed(conn):
@@ -4020,7 +4026,7 @@ def _globals():
             "in_app": "CrewHubApp" in (request.headers.get("User-Agent") or ""),
             "apk_ready": os.path.exists(APK_PATH), "demo_accounts": DEMO_ACCOUNTS,
             "system_alert": workers_problem() if u and u["role"] in STAFF_ROLES else None, "mac_tip": mac_tip,
-            "tg_verify_on": bool(u) and telegram_on(db()),
+            "tg_verify_on": bool(u) and telegram_on(db()), "https_url": https_probe_url(),
             "csrf_token": session.get("csrf", "")}
 
 
@@ -4205,7 +4211,22 @@ SECURITY_HEADERS = {
 def _security_headers(resp):
     for k, v in SECURITY_HEADERS.items():
         resp.headers.setdefault(k, v)
+    url = https_probe_url()
+    if url and resp.headers.get("Content-Security-Policy"):  # сторінка по http перевіряє, чи відкривається https (17.18)
+        resp.headers["Content-Security-Policy"] = resp.headers["Content-Security-Policy"].replace("connect-src 'self'", f"connect-src 'self' {url}")
     return resp
+
+
+def https_probe_url():
+    """Адреса з шифруванням, на яку сторінка, відкрита по звичайному http, сама перейде (якщо вона відкривається з цього
+    телефона), — або None: HTTPS не працює, запит уже по https, чи це застосунок (17.18)."""
+    if not has_request_context() or request.is_secure or "CrewHubApp" in (request.headers.get("User-Agent") or ""):
+        return None
+    try:
+        import tls
+        return tls.https_url()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # Хто з якого IP відкривав CrewHub (User-Agent і акаунт): так «Пристрої в мережі» показують модель телефона
@@ -4452,6 +4473,18 @@ def me_phone_telegram():
         _token, link = new_tg_link(conn, current_user()["id"])
         conn.commit()
     return redirect(link)
+
+
+@app.post("/admin/https/check")
+@login_required(staff=True)
+def admin_https_check():
+    """«Перевірити зараз»: адреса в DuckDNS і сертифікат — у фоні (отримання сертифіката — до 2 хв)."""
+    if current_user()["role"] != "admin":
+        abort(403)
+    import tls
+    threading.Thread(target=tls.step, kwargs={"force": True}, daemon=True).start()
+    flash("Перевіряю шифрування: адресу в DuckDNS і сертифікат. Оновіть сторінку за хвилину-дві")
+    return redirect(url_for("admin", tab="settings") + "#https")
 
 
 @app.post("/admin/telegram/test")
@@ -5714,6 +5747,10 @@ def admin():
         ctx["settings"] = {k: setting(k) for k in DEFAULT_SETTINGS}
         tok = os.environ.get("CREWHUB_WA_TOKEN") or meta_get(conn, "whatsapp_token")
         ctx["wa_token"] = ("•••• " + tok[-4:] + (" (зі змінної CREWHUB_WA_TOKEN)" if os.environ.get("CREWHUB_WA_TOKEN") else "")) if tok else None
+        dd = os.environ.get("CREWHUB_DUCKDNS_TOKEN") or meta_get(conn, "duckdns_token")
+        ctx["dd_token"] = ("•••• " + dd[-4:] + (" (зі змінної CREWHUB_DUCKDNS_TOKEN)" if os.environ.get("CREWHUB_DUCKDNS_TOKEN") else "")) if dd else None
+        import tls
+        ctx["https"] = tls.status()
         tg = telegram_token(conn)
         ctx["tg_token"] = ("•••• " + tg[-4:] + (" (зі змінної CREWHUB_TG_TOKEN)" if os.environ.get("CREWHUB_TG_TOKEN") else "")) if tg else None
         ctx["tg_bot"] = meta_get(conn, "telegram_bot")
@@ -6433,7 +6470,7 @@ def _zones_back(f):
 CHECKBOX_SETTINGS = ("lunch_enabled", "lunch_is_paid", "rest_enabled", "rest_is_paid", "registration_open",
                      "auto_start", "work_weekends", "device_lock",
                      "offline_keeps_counting", "dayoff_paid", "lan_scan", "lan_presence", "outage_credit", "whatsapp_verify",
-                     "telegram_verify")
+                     "telegram_verify", "https_enabled")
 
 
 @app.post("/admin/backup_mirror")
@@ -6496,6 +6533,15 @@ def admin_settings():
         elif request.form.get("whatsapp_token_clear"):
             conn.execute("delete from meta where key = 'whatsapp_token'")
             changes["whatsapp_token"] = ["***", None]
+        dd_new = (request.form.get("duckdns_token_new") or "").strip()
+        if dd_new and re.fullmatch(r"[0-9a-fA-F-]{20,64}", dd_new):
+            meta_set(conn, "duckdns_token", dd_new)
+            changes["duckdns_token"] = ["***", "*** (новий)"]
+        elif dd_new:
+            bad.append("токен DuckDNS")
+        elif request.form.get("duckdns_token_clear"):
+            conn.execute("delete from meta where key = 'duckdns_token'")
+            changes["duckdns_token"] = ["***", None]
         tg_new = (request.form.get("telegram_token_new") or "").strip()
         if tg_new and re.fullmatch(r"\d{5,15}:[\w-]{30,60}", tg_new):
             meta_set(conn, "telegram_token", tg_new)
@@ -6511,6 +6557,9 @@ def admin_settings():
             audit(conn, current_user()["id"], "UPDATE", "settings", None, None, changes)
         conn.commit()
         config_changed(conn)
+    if setting("https_enabled") == "1" or any(k in changes for k in ("https_enabled", "https_domain", "https_port", "duckdns_token")):
+        import tls  # шифрування: перевірити налаштування й отримати сертифікат — у фоні (до 2 хв)
+        threading.Thread(target=tls.step, kwargs={"force": True}, daemon=True).start()
     if tg_new:  # новий токен бота — одразу перевіряємо (запит в інтернет — поза _lock)
         try:
             name = telegram_check(tg_new)

@@ -218,11 +218,31 @@ class Dashboard:
         if self.info.get("other_ips"):
             t.add_row("Інші адреси", Text(", ".join(self.info["other_ips"]), style="#f59e0b"))
         t.add_row("Інтернет", Text(self.info.get("public_url") or "вимкнено", style="dim"))
+        if https := self.https_row():
+            t.add_row("Шифрування", Text(https[0], style=https[1]))
         net = self.server_net()
         if net:  # сервер в одній мережі з телефонами — чи вона прив'язана до точки
             t.add_row("Wi-Fi точки", Text(f"{net['cidr']} → {net['location']['name']}", style="#22c55e") if net["location"] else
                       Text(f"{net['cidr']} не в жодній точці: телефони «не в робочій мережі» — в адмінці «Створити точку»", style="bold #ef4444"))
         return Panel(t, title="[bold white]Підключення[/]", title_align="left", box=box.ROUNDED, border_style="#3f3f46")
+
+    def https_row(self):
+        """Рядок «Шифрування» (17.18): адреса https, помилка або None — вимкнено (тоді рядка немає)."""
+        try:
+            import tls
+            st = tls.status()
+            if st["url"]:
+                return st["url"], "bold #22c55e"
+            if st["error"]:
+                conn = connect()
+                try:
+                    if setting("https_enabled", conn) == "1":
+                        return st["error"], "#ef4444"
+                finally:
+                    conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     def server_net(self):
         try:
@@ -292,11 +312,12 @@ class Dashboard:
         body_h = max(height - 8, 10)
         if not narrow:
             right = Layout()
-            right.split_column(Layout(self.network(), size=9 if not self.info.get("other_ips") else 10),
+            right.split_column(Layout(self.network(), size=(9 if not self.info.get("other_ips") else 10) + bool(self.https_row())),
                                Layout(self.system(), size=11), Layout(self.events(events)))
             layout["body"].split_row(Layout(self.people(rows, body_h), ratio=3), Layout(right, ratio=2))
         else:  # вузьке вікно: усе одною колонкою
-            layout["body"].split_column(Layout(self.network(), size=9), Layout(self.people(rows, body_h - 9)))
+            net_h = 9 + bool(self.https_row())
+            layout["body"].split_column(Layout(self.network(), size=net_h), Layout(self.people(rows, body_h - net_h)))
         return layout
 
     # ---- цикл ----------------------------------------------------------------
