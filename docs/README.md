@@ -27,7 +27,7 @@ CrewHub — облік змін, табелів і зарплати для не�
 | Хочете HTTPS у локальній мережі | [HTTPS через Caddy](12-https-caddy.md) |
 | Підтвердження номера — безкоштовно в Telegram | [Telegram](14-telegram.md) |
 | Підтвердження номера кодом у WhatsApp (платно) | [WhatsApp](13-whatsapp.md) |
-| Шукаєте стару версію чи APK | [Хронологія версій v15 → v17.16](VERSIONS.md), [APK усіх версій](../releases/README.md) |
+| Шукаєте стару версію чи APK | [Хронологія версій v15 → v17.17](VERSIONS.md), [APK усіх версій](../releases/README.md) |
 
 Що змінювалось від версії до версії — у [історії версій](CHANGELOG.md) і в розділах «Що нового»
 [`test_app/README.md`](../test_app/README.md) (з технічними подробицями кожної версії, від 2 до 17.5).

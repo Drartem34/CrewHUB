@@ -446,7 +446,7 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         // CrewHubDevice — постійний id цього телефона: сервер запам'ятовує його при реєстрації і вмикає автозміну лише з нього
-        s.setUserAgentString(s.getUserAgentString() + " CrewHubApp/2.3 CrewHubDevice/" + WatchService.deviceId(this)
+        s.setUserAgentString(s.getUserAgentString() + " CrewHubApp/2.4 CrewHubDevice/" + WatchService.deviceId(this)
                 + WatchService.deviceInfo(this) + (weakPhone() ? " CrewHubLite" : ""));
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
@@ -456,8 +456,12 @@ public class MainActivity extends Activity {
             @SuppressWarnings("deprecation") // варіант з WebResourceRequest з'явився лише в Android 7
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 Uri uri = Uri.parse(url);
-                if ("crewhub".equals(uri.getScheme())) {           // crewhub://settings зі сторінки входу
-                    showSetup(server, null);
+                if ("crewhub".equals(uri.getScheme())) {
+                    if ("notifications".equals(uri.getHost())) {   // crewhub://notifications — «Налаштування додатку» (2.4)
+                        openNotificationSettings();
+                        return true;
+                    }
+                    showSetup(server, null);                         // crewhub://settings зі сторінки входу
                     return true;
                 }
                 String scheme = uri.getScheme();
@@ -681,6 +685,17 @@ public class MainActivity extends Activity {
         android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
         am.getMemoryInfo(mi);
         return am.isLowRamDevice() || mi.totalMem < 3500L * 1024 * 1024;
+    }
+
+    /** Налаштування сповіщень CrewHub у системі: там можна вимкнути «Фонову роботу» (значок) — зміна рахується й так. */
+    private void openNotificationSettings() {
+        try {
+            Intent i = Build.VERSION.SDK_INT >= 26
+                    ? new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName())
+                    : new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {
+        }
     }
 
     /** Автозміна: сповіщення (Android 13+) і виняток з економії батареї, інакше фоновий пінг засинає. Питаємо один раз. */

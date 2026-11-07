@@ -303,6 +303,29 @@ def nameservers():
     return list(dict.fromkeys(out))
 
 
+def gateway():
+    """IP роутера — шлюзу за замовчуванням (Linux, Windows, macOS) — або None. За ним сервер бачить, що впала сама
+    мережа (роутер вимкнувся), а не пішли люди (17.17)."""
+    try:
+        with open("/proc/net/route", encoding="ascii") as f:
+            for line in f.read().splitlines()[1:]:
+                p = line.split()
+                if len(p) > 3 and p[1] == "00000000" and int(p[3], 16) & 2:
+                    return socket.inet_ntoa(struct.pack("<I", int(p[2], 16)))
+    except (OSError, ValueError):
+        pass
+    try:
+        if os.name == "nt":
+            m = re.search(r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)", _run(["route", "print", "-4", "0.0.0.0"], 5), re.M)
+            return m[1] if m else None
+        if sys.platform == "darwin":
+            m = re.search(r"gateway:\s*(\d+\.\d+\.\d+\.\d+)", _run(["route", "-n", "get", "default"], 5))
+            return m[1] if m else None
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def probe(nets, known_ips=()):
     """Стукає в кожну адресу (заповнює ARP) і збирає імена. Повертає {ip: ім'я}."""
     names = {}

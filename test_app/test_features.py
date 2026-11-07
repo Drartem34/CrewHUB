@@ -9,7 +9,7 @@ import tempfile
 import time
 import json
 import unittest
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from unittest import mock
 
 from test_crewhub import WORK_IP, CrewHubBase, core, settings_file  # noqa: F401 — test_crewhub налаштовує оточення
@@ -983,6 +983,152 @@ class TelegramVerifyTest(CrewHubBase):
             page = self.register(core.app.test_client())
         self.assertIn("Ми надіслали код у WhatsApp", page)
         self.assertIn("graph.facebook.com", sent[0])
+
+
+class DayoffCampaign1717Test(CrewHubBase):
+    """17.17: блок «Дей-офф» — лише коли керівник відкрив збір (3 дні); обраний день одразу стає дей-оффом; хто не встиг —
+    день ставить керівник або «Розставити автоматично» (без перетинів, не більше N людей в один день — задає адмін)."""
+
+    def setUp(self):
+        super().setUp()
+        self.moder = self.login("moder", "moder123", client=core.app.test_client())
+        today = date.today()
+        self.next_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+    def open_campaign(self):
+        self.moder.post("/dayoffs/campaign", data={"action": "open", "month": self.next_month.strftime("%Y-%m")})
+
+    def workday(self, n=0):
+        d = self.next_month + timedelta(days=n)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        return d
+
+    def approved(self):
+        return [tuple(r) for r in self.sql("select u.username, r.starts_on from requests r join users u on u.id = r.user_id"
+                                            " where r.type = 'day_off' and r.status = 'approved' order by r.starts_on")]
+
+    def test_pick_during_campaign_is_a_request_moderator_decides(self):
+        ivan = self.login("ivan")
+        self.assertNotIn("Запросити дей-офф", ivan.get("/me?tab=clock").get_data(as_text=True))  # без збору — блоку немає
+        self.open_campaign()
+        page = ivan.get("/me?tab=clock").get_data(as_text=True)
+        self.assertIn("Дей-офф на", page)
+        day = self.workday(3).isoformat()
+        ivan.post("/me/request", data={"type": "day_off", "day": day, "back": "clock"})
+        rid, status, starts = self.sql("select r.id, r.status, r.starts_on from requests r join users u on u.id = r.user_id"
+                                       " where u.username = 'ivan' and r.type = 'day_off'")[0]
+        self.assertEqual((status, starts), ("pending", day))  # заявка — керівнику на погодження
+        self.assertIn("Чекайте погодження", ivan.get("/me?tab=clock").get_data(as_text=True))
+        self.assertNotIn("Іван Петренко", self.moder.get("/me?tab=dayoffs").get_data(as_text=True).split("Без дей-оффу")[1].split("</div>")[0])
+        self.moder.post("/team/dayoff", data={"rid": rid, "action": "approve"})
+        self.assertEqual(self.approved(), [("ivan", day)])
+        self.assertIn(f"Ваш дей-офф — <b>{day}</b>", ivan.get("/me?tab=clock").get_data(as_text=True))
+        olha = self.login("olha", client=core.app.test_client())
+        r = olha.post("/me/request", data={"type": "day_off", "day": day, "back": "clock"}, follow_redirects=True)
+        self.assertIn("уже взяли інші", r.get_data(as_text=True))  # максимум 1 людина в день — не перетинаються
+        other_month = date.today().replace(day=1) + timedelta(days=400)
+        olha.post("/me/request", data={"type": "day_off", "day": other_month.isoformat(), "back": "clock"})
+        self.assertFalse(self.sql("select 1 from requests r join users u on u.id = r.user_id where u.username = 'olha'"))  # не в місяці збору
+
+    def test_moderator_rejects_and_person_picks_again(self):
+        ivan = self.login("ivan")
+        self.open_campaign()
+        ivan.post("/me/request", data={"type": "day_off", "day": self.workday(2).isoformat(), "back": "clock"})
+        rid = self.sql("select id from requests where type = 'day_off'")[0][0]
+        self.moder.post("/team/dayoff", data={"rid": rid, "action": "reject"})
+        self.assertEqual(self.sql("select status from requests where id = ?", rid)[0][0], "rejected")
+        self.assertIn("Запросити дей-офф", ivan.get("/me?tab=clock").get_data(as_text=True))  # збір ще йде — можна обрати знову
+
+    def test_missed_campaign_moderator_sets_or_auto(self):
+        self.open_campaign()
+        self.sql("update meta set value = ? where key = 'dayoff_open_until'", str(core.now() - 1))
+        with core.connect() as c:  # фонова перевірка: збір закінчився — керівникам список, хто не обрав
+            core.sweep(c)
+            c.commit()
+        self.assertIn("Збір дей-оффів закінчився", [r[0] for r in self.sql(
+            "select n.title from notifications n join users u on u.id = n.user_id where u.username = 'moder'")])
+        page = self.moder.get("/me?tab=dayoffs").get_data(as_text=True)
+        self.assertIn("Без дей-оффу і без заявки", page)
+        self.assertIn("Розставити автоматично", page)
+        olha = self.sql("select id from users where username = 'olha'")[0][0]
+        self.moder.post("/team/dayoff", data={"action": "set", "user_id": olha, "day": self.workday(5).isoformat()})
+        self.assertIn(("olha", self.workday(5).isoformat()), self.approved())
+        self.moder.post("/team/dayoff/auto", data={"month": self.next_month.strftime("%Y-%m"), "per_day": "5"})
+        self.assertEqual(self.sql("select value from settings where key = 'dayoff_per_day'")[0][0], "1")  # не адмін — ліміт не змінює
+        rows = self.approved()
+        names = [n for n, _ in rows]
+        self.assertEqual(sorted(names), sorted(set(names)))  # кожному по одному
+        self.assertNotIn("admin", names)
+        for n in ("ivan", "olha", "moder"):
+            self.assertIn(n, names)
+        days = [d for _, d in rows]
+        self.assertEqual(len(days), len(set(days)))  # жодних перетинів
+        for d in days:
+            self.assertLess(date.fromisoformat(d).weekday(), 5)  # у робочі дні
+        self.assertIn("Вам поставлено дей-офф", [r[0] for r in self.sql(
+            "select n.title from notifications n join users u on u.id = n.user_id where u.username = 'ivan'")])
+
+    def only_one_free_day(self):
+        """Усім, крім адміна, — відпустка на всі дні місяця, крім одного робочого: на трьох людей один вільний день."""
+        last = (self.next_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        free = self.workday(0)
+        for (uid,) in self.sql("select id from users where role != 'admin' and status = 'active'"):
+            d = self.next_month
+            while d <= last:
+                if d != free:
+                    self.sql("insert into requests(user_id, type, status, starts_on, ends_on, created_at) values (?, 'vacation', 'approved', ?, ?, 0)",
+                             uid, d.isoformat(), d.isoformat())
+                d += timedelta(days=1)
+        return free
+
+    def test_admin_sets_max_people_per_day(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        free = self.only_one_free_day()
+        admin.post("/team/dayoff/auto", data={"month": self.next_month.strftime("%Y-%m"), "per_day": "2"})
+        self.assertEqual(self.sql("select value from settings where key = 'dayoff_per_day'")[0][0], "2")
+        self.assertEqual([d for _, d in self.approved()], [free.isoformat()] * 2)  # двоє в один день, не троє
+
+    def test_not_enough_days_is_reported(self):
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        self.only_one_free_day()
+        r = admin.post("/team/dayoff/auto", data={"month": self.next_month.strftime("%Y-%m"), "per_day": "1"}, follow_redirects=True)
+        self.assertIn("Не вистачило вільних днів", r.get_data(as_text=True))
+        self.assertEqual(len(self.approved()), 1)
+
+
+class PhoneUi1717Test(CrewHubBase):
+    """17.17: нижнє меню без «Меню» (воно — ☰ угорі), графік на телефоні — списком днів, без рядка ставки під кнопками,
+    у застосунку — «Налаштувати сповіщення», і сервер каже застосунку, чи зараз робочий час (без тривог після роботи)."""
+
+    def test_bottom_bar_has_no_menu_duplicate(self):
+        page = self.login("ivan").get("/me?tab=clock").get_data(as_text=True)
+        bar = page[page.index('<nav class="bottombar">'):]
+        bar = bar[:bar.index("</nav>")]
+        self.assertNotIn("Меню", bar)
+        self.assertIn('class="icon-btn ghost menu-btn"', page)  # ☰ угорі лишився
+
+    def test_schedule_list_for_phones(self):
+        ivan = self.login("ivan")
+        for url in ("/me?tab=schedule", "/me?tab=schedule&view=month"):
+            page = ivan.get(url).get_data(as_text=True)
+            self.assertIn('class="sched-list"', page, url)
+            self.assertIn("day-block", page, url)
+        admin = self.login("admin", "admin123", client=core.app.test_client())
+        self.assertIn('class="sched-list"', admin.get("/admin?tab=schedule").get_data(as_text=True))
+
+    def test_no_rate_line_under_start(self):
+        page = self.login("ivan").get("/me?tab=clock").get_data(as_text=True)
+        self.assertNotIn("/год", page[page.index('id="start"'):page.index('id="start"') + 3000])
+
+    def test_app_gets_work_time_and_notification_settings(self):
+        app = core.app.test_client()
+        ua = {"User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-A515F; wv) CrewHubApp/2.4 CrewHubDevice/ivanapp001"}
+        app.post("/login", data={"username": "ivan", "password": "1234"}, headers=ua)
+        r = app.post("/api/clock/auto", json={"device_id": "app-ivanapp001"}, headers={**ua, "X-Forwarded-For": WORK_IP}).get_json()
+        self.assertIn("in_work_time", r)
+        self.assertIn("crewhub://notifications", app.get("/me?tab=app", headers=ua).get_data(as_text=True))
+        self.assertNotIn("crewhub://notifications", self.login("olha", client=core.app.test_client()).get("/me?tab=app").get_data(as_text=True))
 
 
 class ServerNetworkTest(CrewHubBase):

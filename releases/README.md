@@ -12,7 +12,8 @@
 | [CrewHub-2.0.apk](android/CrewHub-2.0.apk) | 2.0 (versionCode 12) | v17.0 | з архіву `CrewHub_v17_full.zip`, як роздавався |
 | [CrewHub-2.1.apk](android/CrewHub-2.1.apk) | 2.1 (13) | v17.1 | зібрано з коміту `a45c67e` тим самим ключем (окремої збірки 2.1 не збереглось) |
 | [CrewHub-2.2.apk](android/CrewHub-2.2.apk) | 2.2 (14) | v17.2 | зібрано з коміту `5d17b0a` тим самим ключем (окремої збірки 2.2 не збереглось) |
-| [CrewHub-2.3.apk](android/CrewHub-2.3.apk) | 2.3 (15) | v17.3 – v17.9 | з архівів `CrewHub_v17_5_full.zip` … `CrewHub_v17_9_full.zip` (той самий файл) |
+| [CrewHub-2.3.apk](android/CrewHub-2.3.apk) | 2.3 (15) | v17.3 – v17.16 | з архівів `CrewHub_v17_5_full.zip` … `CrewHub_v17_9_full.zip` (той самий файл) |
+| [CrewHub-2.4.apk](android/CrewHub-2.4.apk) | 2.4 (16) | v17.17 | тихі сповіщення, попередження лише в робочий час, пінг на зміні раз на 5 хв; той самий ключ підпису — ставиться поверх 2.3 |
 
 Версія 1.9 (сервер v15–v16) підписувалась старим тестовим ключем, який з версії 16 замінено (див. коміт
 `022c18b`); її збірки не збереглось, а нова іншим ключем не встановилась би поверх. Код 1.9 — у версіях v15 і v16 (див. [docs/VERSIONS.md](../docs/VERSIONS.md)).
@@ -33,3 +34,4 @@
 | [CrewHub_Demo-17.9.apk](demo/CrewHub_Demo-17.9.apk) | v17.9 | з архіву `CrewHub_v17_9_full.zip` |
 | [CrewHub_Demo-17.15.apk](demo/CrewHub_Demo-17.15.apk) | v17.15 | зібрано з коду 17.15 (`android/demo/build.sh`), у `CrewHub_v17_15_full.zip` |
 | [CrewHub_Demo-17.16.apk](demo/CrewHub_Demo-17.16.apk) | v17.16 | зібрано з коду 17.16, у `CrewHub_v17_16_full.zip` |
+| [CrewHub_Demo-17.17.apk](demo/CrewHub_Demo-17.17.apk) | v17.17 | зібрано з коду 17.17, у `CrewHub_v17_17_full.zip` |

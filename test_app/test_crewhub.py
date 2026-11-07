@@ -39,6 +39,13 @@ class CrewHubBase(unittest.TestCase):
         core._throttle.reset()  # ліміти спроб входу не переходять з тесту в тест
         core._stats_cache.update(at=0.0, data=None)  # кеші «Огляду» теж
         core._live_cache.update(at=0.0, data=None)
+        # Справжній роутер машини, на якій ідуть тести, — не роутер точки: інакше сервер вирішив би, що мережа впала (17.17).
+        # Тести роутера підставляють свій
+        import lan
+        from unittest import mock
+        patcher = mock.patch.object(lan, "gateway", lambda: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         core.init_db()
         with core.connect() as c:
             c.execute("insert into networks(location_id, cidr, label) values (1, '203.0.113.0/28', 'тест')")

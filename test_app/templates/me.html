@@ -25,11 +25,7 @@
     <button id="resume" class="ok xl" style="margin-bottom:10px">{{ icon('play') }}<span>Завершити перерву</span></button>
     <button id="stop" class="danger xl">{{ icon('stop') }}Закрити зміну</button>
     {% if absence_today %}<div class="banner info" style="margin-top:12px">{{ icon(ABS_ICON[absence_today.type]) }}<span>Сьогодні у вас {{ REQUEST_TYPES[absence_today.type]|lower }} ({{ absence_today.starts_on }} – {{ absence_today.ends_on }})</span></div>{% endif %}
-    <p class="muted small" style="margin:14px 0 0">Ставка {{ me.hourly_rate|money }}/год
-      {%- if pay_rules.weekend > 1 %} · вихідні ×{{ pay_rules.weekend|round(2)|string|replace('.0', '') }}{% endif %}
-      {%- if pay_rules.night > 1 %} · ніч ×{{ pay_rules.night|round(2)|string|replace('.0', '') }}{% endif %}
-      {%- for k, label in [('lunch', 'обід'), ('rest', 'пауза')] if break_rules[k].enabled %} · {{ label }} {{ (break_rules[k].pct ~ '% ставки') if break_rules[k].paid else 'не оплачується' }}{% endfor %}.
-      <a href="{{ url_for('me', tab='timesheet') }}">Додати пропущену зміну</a></p>
+    {# Рядок «Ставка … грн/год · вихідні ×… · обід …» під кнопками прибрано (17.17): заробіток видно в «Мій табель» #}
     <p class="small" id="autoWhy" hidden style="color:var(--warn-text);margin:6px 0 0"></p>
   </div>
   <div>
@@ -49,32 +45,27 @@
         <div class="row muted" style="margin-top:6px">{{ icon('map') }}{{ next_shift.location or 'Точку не вказано' }}</div>
       {% else %}<div class="muted">У графіку немає запланованих змін</div>{% endif %}
     </div>
+    {# Дей-офф — лише поки керівник відкрив збір (3 дні): людина обирає день і надсилає заявку, керівник погоджує чи
+       відхиляє; хто не встиг — блок зникає, день ставить керівник (17.17) #}
     {% if dayoff_open_until %}
     <div class="card dayoff-call">
-      <div class="card-head"><h3>{{ icon('calendar') }} Збір заявок на дей-офф</h3></div>
-      {% if dayoff_req %}
+      <div class="card-head"><h3>{{ icon('calendar') }} Дей-офф на {{ dayoff_month_name }}</h3></div>
+      {% if dayoff_mine %}
+        <div class="row ok-text">{{ icon('check') }}<span>Ваш дей-офф — <b>{{ dayoff_mine }}</b> (погоджено). Інший день — попросіть керівника.</span></div>
+      {% elif dayoff_req %}
         <div class="row ok-text">{{ icon('check') }}<span>Заявку надіслано{% if dayoff_req.starts_on %}: <b>{{ dayoff_req.starts_on }}</b>{% endif %}. Чекайте погодження тімліда.</span></div>
       {% else %}
-        <p class="muted small" style="margin:0 0 10px">Оберіть бажаний день до <b>{{ dayoff_open_until|dt }}</b>. Хто не встигне — день поставлять тімліди.</p>
-        <button class="sm primary" data-dialog="dayoffReqDlg">{{ icon('plus', 'sm') }}Запросити дей-офф</button>
+        <p class="muted small" style="margin:0 0 10px">Оберіть день і надішліть заявку до <b>{{ dayoff_open_until|dt }}</b> — її погодить керівник. Не встигнете — день поставить керівник сам.</p>
+        <form method="post" action="{{ url_for('me_request') }}" class="row" style="flex-wrap:wrap">
+          <input type="hidden" name="type" value="day_off"><input type="hidden" name="back" value="clock">
+          <input type="date" name="day" min="{{ dayoff_min }}" max="{{ dayoff_max }}" required style="max-width:190px">
+          <button class="sm primary">{{ icon('check', 'sm') }}Запросити дей-офф</button>
+        </form>
       {% endif %}
     </div>
     {% endif %}
   </div>
 </div>
-
-{% if dayoff_open_until and not dayoff_req %}
-<dialog id="dayoffReqDlg"><form method="post" action="{{ url_for('me_request') }}">
-  <div class="d-head"><h3>Запросити дей-офф</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
-  <div class="d-body form-grid">
-    <input type="hidden" name="type" value="day_off"><input type="hidden" name="back" value="clock">
-    <div class="full"><label>Бажаний день</label><input type="date" name="day" min="{{ today_iso }}" required></div>
-    <div class="full"><label>Коментар (необов'язково)</label><input name="comment" placeholder="Напр. причина"></div>
-    <p class="full muted small" style="margin:0">Заявка піде тімліду на погодження. Остаточно день затверджує він.</p>
-  </div>
-  <div class="d-foot"><button type="button" data-close>Скасувати</button><button class="primary">Надіслати</button></div>
-</form></dialog>
-{% endif %}
 
 <dialog id="closeConfirm">
   <div class="d-head"><h3>Закінчити зміну?</h3><button type="button" class="icon-btn ghost" data-close>{{ icon('x') }}</button></div>
@@ -177,7 +168,7 @@
   {{ month_table(mgrid, editable=me.role in DAYOFF_ROLES, me_id=me.id) }}
 </div>
 {% endif %}
-{# Плашка дей-оффу — лише коли керівник відкрив збір заявок або дав дозвіл, чи людина вже чекає на рішення #}
+{# Дей-офф — лише коли керівник відкрив збір (3 дні) або сам дав дозвіл, чи людина чекає на рішення (17.17) #}
 {% if dayoff_req or dayoff_open_until %}
 <div class="card">
   <div class="card-head"><h3>{{ icon('calendar') }} Дей-офф</h3></div>
@@ -189,15 +180,18 @@
     </form>
     {% if dayoff_full %}<p class="muted small" style="margin:8px 0 0">Уже зайняті дні: {% for d in dayoff_full %}{{ d.strftime('%d.%m') }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
   {% elif dayoff_req %}
-    <div class="muted">Запит надіслано {{ dayoff_req.created_at|dt }}. Коли тімлід дозволить, у вас буде 3 дні, щоб обрати день.</div>
+    <div class="muted">Запит надіслано {{ dayoff_req.created_at|dt }}. Чекайте рішення тімліда.</div>
+  {% elif dayoff_mine %}
+    <div class="row ok-text">{{ icon('check') }}<span>Ваш дей-офф на {{ dayoff_month_name }} — <b>{{ dayoff_mine }}</b> (погоджено). Інший день — попросіть керівника.</span></div>
   {% else %}
-    <p class="muted small" style="margin:0 0 10px">Спершу попросіть дозвіл у тімліда. Після дозволу протягом 3 днів оберете день самі. Дей-офф бачить уся команда.
-      {% if dayoff_limits[1] %}Не більше {{ dayoff_limits[1] }} на місяць.{% endif %}{% if dayoff_limits[2] %} Оплачується як повний робочий день.{% endif %}</p>
+    <p class="muted small" style="margin:0 0 10px">Керівник відкрив збір: оберіть день на {{ dayoff_month_name }} і надішліть заявку до <b>{{ dayoff_open_until|dt }}</b> — її погодить керівник.
+      Не встигнете — день поставить керівник сам. {% if dayoff_limits[0] %}Не більше {{ dayoff_limits[0] }} людей в один день.{% endif %}{% if dayoff_limits[2] %} Оплачується як повний робочий день.{% endif %}</p>
     <form method="post" action="{{ url_for('me_request') }}" class="row" style="flex-wrap:wrap">
       <input type="hidden" name="type" value="day_off"><input type="hidden" name="back" value="schedule">
-      <input name="comment" placeholder="Коментар (необов'язково)" class="grow" style="flex:1 1 200px">
-      <button class="primary">{{ icon('send', 'sm') }}Попросити дей-офф</button>
+      <input type="date" name="day" min="{{ dayoff_min }}" max="{{ dayoff_max }}" required style="max-width:190px">
+      <button class="primary">{{ icon('check', 'sm') }}Попросити дей-офф</button>
     </form>
+    {% if dayoff_full %}<p class="muted small" style="margin:8px 0 0">Уже зайняті дні: {% for d in dayoff_full %}{{ d.strftime('%d.%m') }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
   {% endif %}
 </div>
 {% endif %}
@@ -292,8 +286,36 @@
       <form method="post" action="{{ url_for('dayoff_campaign') }}"><input type="hidden" name="action" value="close"><button class="sm">Закрити збір</button></form>
     </div>
   {% else %}
-    <p class="muted small" style="margin:0 0 10px">Відкрийте збір — на 3 дні у кожного з'явиться маленька кнопка «Запросити дей-офф» на головному екрані. Хто не заповнить — день поставите самі тут або в графіку.</p>
-    <form method="post" action="{{ url_for('dayoff_campaign') }}"><input type="hidden" name="action" value="open"><button class="sm primary">{{ icon('plus', 'sm') }}Відкрити збір заявок</button></form>
+    <p class="muted small" style="margin:0 0 10px">Відкрийте збір — на 3 дні в кожного з'явиться блок «Дей-офф»: людина обирає день і надсилає заявку, ви погоджуєте чи
+      відхиляєте її в «Просять дей-офф». Хто не встигне — блок у нього зникне, а день поставите самі нижче чи кнопкою «Розставити автоматично»
+      (не більше {{ dayoff_per_day or 'скільки завгодно' }} людей в один день).</p>
+    <form method="post" action="{{ url_for('dayoff_campaign') }}" class="row" style="flex-wrap:wrap"><input type="hidden" name="action" value="open">
+      <select name="month" style="max-width:200px">{% for v, label in dayoff_months %}<option value="{{ v }}" {{ 'selected' if v == dayoff_month.strftime('%Y-%m') }}>на {{ label|lower }}</option>{% endfor %}</select>
+      <button class="sm primary">{{ icon('plus', 'sm') }}Відкрити збір заявок</button></form>
+  {% endif %}
+</div>
+<div class="card" id="dayoffMissing">
+  <div class="card-head"><h3>{{ icon('users') }} Без дей-оффу і без заявки на {{ dayoff_month_label }} · {{ dayoff_missing|length }}</h3></div>
+  {% for p in dayoff_missing %}
+  <form method="post" action="{{ url_for('team_dayoff') }}" class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+    <input type="hidden" name="action" value="set"><input type="hidden" name="user_id" value="{{ p.id }}">
+    <div class="grow"><b>{{ p.full_name }}</b></div>
+    <input type="date" name="day" min="{{ today_iso }}" required style="max-width:170px">
+    <button class="sm">Поставити</button>
+  </form>
+  {% else %}<div class="muted">У всіх уже є дей-офф у цьому місяці</div>{% endfor %}
+  {% if dayoff_missing %}
+  <form method="post" action="{{ url_for('team_dayoff_auto') }}" class="row" style="margin-top:12px;flex-wrap:wrap"
+        data-confirm="Поставити дей-офф усім, хто ще без нього ({{ dayoff_missing|length }}), — у робочі дні, без перетинів?">
+    <input type="hidden" name="month" value="{{ dayoff_month.strftime('%Y-%m') }}">
+    {% if me.role == 'admin' %}<label class="small" style="display:flex;gap:6px;align-items:center">людей в один день, не більше
+      <input name="per_day" type="number" min="0" max="1000" value="{{ dayoff_per_day }}" style="width:80px"></label>
+    {% else %}<span class="muted small">не більше {{ dayoff_per_day or 'скільки завгодно' }} людей в один день (змінює адмін)</span>{% endif %}
+    <span class="spacer"></span>
+    <button class="sm primary">{{ icon('refresh', 'sm') }}Розставити автоматично</button>
+  </form>
+  <p class="muted small" style="margin:6px 0 0">Автоматично: кожному — день, коли він працює за графіком, без відпусток і лікарняних, і не більше
+    вказаної кількості людей в один день. Переставити чи скасувати — у «Найближчих дей-оффах».</p>
   {% endif %}
 </div>
 <div class="card">
@@ -417,6 +439,14 @@
 </div>
 {% elif tab == 'app' %}
 {% with force = True %}{% include "_mac_tip.html" %}{% endwith %}
+{% if in_app %}
+<div class="card">
+  <div class="card-head"><h3>{{ icon('bell') }} Сповіщення застосунку</h3></div>
+  <p class="muted small" style="margin:0 0 10px">Значок «CrewHub працює у фоні» можна сховати: «Налаштувати сповіщення» → вимкніть «Фонова робота».
+    Зміна рахується й далі. Попередження «Телефон відключився від робочого Wi-Fi» приходить лише в робочий час і змахується.</p>
+  <a class="btn sm" href="crewhub://notifications">{{ icon('bell', 'sm') }}Налаштувати сповіщення</a>
+</div>
+{% endif %}
 <div class="card">
   <div class="card-head"><h3>{{ icon('phone') }} Код цього пристрою</h3></div>
   <p class="muted small" style="margin:0 0 8px">За цим кодом сервер знає, що це ваш телефон, і сам вмикає зміну. Новий телефон — покажіть код керівнику: він перезапише його у вашій картці.</p>

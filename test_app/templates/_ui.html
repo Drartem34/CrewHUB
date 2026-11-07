@@ -73,12 +73,12 @@
 {% macro month_table(mg, editable=False, me_id=None) %}
 {% set ABBR = {'day_off': 'Д', 'vacation': 'В', 'sick_leave': 'Л'} %}
 {% if editable %}
-<div class="row month-mode" style="flex-wrap:wrap;margin-bottom:10px">
+<div class="row month-mode sched-table" style="flex-wrap:wrap;margin-bottom:10px">
   <span class="muted small">Клік по клітинці ставить:</span>
   <span class="view-switch mode-switch"><a class="on" href="#" data-mode="shift">Зміни</a><a href="#" data-mode="dayoff">Дей-офи</a></span>
 </div>
 {% endif %}
-<div class="table-wrap month-wrap"><table class="month mode-shift{{ ' editable' if editable }}">
+<div class="table-wrap month-wrap sched-table"><table class="month mode-shift{{ ' editable' if editable }}">
   <thead><tr><th class="who">Працівник</th>{% for d in mg.days %}<th class="{{ 'today' if d.today }}{{ ' weekend' if d.weekend }}{{ ' wk' if d.date.weekday() == 0 and not loop.first }}">{{ d.n }}<small>{{ d.label }}</small></th>{% endfor %}</tr></thead>
   <tbody>
   {% for u in mg.users %}
@@ -96,6 +96,27 @@
 </table></div>
 <script>(function () { const w = document.querySelectorAll(".month-wrap"), b = w[w.length - 1], t = b && b.querySelector("th.today");
   if (t) b.scrollLeft = Math.max(0, t.offsetLeft - b.querySelector("th.who").offsetWidth - 60); })();</script>
+{# Телефон: замість сітки — список днів (17.17). Сьогодні розгорнуто; змінювати графік по клітинках — на ПК чи в режимі «Тиждень» #}
+<div class="sched-list">
+  {% if editable %}<p class="muted small" style="margin:0 0 8px">На телефоні графік — списком. Змінювати по днях — у режимі «Тиждень» або на ПК.</p>{% endif %}
+  {% for d in mg.days %}
+  {% set ns = namespace(work=0, off=[]) %}
+  {% for u in mg.users %}{% if mg.absences.get((u.id, d.iso)) %}{% set ns.off = ns.off + [u.full_name.split()[0]] %}{% elif mg.cells.get((u.id, d.iso)) %}{% set ns.work = ns.work + 1 %}{% endif %}{% endfor %}
+  {% set mine_ab = mg.absences.get((me_id, d.iso)) if me_id else None %}{% set mine_sc = mg.cells.get((me_id, d.iso)) if me_id else None %}
+  <details class="day-block{{ ' today' if d.today }}{{ ' weekend' if d.weekend }}"{{ ' open' if d.today }}>
+    <summary><b>{{ d.n }} {{ d.label }}</b>{% if d.today %} <span class="pill ok">сьогодні</span>{% endif %}
+      <span class="day-sum">{% if me_id %}{% if mine_ab %}у вас {{ REQUEST_TYPES[mine_ab.type]|lower }}{% elif mine_sc %}ви: {{ mine_sc }}{% else %}ви: —{% endif %} · {% endif %}працюють {{ ns.work }}{% if ns.off %} · немає: {{ ns.off|join(', ') }}{% endif %}</span></summary>
+    {% for u in mg.users %}
+    {% set ab = mg.absences.get((u.id, d.iso)) %}{% set sc = mg.cells.get((u.id, d.iso)) %}
+    {% if ab or sc %}
+    <div class="day-row{{ ' mine' if u.id == me_id }}"><span class="who">{{ u.full_name }}</span>
+      <span class="what">{% if ab %}<span class="absence a-{{ ab.type }}{{ ' pending' if ab.status == 'pending' }}">{{ REQUEST_TYPES[ab.type] }}</span>{% else %}{{ sc }}{% endif %}</span></div>
+    {% endif %}
+    {% endfor %}
+    {% if not ns.work and not ns.off %}<div class="day-row muted small">нікого за графіком</div>{% endif %}
+  </details>
+  {% endfor %}
+</div>
 <div class="row small muted legend" style="margin-top:10px;flex-wrap:wrap">
   <span class="mkey on">9</span>робоча зміна (година початку) <span class="mkey a-day_off">Д</span>дей-офф <span class="mkey a-vacation">В</span>відпустка <span class="mkey a-sick_leave">Л</span>лікарняний
   {% if editable %}<span class="spacer"></span><span>Режим «Зміни» — клік ставить/прибирає зміну; «Дей-офи» — ставить/знімає дей-офф.</span>{% endif %}
@@ -103,7 +124,7 @@
 {% endmacro %}
 
 {% macro week_table(grid, editable=False, me_id=None, endpoint='admin', extra={}) %}
-<div class="table-wrap"><table class="week{{ ' week-5' if not grid.weekend }}">
+<div class="table-wrap sched-table"><table class="week{{ ' week-5' if not grid.weekend }}">
   <thead><tr><th>Працівник</th>{% for d in grid.days %}<th class="{{ 'today' if d.today }}{{ ' weekend' if d.weekend }}">{{ d.label }}<small>{{ d.date.strftime('%d.%m') }}</small></th>{% endfor %}</tr></thead>
   <tbody>
   {% for u in grid.users %}
@@ -136,6 +157,35 @@
   {% endfor %}
   </tbody>
 </table></div>
+{# Телефон: замість сітки — список днів (17.17): спершу ви, далі решта; сьогодні розгорнуто #}
+{% set any_today = grid.days|selectattr('today')|list %}
+<div class="sched-list">
+  {% for d in grid.days %}
+  <details class="day-block{{ ' today' if d.today }}{{ ' weekend' if d.weekend }}"{{ ' open' if d.today or (loop.first and not any_today) }}>
+    <summary><b>{{ d.label }} {{ d.date.strftime('%d.%m') }}</b>{% if d.today %} <span class="pill ok">сьогодні</span>{% endif %}
+      {% if me_id %}{% set mab = grid.absences.get((me_id, d.iso)) %}{% set msl = grid.cells.get((me_id, d.iso), []) %}
+      <span class="day-sum">{% if mab %}у вас {{ REQUEST_TYPES[mab.type]|lower }}{% elif msl %}ви: {% for sc in msl %}{{ sc.starts_at|tm }}–{{ sc.ends_at|tm }}{{ ', ' if not loop.last }}{% endfor %}{% elif d.weekend %}вихідний{% else %}ви: робочий день{% endif %}</span>{% endif %}</summary>
+    {% for u in (grid.users|selectattr('id', 'equalto', me_id)|list) + (grid.users|rejectattr('id', 'equalto', me_id)|list) %}
+    {% set ab = grid.absences.get((u.id, d.iso)) %}{% set slots = grid.cells.get((u.id, d.iso), []) %}
+    <div class="day-row{{ ' mine' if u.id == me_id }}">
+      <span class="who">{{ u.full_name }}</span>
+      <span class="what">
+        {% if ab %}<span class="absence a-{{ ab.type }}{{ ' pending' if ab.status == 'pending' }}">{{ icon(ABS_ICON[ab.type], 'sm') }}{{ REQUEST_TYPES[ab.type] }}{% if ab.status == 'pending' %}<small>чекає погодження</small>{% endif %}
+          {% if editable %}<form method="post" action="{{ url_for('admin_absence') }}" data-confirm="Зняти позначку «{{ REQUEST_TYPES[ab.type] }}» ({{ ab.starts_on }} – {{ ab.ends_on }})?">
+            <input type="hidden" name="cancel_id" value="{{ ab.id }}"><input type="hidden" name="week" value="{{ grid.days[0].iso }}"><input type="hidden" name="weekend" value="{{ '1' if grid.weekend }}"><button title="Зняти">×</button></form>{% endif %}</span>{% endif %}
+        {% for sc in slots %}<span class="slot">{{ sc.starts_at|tm }}–{{ sc.ends_at|tm }}{% if sc.location %}<small>{{ sc.location }}</small>{% endif %}
+          {% if editable %}<form method="post" action="{{ url_for('admin_schedule') }}"><input type="hidden" name="delete_id" value="{{ sc.id }}"><input type="hidden" name="week" value="{{ grid.days[0].iso }}"><button title="Видалити">×</button></form>{% endif %}</span>{% endfor %}
+        {% if not ab and not slots %}<span class="muted small">{{ 'вихідний' if d.weekend else 'робочий день' }}</span>{% endif %}
+        {% if editable %}
+          {% if not ab %}<button type="button" class="sm" title="Лікарняний, дей-офф або відпустка" data-dialog="absDlg" data-fill='{{ {"user_id": u.id, "starts_on": d.iso, "ends_on": d.iso, "who": u.full_name}|tojson }}'>{{ icon('alert', 'sm') }}</button>{% endif %}
+          <button type="button" class="sm" title="Додати зміну" data-dialog="addSlot" data-fill='{{ {"user_id": u.id, "day": d.iso, "who": u.full_name}|tojson }}'>{{ icon('plus', 'sm') }}</button>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </details>
+  {% endfor %}
+</div>
 <div class="row small muted legend" style="margin-top:10px;flex-wrap:wrap">
   {% for t in ['sick_leave', 'day_off', 'vacation'] %}<span class="absence a-{{ t }}">{{ icon(ABS_ICON[t], 'sm') }}{{ REQUEST_TYPES[t] }}</span>{% endfor %}
   <span class="absence a-vacation pending">чекає погодження</span>

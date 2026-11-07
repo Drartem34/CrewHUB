@@ -468,6 +468,8 @@
       <div><label>Прийшов раніше, хв</label><input name="auto_early_minutes" inputmode="numeric" value="{{ settings.auto_early_minutes }}"></div>
       <div><label>Закрити після кінця, без Wi-Fi (год:хв)</label><input name="auto_close_minutes" inputmode="numeric" placeholder="1:30"
         value="{{ '%d:%02d' % ((settings.auto_close_minutes|int) // 60, (settings.auto_close_minutes|int) % 60) }}"></div>
+      <div><label title="Після кінця робочого часу сервер сам перевіряє, чи телефон ще в Wi-Fi, раз на 2 хв. Немає в усіх перевірках — зміна закривається часом, коли телефон бачили востаннє (до нього й оплачено). 0 — вимкнено: тоді чекає «Закрити після кінця»">Перевірок телефона після кінця зміни (раз на 2 хв)</label>
+        <input name="end_checks" type="number" min="0" max="10" value="{{ settings.end_checks }}"></div>
     </div>
     <label class="check"><input type="checkbox" name="work_weekends" {{ 'checked' if settings.work_weekends == '1' }}>Автостарт і в суботу та неділю</label>
     <p class="muted small">Хто підключився раніше, отримує відлік з початку зміни. Якщо після кінця зміни телефон {{ '%d:%02d' % ((settings.auto_close_minutes|int) // 60, (settings.auto_close_minutes|int) % 60) }} не був у робочому Wi-Fi,

@@ -14,7 +14,7 @@
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
   <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=12">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=13">
   <link rel="stylesheet" href="{{ url_for('static', filename='motion.css') }}?v=5">
   <script>try { var t = localStorage.getItem('crewhub_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); document.documentElement.dataset.theme = t; } catch (e) {}
   try { var m = localStorage.getItem('crewhub_motion') || 'auto', c = document.documentElement.classList, n = navigator;
@@ -85,7 +85,7 @@
     {% for href, key, title, ic in items %}
       <a href="{{ href }}" class="{{ 'on' if here == key }}">{{ icon(ic) }}{{ title }}{% if key in ('admin:requests', 'me:dayoffs') and pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
     {% endfor %}
-    <a href="#" onclick="document.body.classList.add('menu-open'); return false">{{ icon('menu') }}Меню</a>
+    {# «Меню» тут не дублюємо: воно — кнопка ☰ у лівому верхньому куті (17.17) #}
   </nav>
 </div>
 {% else %}

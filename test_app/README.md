@@ -36,6 +36,14 @@
   редагування ставки й змін, журнал підключень, журнал редагувань, payroll з експортом у CSV,
   правила компанії.
 
+## Що нового у версії 17.17: зміни закриваються, роутер, дей-офи, телефон, застосунок 2.4
+
+- `end_checks` / `end_check_shifts()` / `end_check_result()` — перевірки телефона після кінця зміни в `presence_step`.
+- `lan.gateway()`, `net_gateway()`, `note_gateway()`, `network_down()`; `sweep` під час падіння мережі нікого не ставить на
+  паузу, `restore_after_outage(..., cause="network")`.
+- `dayoff_campaign_month()`, `dayoff_missing()`, `set_dayoff()`, `auto_dayoffs()`, `/team/dayoff/auto`, дія `set` у `team_dayoff`.
+- `_ui.html`: `sched-list` у `week_table` / `month_table`; `base.html` — без «Меню» в нижній панелі; `in_work_time` в `/api/clock/*`.
+
 ## Що нового у версії 17.16: безкоштовне підтвердження номера через Telegram
 
 - `tg_api()`, `telegram_on()`, `telegram_check()` (getMe + deleteWebhook), `new_tg_link()` / `tg_links`, `tg_handle()`,

@@ -132,6 +132,8 @@ DEFAULT_SETTINGS = {
     "work_weekends": "0",            # автостарт і в суботу/неділю
     "auto_early_minutes": "30",      # прийшов раніше: зміна все одно рахується з початку робочого часу
     "auto_close_minutes": "90",      # після кінця зміни: стільки без робочого Wi-Fi — зміна закривається
+    "end_checks": "3",               # 17.17: після кінця зміни сервер сам перевіряє телефон у Wi-Fi стільки разів (раз на 2 хв);
+                                     # немає в усіх — зміна закривається часом, коли телефон бачили востаннє. 0 — вимкнено
         # лікарняний діє одразу, дей-офф і відпустку погоджує модератор
     "late_threshold_minutes": "10",
     "max_shift_hours": "16",
@@ -187,6 +189,7 @@ SETTING_RULES = {
     "work_weekends": ("bool", "Робочі вихідні"),
     "auto_early_minutes": ("int", 0, 240, "Ранній прихід"),
     "auto_close_minutes": ("int", 1, 1440, "Закрити після кінця зміни через"),
+    "end_checks": ("int", 0, 10, "Перевірок телефона після кінця зміни"),
     "late_threshold_minutes": ("int", 0, 240, "Поріг запізнення"),
     "max_shift_hours": ("int", 1, 48, "Максимальна зміна"),
     "default_hourly_rate": ("float", 0, 1000000, "Загальна ставка"),
@@ -272,7 +275,7 @@ EVENTS = {"start": "Почав зміну", "stop": "Закрив зміну", "
           "login_failed": "Невдалий вхід", "brute_force": "Підбір пароля", "account_hopping": "Вхід у різні акаунти",
           "blocked_device": "Заблокований пристрій", "phone_verified": "Номер підтверджено в WhatsApp",
           "shared_mac": "Спільний MAC: кілька телефонів", "mac_changed": "Телефон змінив адресу Wi-Fi (MAC)",
-          "phone_verified_tg": "Номер підтверджено в Telegram"}
+          "phone_verified_tg": "Номер підтверджено в Telegram", "network_downtime": "Роутер не працював: мережа впала"}
 # Підозрілі входи й зміни (див. foreign_device): у журналі червоні, рахуються в «Безпека сьогодні».
 # 17.11: підбір пароля, вхід у різні акаунти з одного пристрою, спроба із заблокованого пристрою
 SUSPICIOUS_EVENTS = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device",
@@ -597,6 +600,8 @@ def init_db(seed=True):
     _mac_seen.clear()
     _mac_pending.clear()
     _mac_ips.clear()
+    _end_miss.clear()
+    _net.update(gw=None, fails=0, first_fail=None, down_since=None, checked=0.0, recovered=None)
     _blocked["at"] = 0.0
     conn = connect()
     conn.executescript(SCHEMA)
@@ -860,6 +865,74 @@ def dayoff_campaign_until(conn):
     except (TypeError, ValueError):
         until = 0
     return until if until > now() else 0
+
+
+def dayoff_campaign_month(conn):
+    """Місяць, на який відкрито збір дей-оффів (перший день місяця). Без збору — поточний місяць, а з 20-го — наступний."""
+    m = parse_month(meta_get(conn, "dayoff_campaign_month") or "") if meta_get(conn, "dayoff_campaign_month") else None
+    if m:
+        return m
+    today = date.today()
+    return (today.replace(day=28) + timedelta(days=4)).replace(day=1) if today.day >= 20 else today.replace(day=1)
+
+
+def dayoff_pick_ctx(conn, u):
+    """Для картки «Дей-офф» під час збору: місяць, межі дат, уже обраний день цього місяця."""
+    month = dayoff_campaign_month(conn)
+    first, last = month_range(month.strftime("%Y-%m"))
+    mine = conn.execute("select starts_on from requests where user_id = ? and type = 'day_off' and status = 'approved'"
+                        " and starts_on <= ? and ends_on >= ? order by starts_on limit 1",
+                        (u["id"], last.isoformat(), first.isoformat())).fetchone()
+    return {"dayoff_month_name": MONTHS_NOM[month.month - 1].lower(), "dayoff_min": max(first, date.today()).isoformat(),
+            "dayoff_max": last.isoformat(), "dayoff_mine": mine[0] if mine else None}
+
+
+def dayoff_missing(conn, month_first):
+    """Хто ще без дей-оффу в цьому місяці й не надіслав заявку (працівники, тімліди, модератори — не адміни): не встиг
+    обрати під час збору — день ставить керівник (17.17). Надіслав заявку — її погоджує чи відхиляє керівник."""
+    first, last = month_range(month_first.strftime("%Y-%m"))
+    return conn.execute(
+        "select id, full_name from users u where status = 'active' and role != 'admin' and not exists (select 1 from requests r"
+        " where r.user_id = u.id and r.type = 'day_off' and (r.status = 'approved' and r.starts_on <= ? and r.ends_on >= ?"
+        " or r.status in ('pending', 'granted')))"
+        " order by full_name", (last.isoformat(), first.isoformat())).fetchall()
+
+
+def set_dayoff(conn, uid, day, actor_id, comment=None):
+    """Дей-офф одразу затверджено (людина обрала під час збору чи керівник поставив сам). Повертає id запиту."""
+    cur = conn.execute("insert into requests(user_id, type, status, starts_on, ends_on, comment, reviewer_id, created_at)"
+                       " values (?, 'day_off', 'approved', ?, ?, ?, ?, ?)", (uid, day, day, comment, actor_id, now()))
+    apply_absence(conn, conn.execute("select * from requests where id = ?", (cur.lastrowid,)).fetchone())
+    audit(conn, actor_id, "INSERT", "requests", cur.lastrowid, uid, {"day_off": [None, day]})
+    return cur.lastrowid
+
+
+def auto_dayoffs(conn, month_first, actor):
+    """«Розставити автоматично» (17.17): кожному, хто ще без дей-оффу в місяці, — день, коли він працює (за графіком чи
+    загальними годинами), без відсутностей, і так, щоб в один день було не більше dayoff_per_day людей. Обирає найменш
+    зайнятий день (рівно розкладає людей по місяцю). Повертає ([(ім'я, день)], [ім'я — не вистачило днів])."""
+    first, last = month_range(month_first.strftime("%Y-%m"))
+    days, d = [], max(first, date.today() + timedelta(days=1))
+    while d <= last:
+        days.append(d)
+        d += timedelta(days=1)
+    per_day = setting_int("dayoff_per_day", conn)
+    taken = {x: len(conn.execute("select 1 from requests where type = 'day_off' and status = 'approved' and starts_on <= ? and ends_on >= ?",
+                                  (x.isoformat(), x.isoformat())).fetchall()) for x in days}
+    done, skipped = [], []
+    for u in dayoff_missing(conn, first):
+        cands = [x for x in days if (not per_day or taken[x] < per_day)
+                 and work_window(conn, u["id"], int(datetime.combine(x, datetime.min.time()).timestamp()) + 13 * 3600)
+                 and not dayoff_limit_error(conn, u["id"], x)]
+        if not cands:
+            skipped.append(u["full_name"])
+            continue
+        x = min(cands, key=lambda c: (taken[c], hashlib.md5(f"{u['id']}:{c}".encode()).hexdigest()))
+        set_dayoff(conn, u["id"], x.isoformat(), actor["id"], "розставлено автоматично")
+        taken[x] += 1
+        notify(conn, u["id"], "Вам поставлено дей-офф", f"{x:%d.%m.%Y} — розставлено автоматично. Інший день — попросіть керівника")
+        done.append((u["full_name"], x))
+    return done, skipped
 
 
 def grant_dayoff(conn, r, actor, comment=None):
@@ -2585,13 +2658,15 @@ def sleepy_shift(shift):
 OUTAGE_GRACE = 600  # с після відновлення світла: поки завантажиться роутер і телефони знову підключаться
 
 
-def restore_after_outage(conn, start, end):
+def restore_after_outage(conn, start, end, cause="server"):
     """Сервер не працював з start до end (вимкнули світло, перезапуск, сон комп'ютера) — це знаємо з alive_at,
     який фонова перевірка пише кожні 15 с. Телефони весь цей час не могли пінгувати, тож людей не караємо.
     outage_credit = 1 (типово): зміни, що йшли до відключення, тривають, а час без світла зараховується —
     до відновлення, але не далі кінця робочого часу (якщо він скінчився, поки світла не було). Потім сервер
     чекає OUTAGE_GRACE, поки телефони знову в Wi-Fi; хто не озвався — пауза з моменту відновлення.
-    outage_credit = 0: пауза з початку відключення (неоплачувана). Повертає кількість змін."""
+    outage_credit = 0: пауза з початку відключення (неоплачувана). Повертає кількість змін.
+    cause = "network" (17.17): сервер працював, але не відповідав роутер — мережа впала; рахується так само."""
+    what = "Роутер не працював" if cause == "network" else "Сервер не працював"
     conn.execute("insert into outages(started_at, ended_at) values (?, ?)", (start, end))
     meta_set(conn, "outage_end", end)
     credit = setting("outage_credit", conn) == "1"
@@ -2613,12 +2688,12 @@ def restore_after_outage(conn, start, end):
         conn.execute("update shifts set last_seen_at = ? where id = ?", (until, s["id"]))
         log_clock(conn, s["user_id"], s["id"], "outage_credit", None, s["location_id"], True, None,
                   {"from": max(start, s["last_seen_at"]), "to": until})
-        notify(conn, s["user_id"], "Сервер не працював " + span,
+        notify(conn, s["user_id"], f"{what} " + span,
                "Зміну продовжено, цей час зараховано" if until == end else f"Зміну зараховано до кінця робочого часу ({hm(until)})")
-    log_clock(conn, None, None, "server_downtime", None, None, True, None,
+    log_clock(conn, None, None, "network_downtime" if cause == "network" else "server_downtime", None, None, True, None,
               {"from": start, "to": end, "seconds": end - start, "shifts": len(rows)})
     if rows or end - start >= 300:
-        notify_staff(conn, "Сервер не працював", f"{span}. " + (
+        notify_staff(conn, what, f"{span}. " + (
             (f"Змін, що тривали: {len(rows)} — час зараховано" if credit else f"Змін на паузі: {len(rows)}") if rows else "Відкритих змін не було"))
     return len(rows)
 
@@ -2671,10 +2746,16 @@ def sweep(conn):
     grace = setting_int("wifi_grace_minutes", conn) * 60
     action = setting("wifi_loss_action", conn)
     changed = 0
+    # Роутер не відповідає — впала мережа (17.17): як і без світла, телефони не можуть пінгувати. Нікого не ставимо на
+    # паузу і не оновлюємо alive_at — коли мережа повернеться, цей час зарахується так само, як відключення світла
+    if network_down():
+        conn.commit()
+        return 0
     # Якщо сервер не працював (немає світла, перезапуск, сон комп'ютера), телефони не могли пінгувати.
     alive = int(meta_get(conn, "alive_at", 0))
     if alive and t - alive > grace:
-        restore_after_outage(conn, alive, t)
+        cause, _net["recovered"] = ("network" if _net["recovered"] else "server"), None
+        restore_after_outage(conn, alive, t, cause)
     meta_set(conn, "alive_at", t)
     outage_end = int(meta_get(conn, "outage_end", 0))
     sleep = max(setting_int("sleep_grace_minutes", conn) * 60, grace)
@@ -2770,6 +2851,14 @@ def sweep(conn):
             notify(conn, b["user_id"], "Зміну закрито автоматично", f"Кінець о {datetime.fromtimestamp(b['started_at']):%H:%M}, коли телефон вийшов з робочого Wi-Fi")
         else:
             notify(conn, b["user_id"], "Зміну закрито", "Довго не було зв'язку з робочим Wi-Fi")
+    # Збір дей-оффів закінчився (17.17): керівникам — хто не обрав (їм день ставить керівник чи «Розставити автоматично»)
+    until = int(meta_get(conn, "dayoff_open_until", 0) or 0)
+    if until and until <= t and not int(meta_get(conn, "dayoff_campaign_notified", 0) or 0):
+        meta_set(conn, "dayoff_campaign_notified", 1)
+        missing = dayoff_missing(conn, dayoff_campaign_month(conn))
+        if missing:
+            notify_staff(conn, "Збір дей-оффів закінчився", "Не обрали: " + ", ".join(m["full_name"] for m in missing)
+                         + ". Поставте день самі чи «Розставити автоматично» — «Дей-оффи й обміни»", DAYOFF_ROLES)
     max_len = setting_int("max_shift_hours", conn) * 3600
     for s in conn.execute("select * from shifts where status != 'closed' and started_at < ?", (t - max_len,)).fetchall():
         changed += 1
@@ -3072,6 +3161,10 @@ PRESENCE_SILENT = 40  # с без пінгу, після яких зміну п�
 PRESENCE_RETRY = (2, 4)
 MAC_PENDING_TTL = 180  # с: стільки чекаємо підтвердження MAC після запиту з телефона
 BLIND_MAX_AGE = 600  # с: зміні без MAC шукаємо його за адресою, з якої телефон озивався не раніше
+END_CHECK_GAP = 120  # с між перевірками телефона після кінця зміни (end_checks)
+NET_DOWN_FAILS = 2  # перевірок поспіль, на які роутер не відповів, — мережа впала
+_net = {"gw": None, "fails": 0, "first_fail": None, "down_since": None, "checked": 0.0, "recovered": None}
+_end_miss = {}  # id зміни → коли телефона не знайшли на перевірках після кінця зміни (17.17)
 MULTI_IP_CONFIRM = 60  # с: стільки один MAC має бути на кількох IP одночасно, щоб стати спільним (підсилювач)
 MAC_IPS_KEEP = 1800  # с: стільки пам'ятаємо, на яких IP бачили MAC
 _mac_ips = {}  # MAC → {IP: [коли вперше, коли востаннє]} — з підтверджених записів таблиці сусідів (17.15)
@@ -3172,6 +3265,94 @@ def assign_mac(conn, user_id, mac, how, ip=None):
     return key
 
 
+def net_gateway():
+    """IP роутера, якщо він у мережі якоїсь точки (тоді за ним видно, що мережа впала), інакше None. Сервер в іншій
+    підмережі, ніж телефони (чи без шлюзу), — не судимо: як і раніше."""
+    import lan
+    try:
+        gw = lan.gateway() or _net["gw"]  # Wi-Fi сервера відпав разом з роутером — шлюзу в таблиці вже немає
+    except Exception:  # noqa: BLE001 — лише підказка
+        gw = _net["gw"]
+    if not gw:
+        return None
+    with _lock:
+        conn = connect()
+        try:
+            ok = bool(match_location(conn, gw))
+        finally:
+            conn.close()
+    if ok:
+        _net["gw"] = gw
+    return gw if ok else None
+
+
+def note_gateway(up):
+    """Результат перевірки роутера. NET_DOWN_FAILS разів поспіль не відповів — мережа впала з першої невдачі (sweep
+    тоді нікого не ставить на паузу); відповів знову — мережа повернулась (sweep зарахує цей час, як відключення світла)."""
+    t = now()
+    _net["checked"] = time.time()
+    if up:
+        if _net["down_since"]:
+            _net["recovered"] = (_net["down_since"], t)
+            log.warning("Мережа повернулась: роутер знову відповідає")
+        _net.update(fails=0, first_fail=None, down_since=None)
+        return
+    _net["fails"] += 1
+    _net["first_fail"] = _net["first_fail"] or t
+    if _net["fails"] >= NET_DOWN_FAILS and not _net["down_since"]:
+        _net["down_since"] = _net["first_fail"]
+        log.warning("Роутер (%s) не відповідає: мережа впала", _net["gw"])
+
+
+def network_down():
+    """Мережа точки зараз лежить (роутер не відповідає) — за свіжою перевіркою (не старшою за 3 хв)."""
+    return bool(_net["down_since"]) and time.time() - _net["checked"] < 180
+
+
+def end_check_shifts(conn, t):
+    """Відкриті зміни, чий робочий час скінчився, з відомим (не спільним) MAC і без власного пінгу за останню хвилину:
+    сервер сам перевіряє, чи телефон ще в Wi-Fi (end_checks разів, раз на END_CHECK_GAP), — а не чекає годинами (17.17)."""
+    n = setting_int("end_checks", conn)
+    if not n:
+        return []
+    out = []
+    for s in conn.execute("select * from shifts where status != 'closed' and mac is not null and last_seen_ip is not null"
+                          " and last_seen_at < ?", (t - 60,)).fetchall():
+        w = work_window(conn, s["user_id"], s["started_at"])
+        if w and t >= w[1] and s["mac"] not in shared_macs():
+            out.append({**dict(s), "checks": n, "window_end": w[1]})
+    for sid in [k for k in _end_miss if k not in {x["id"] for x in out}]:
+        _end_miss.pop(sid, None)
+    return out
+
+
+def end_check_result(conn, x, found):
+    """Результат перевірки після кінця зміни: телефон є — лічильник скинуто (людина ще тут, зміна йде); немає —
+    промах (не частіше раз на END_CHECK_GAP). x["checks"] промахів поспіль — зміна закрита часом, коли телефон бачили
+    востаннє: до нього й оплачено (17.17)."""
+    t = now()
+    if found:
+        _end_miss.pop(x["id"], None)
+        return
+    misses = _end_miss.setdefault(x["id"], [])
+    if misses and t - misses[-1] < END_CHECK_GAP:
+        return
+    misses.append(t)
+    if len(misses) < x["checks"]:
+        return
+    s = conn.execute("select * from shifts where id = ?", (x["id"],)).fetchone()
+    _end_miss.pop(x["id"], None)
+    if not s or s["status"] == "closed" or s["last_seen_at"] > x["last_seen_at"]:
+        return  # тим часом зміну закрили або телефон озвався сам
+    end = s["last_seen_at"]
+    conn.execute("delete from breaks where shift_id = ? and kind = 'wifi_loss' and ended_at is null and started_at >= ?", (s["id"], end))
+    close_shift(conn, s["id"], end, "auto_close")
+    hm = f"{datetime.fromtimestamp(end):%H:%M}"
+    log_clock(conn, s["user_id"], s["id"], "auto_close", s["last_seen_ip"], s["location_id"], True, None,
+              {"ended_at": end, "перевірок після кінця зміни": x["checks"]})
+    notify(conn, s["user_id"], "Зміну закрито", f"Кінець о {hm}: після кінця зміни телефона немає в робочому Wi-Fi")
+
+
 def mark_repeaters(conn):
     """Підсилювачі Wi-Fi (repeater_macs) — спільні MAC: за ними сервер не тримає нічию зміну."""
     for mac in repeater_macs() - shared_macs():
@@ -3219,11 +3400,16 @@ def presence_step():
                 "select * from shifts where status != 'closed' and mac is null and last_seen_ip is not null and last_seen_at >= ?",
                 (max(t - BLIND_MAX_AGE, int(meta_get(conn, "outage_end", 0))),))
                 if ip_in_location(conn, s["last_seen_ip"], s["location_id"])]
+            ends = end_check_shifts(conn, t)
         finally:
             conn.close()
-    if not cands and not starters and not pending and not blind:
+    # Роутер (шлюз за замовчуванням) у мережі точки: не відповідає — впала мережа, а не пішли люди (17.17)
+    gw = net_gateway()
+    if not cands and not starters and not pending and not blind and not ends and not (gw and _net["down_since"]):
         return
     want = {}  # IP → MAC, які там шукаємо
+    if gw:
+        want[gw] = set()
     for x in cands:
         want.setdefault(x["last_seen_ip"], set()).add(x["mac"])
     for st in starters:
@@ -3231,6 +3417,8 @@ def presence_step():
             want.setdefault(ip, set()).add(st["mac"])
     for ip in [*pending, *(b["last_seen_ip"] for b in blind)]:
         want.setdefault(ip, set())
+    for x in ends:
+        want.setdefault(x["last_seen_ip"], set()).add(x["mac"])
     ips = set(want)
     seen = lan.present(sorted(ips))  # кілька секунд — поза _lock
     where = {}
@@ -3263,6 +3451,8 @@ def presence_step():
     # Один MAC зараз на кількох IP — підсилювач Wi-Fi підставляє свій MAC за всі телефони за ним: за таким MAC «на місці»
     # будь-хто з них, тож присутність за ним не рахуємо. Тримається довше хвилини — MAC спільний (на мить так буває, коли
     # телефон щойно отримав новий IP, а старий запис ще не застарів) (17.15)
+    if gw:
+        note_gateway(gw in seen)
     note_mac_ips(seen)
     ips_of = {}
     for ip, mac in seen.items():
@@ -3300,6 +3490,9 @@ def presence_step():
                 res = try_auto_start(conn, user, match_location(conn, ip), ip, st["device_key"], now())
                 if res and res.get("auto_started"):
                     conn.execute("update shifts set mac = ? where user_id = ? and status != 'closed'", (st["mac"], user["id"]))
+            for x in ends:  # після кінця зміни: телефона немає end_checks перевірок поспіль — зміну закрито (17.17)
+                found = x["mac"] not in shared and (seen.get(x["last_seen_ip"]) == x["mac"] or x["mac"] in where)
+                end_check_result(conn, x, found)
             for c in cands:
                 if c["mac"] in shared:
                     continue  # підсилювач чи роутер: за ним «на місці» хтось, а не обов'язково ця людина
@@ -4456,6 +4649,8 @@ def api_clock(action):
                 conn.execute("update shifts set mac = ? where id = ? and mac is null", (old, res["shift"]["id"]))
         if res.get("shift"):
             note_battery(conn, res["shift"]["id"], body)
+        # Застосунок (2.4) будить людину сповіщенням «відключився від Wi-Fi» лише в її робочий час (17.17)
+        res["in_work_time"] = bool(work_window(conn, current_user()["id"], now()))
         conn.commit()
     return jsonify(res)
 
@@ -4499,6 +4694,7 @@ def me():
         ctx["dayoff_open_until"] = dayoff_campaign_until(conn)
         ctx["dayoff_req"] = conn.execute("select * from requests where user_id = ? and type = 'day_off' and status in ('pending', 'granted')"
                                          " order by id desc limit 1", (u["id"],)).fetchone()
+        ctx.update(dayoff_pick_ctx(conn, u))
     elif tab == "timesheet":
         ctx.update(timesheet(conn, u["id"], request.args.get("month")))
     elif tab == "schedule":
@@ -4513,6 +4709,7 @@ def me():
         ctx["dayoff_limits"] = (setting_int("dayoff_per_day", conn), setting_int("dayoff_per_month", conn), setting("dayoff_paid", conn) == "1")
         ctx["dayoff_req"] = conn.execute("select * from requests where user_id = ? and type = 'day_off' and status in ('pending', 'granted')"
                                          " order by id desc limit 1", (u["id"],)).fetchone()
+        ctx.update(dayoff_pick_ctx(conn, u))
         ctx["my_absences"] = conn.execute(
             f"select * from requests where user_id = ? and type in {ABSENCE_TYPES} and status in ('approved', 'pending')"
             " and ends_on >= ? order by starts_on", (u["id"], today.isoformat())).fetchall()
@@ -4537,6 +4734,14 @@ def me():
         ctx["dayoff_granted"] = conn.execute(q + "r.status = 'granted' order by r.grant_until", (u["id"],)).fetchall()
         ctx["dayoff_upcoming"] = conn.execute(q + "r.status = 'approved' and r.ends_on >= ? order by r.starts_on",
                                               (u["id"], today.isoformat())).fetchall()
+        # Збір дей-оффів (17.17): місяць збору, хто ще без дей-оффу, скільки людей в один день
+        month = dayoff_campaign_month(conn)
+        nxt = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+        ctx["dayoff_month"] = month
+        ctx["dayoff_months"] = [(m.strftime("%Y-%m"), f"{MONTHS_NOM[m.month - 1]} {m.year}") for m in (today.replace(day=1), nxt)]
+        ctx["dayoff_missing"] = dayoff_missing(conn, month)
+        ctx["dayoff_month_label"] = f"{MONTHS_NOM[month.month - 1].lower()} {month.year}"
+        ctx["dayoff_per_day"] = setting_int("dayoff_per_day", conn)
         ctx["people"] = conn.execute("select id, full_name from users where status not in ('dismissed', 'pending') and id != ?"
                                      " order by full_name", (u["id"],)).fetchall()
         ctx["everyone"] = conn.execute("select id, full_name from users where status not in ('dismissed', 'pending') order by full_name").fetchall()
@@ -4598,6 +4803,10 @@ def me_request():
             day = parse_day(f.get("day"))
             if f.get("day") and not day:
                 flash("Невірна дата")
+                return redirect(url_for("me", tab=f.get("back") or "clock"))
+            if day and dayoff_campaign_until(conn) and (day.year, day.month) != (dayoff_campaign_month(conn).year, dayoff_campaign_month(conn).month):
+                # Збір відкрито на конкретний місяць (17.17): день — з нього. Заявка, як і раніше, іде керівнику на погодження
+                flash(f"Оберіть день у {MONTHS_NOM[dayoff_campaign_month(conn).month - 1].lower()}")
                 return redirect(url_for("me", tab=f.get("back") or "clock"))
             if day and day >= date.today():
                 day = day.isoformat()
@@ -5091,6 +5300,18 @@ def team_dayoff():
             apply_absence(conn, conn.execute("select * from requests where id = ?", (r["id"],)).fetchone())
             audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"day": [r["starts_on"], day]})
             notify(conn, r["user_id"], "Дей-офф перенесено", f"{r['starts_on']} → {day}")
+        elif action == "set" and not r:
+            # Не встиг обрати під час збору — день ставить керівник сам (17.17)
+            uid = conn.execute("select id from users where id = ? and status not in ('dismissed', 'pending')", (f.get("user_id"),)).fetchone()
+            day = parse_day(f.get("day"))
+            if not uid or not day or day < date.today():
+                flash("Оберіть людину і сьогоднішній чи майбутній день")
+            elif err := dayoff_limit_error(conn, uid[0], day):
+                flash(err)
+            else:
+                set_dayoff(conn, uid[0], day.isoformat(), actor["id"], "поставив керівник")
+                notify(conn, uid[0], "Вам поставлено дей-офф", f"{day:%d.%m.%Y}")
+                flash(f"Дей-офф поставлено: {day:%d.%m.%Y}")
         elif action == "cancel" and r and r["status"] in ("approved", "granted"):
             conn.execute("update requests set status = 'cancelled', reviewer_id = ? where id = ?", (actor["id"], r["id"]))
             audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"status": [r["status"], "cancelled"]})
@@ -5113,6 +5334,9 @@ def dayoff_campaign():
         if request.form.get("action") == "open":
             until = now() + DAYOFF_PICK_DAYS * 86400
             meta_set(conn, "dayoff_open_until", until)
+            month = parse_month(request.form.get("month") or "") if request.form.get("month") else None
+            meta_set(conn, "dayoff_campaign_month", (month or dayoff_campaign_month(conn)).strftime("%Y-%m"))
+            meta_set(conn, "dayoff_campaign_notified", 0)
             for row in conn.execute("select id from users where status not in ('dismissed', 'pending') and id != ?", (actor["id"],)):
                 notify(conn, row[0], "Збір заявок на дей-офф", f"Оберіть бажаний день до {fmt_dt(until)} на головному екрані")
             audit(conn, actor["id"], "UPDATE", "meta", None, None, {"dayoff_open_until": [None, until]})
@@ -5122,6 +5346,33 @@ def dayoff_campaign():
             audit(conn, actor["id"], "UPDATE", "meta", None, None, {"dayoff_open_until": ["open", None]})
             flash("Збір заявок закрито")
         conn.commit()
+    return redirect(url_for("me", tab="dayoffs"))
+
+
+@app.post("/team/dayoff/auto")
+@login_required()
+def team_dayoff_auto():
+    """«Розставити дей-офи автоматично» (17.17): усім, хто ще без дей-оффу в місяці, без перетинів. Скільки людей
+    максимум в один день — налаштування dayoff_per_day; змінює лише адмін (тут же, поруч із кнопкою)."""
+    actor = current_user()
+    if actor["role"] not in DAYOFF_ROLES:
+        abort(403)
+    month = parse_month(request.form.get("month") or "") if request.form.get("month") else None
+    with _lock:
+        conn = db()
+        if actor["role"] == "admin" and request.form.get("per_day", "").strip():
+            v = clean_setting("dayoff_per_day", request.form["per_day"])
+            if v is not None and v != setting("dayoff_per_day", conn):
+                audit(conn, actor["id"], "UPDATE", "settings", None, None, {"dayoff_per_day": [setting("dayoff_per_day", conn), v]})
+                conn.execute("update settings set value = ? where key = 'dayoff_per_day'", (v,))
+                g.pop("settings_cache", None)
+                config_changed(conn)
+        done, skipped = auto_dayoffs(conn, month or dayoff_campaign_month(conn), actor)
+        conn.commit()
+    msg = f"Поставлено дей-оффів: {len(done)}" + (": " + ", ".join(f"{n} — {d:%d.%m}" for n, d in done) if done else "")
+    if skipped:
+        msg += ". Не вистачило вільних днів: " + ", ".join(skipped) + " — збільште «людей в один день» або поставте вручну"
+    flash(msg if done or skipped else "Усі вже мають дей-офф у цьому місяці")
     return redirect(url_for("me", tab="dayoffs"))
 
 

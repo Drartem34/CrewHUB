@@ -387,7 +387,8 @@ class RegularAccountSwapTest(ScenarioBase):
         self.assertIn('id="liveAlarm"', admin.req("get", "/admin?tab=live").get_data(as_text=True))
         self.assertIn("Вхід у чужий акаунт", admin.req("get", "/admin?tab=logs").get_data(as_text=True))
         uid = self.sql("select id from users where username = 'olha'")[0][0]
-        card = admin.req("get", f"/admin/employee/{uid}").get_data(as_text=True)
+        # табель — за місяць сценарію (жовтень 2026), а не поточний місяць комп'ютера, на якому йдуть тести
+        card = admin.req("get", f"/admin/employee/{uid}?month={self.DAY:%Y-%m}").get_data(as_text=True)
         self.assertIn("чужий акаунт — телефон Андрій Звичайний", card)
         self.assertIn("розпочата з:", card)
         self.assertIn("Підозріло: чужий телефон",
@@ -1393,6 +1394,9 @@ class LeftWorkBehindRouter1715Test(ScenarioBase):
         self.assertEqual([r[0] for r in self.sql("select why from shared_macs")], ["один MAC на кількох IP (підсилювач Wi-Fi)"])
 
     def test_own_phone_left_is_closed_and_overview_says_when(self):
+        with core.connect() as c:  # перевірки після кінця зміни (17.17) закрили б зміну ще до 18:30 — тут перевіряємо очікування
+            c.execute("update settings set value = '0' where key = 'end_checks'")
+            c.commit()
         ivan = Phone(self.net, 86, ua=self.IPHONE)
         ivan.login(IVAN)
         self.assertTrue(ivan.clock("start")["ok"])
@@ -1451,6 +1455,121 @@ class FixedMacTip1715Test(ScenarioBase):
         page = android.req("get", "/me?tab=clock").get_data(as_text=True)
         self.assertIn("Ваш телефон змінив адресу Wi-Fi", page)
         self.assertIn("«MAC телефона»", page)
+
+class EndOfShiftChecks1717Test(ScenarioBase):
+    """17.17: після кінця робочого часу сервер сам перевіряє, чи телефон ще в Wi-Fi (3 рази, раз на 2 хв), — і закриває
+    зміну тих, хто пішов, часом, коли телефон бачили востаннє. Раніше чекав до 90 хв, і люди, що пішли, були «на зміні»."""
+    IPHONE = IPhoneWebPresence1715Test.IPHONE
+
+    def setUp(self):
+        super().setUp()
+        st = lambda: {ip: (p.mac, "REACHABLE") for ip, p in self.net.items() if p.online}  # noqa: E731
+        patcher = mock.patch.object(lan, "neighbour_states", st)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tick(17, 30)
+        self.ios = Phone(self.net, 90, ua=self.IPHONE)   # iPhone через сайт
+        self.app = Phone(self.net, 91, app="olhaapp091")  # Android із застосунком
+        self.ios.login(IVAN)
+        self.app.login(OLHA)
+        self.assertTrue(self.ios.clock("start")["ok"])
+        self.assertTrue(self.app.clock("start")["ok"])
+
+    def app_pings(self, until_h=19):
+        return {(h, m): (lambda: self.app.online and self.app.clock("heartbeat")) for h in range(17, until_h + 1) for m in range(0, 60, 5)}
+
+    def test_left_at_end_closed_within_minutes(self):
+        hooks = self.app_pings()
+        hooks[(18, 0)] = lambda: (setattr(self.ios, "online", False), setattr(self.app, "online", False))
+        self.live_until(18, 9, hooks=hooks)
+        for u in ("ivan", "olha"):
+            s = self.shift(u)
+            self.assertEqual(s["status"], "closed", u)
+            self.assertLessEqual(s["ended_at"], self.at(18, 0), u)  # оплачено до останньої ознаки телефона
+            self.assertGreaterEqual(s["ended_at"], self.at(17, 55), u)
+        self.assertIn("Зміну закрито", [r[0] for r in self.sql("select n.title from notifications n join users u on u.id = n.user_id where u.username = 'ivan'")])
+
+    def test_still_there_after_end_keeps_counting(self):
+        hooks = self.app_pings()
+        hooks[(18, 40)] = lambda: setattr(self.ios, "online", False)  # затримався на 40 хв
+        self.live_until(18, 35, hooks=hooks)
+        self.assertEqual(self.shift("ivan")["status"], "active")
+        self.live_until(18, 50, hooks=hooks)
+        s = self.shift("ivan")
+        self.assertEqual(s["status"], "closed")
+        self.assertGreaterEqual(s["ended_at"], self.at(18, 38))  # переробка до 18:40 — оплачена
+        self.assertLessEqual(s["ended_at"], self.at(18, 40))
+
+    def test_off_setting_keeps_old_waiting(self):
+        with core.connect() as c:
+            c.execute("update settings set value = '0' where key = 'end_checks'")
+            c.commit()
+        hooks = self.app_pings()
+        hooks[(18, 0)] = lambda: setattr(self.ios, "online", False)
+        self.live_until(18, 30, hooks=hooks)
+        self.assertNotEqual(self.shift("ivan")["status"], "closed")  # як раніше: чекає «Закрити після кінця»
+
+    def test_briefly_unseen_once_is_not_closed(self):
+        hooks = self.app_pings()
+        hooks[(18, 5)] = lambda: setattr(self.ios, "online", False)
+        hooks[(18, 7)] = lambda: setattr(self.ios, "online", True)  # одна перевірка не знайшла — телефон дрімав
+        self.live_until(18, 20, hooks=hooks)
+        self.assertEqual(self.shift("ivan")["status"], "active")
+
+class RouterOutage1717Test(ScenarioBase):
+    """17.17: вимкнувся лише роутер (сервер працював, напр. на ДБЖ чи ноутбуці). Раніше люди з сайтом отримували
+    неоплачену паузу на цей час, а з застосунком — ні. Тепер сервер бачить, що не відповідає сам роутер, — це впала
+    мережа, а не пішли люди: як і при відключенні світла, час зараховано, а після вмикання роутера телефони знайдено за
+    MAC на нових IP."""
+    IPHONE = IPhoneWebPresence1715Test.IPHONE
+
+    def setUp(self):
+        super().setUp()
+        st = lambda: {ip: (p.mac, "REACHABLE") for ip, p in self.net.items() if p.online}  # noqa: E731
+        for name, fn in (("neighbour_states", st), ("gateway", lambda: "192.168.1.1")):
+            patcher = mock.patch.object(lan, name, fn)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.router = Phone(self.net, 1)  # сам роутер у таблиці сусідів
+        self.tick(10)
+        self.web = Phone(self.net, 22)
+        self.ios = Phone(self.net, 23, ua=self.IPHONE)
+        self.web.login(IVAN)
+        self.ios.login(OLHA)
+        for p in (self.web, self.ios):
+            self.assertTrue(p.clock("start")["ok"])
+
+    def power(self, on, new_ips=False):
+        for p in (self.router, self.web, self.ios):
+            p.online = on
+        if on and new_ips:  # роутер роздав IP наново; MAC у телефонів ті самі
+            for p, n in ((self.web, 41), (self.ios, 22)):
+                self.net.pop(p.ip, None)
+            for p, n in ((self.web, 41), (self.ios, 22)):
+                p.ip = f"192.168.1.{n}"
+                self.net[p.ip] = p
+
+    def test_router_off_time_is_credited_and_phones_found_on_new_ips(self):
+        hooks = {(12, 0): lambda: self.power(False), (12, 20): lambda: self.power(True, new_ips=True)}
+        self.live_until(12, 19, hooks=hooks)
+        for u in ("ivan", "olha"):
+            self.assertEqual(self.shift(u)["status"], "active", u)  # не пауза: мережа впала, люди нікуди не ділись
+        self.live_until(13, 0, hooks=hooks)
+        for u in ("ivan", "olha"):
+            s = self.shift(u)
+            self.assertEqual(s["status"], "active", u)
+            self.assertEqual(self.sql("select count(*) from breaks where shift_id = ?", s["id"])[0][0], 0, u)
+            self.assertGreaterEqual(self.worked(u), 3 * 3600 - 120, u)  # 10:00–13:00 — увесь час
+        self.assertEqual((self.shift("ivan")["last_seen_ip"], self.shift("olha")["last_seen_ip"]), ("192.168.1.41", "192.168.1.22"))
+        self.assertTrue(self.sql("select 1 from conn_log where event = 'network_downtime'"))
+        self.assertIn("Роутер не працював", [r[0] for r in self.sql("select title from notifications")])
+
+    def test_people_left_but_router_works_is_not_an_outage(self):
+        hooks = {(12, 0): lambda: (setattr(self.web, "online", False), setattr(self.ios, "online", False))}
+        self.live_until(12, 25, hooks=hooks)
+        for u in ("ivan", "olha"):
+            self.assertEqual(self.shift(u)["status"], "paused", u)  # роутер відповідає — люди справді пішли
+        self.assertFalse(self.sql("select 1 from conn_log where event = 'network_downtime'"))
 
 if __name__ == "__main__":
     unittest.main()
