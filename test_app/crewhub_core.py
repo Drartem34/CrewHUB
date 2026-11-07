@@ -4749,8 +4749,9 @@ def me():
             "select sc.*, u.full_name from schedule sc join users u on u.id = sc.user_id where sc.starts_at > ? and sc.starts_at < ?"
             " order by sc.starts_at", (now(), now() + 21 * 86400)).fetchall()
     elif tab == "team":
+        # Акаунт адміна — службовий, не колега: у списку його немає (17.17)
         ctx["team"] = conn.execute("select u.*, l.name as location from users u left join locations l on l.id = u.location_id"
-                                   " where u.status not in ('dismissed', 'pending') order by u.full_name").fetchall()
+                                   " where u.status not in ('dismissed', 'pending') and u.role != 'admin' order by u.full_name").fetchall()
     return render_template("me.html", **ctx)
 
 

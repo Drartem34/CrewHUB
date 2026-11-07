@@ -1117,6 +1117,11 @@ class PhoneUi1717Test(CrewHubBase):
         admin = self.login("admin", "admin123", client=core.app.test_client())
         self.assertIn('class="sched-list"', admin.get("/admin?tab=schedule").get_data(as_text=True))
 
+    def test_admin_not_in_colleagues(self):
+        page = self.login("ivan").get("/me?tab=team").get_data(as_text=True)
+        self.assertIn("Ольга Коваль", page)
+        self.assertNotIn("Адмін Адмінович", page.split('id="teamGrid"')[1])
+
     def test_no_rate_line_under_start(self):
         page = self.login("ivan").get("/me?tab=clock").get_data(as_text=True)
         self.assertNotIn("/год", page[page.index('id="start"'):page.index('id="start"') + 3000])
