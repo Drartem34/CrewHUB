@@ -3,7 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const C = 2 * Math.PI * 110; // довжина кола шкали
   let state = null, fetchedAt = Date.now(), hbTimer = null, busy = false, lastClosed = null;
-  const deviceId = (() => {
+  let deviceId = (() => {
     try {
       let id = localStorage.getItem("crewhub_device");
       // Safari на iPhone сам стирає сховище сайту (тиждень без відвідин, «Очистити історію») — код цього браузера
@@ -55,6 +55,11 @@
 
       if (r.status === 401) { location.href = "/login"; return; }
       const data = await r.json();
+      // Сервер переніс старий короткий код браузера на новий 128-бітний (17.21): запам'ятовуємо й далі шлемо його
+      if (data.device && /^web-[0-9a-f]{32}$/.test(data.device) && data.device !== deviceId) {
+        deviceId = data.device;
+        try { localStorage.setItem("crewhub_device", deviceId); } catch (e) {}
+      }
       if (!data.ok) {
         $("error").textContent = data.error;
         if (!quiet(action) && navigator.vibrate) navigator.vibrate(150);

@@ -28,6 +28,10 @@
     if (m === 'off') c.add('motion-off');
     else if (m === 'lite' || (m === 'auto' && (localStorage.getItem('crewhub_lite') === '1' || / CrewHubLite/.test(n.userAgent) || (n.deviceMemory && n.deviceMemory <= 2) || (n.hardwareConcurrency && n.hardwareConcurrency <= 2)))) c.add('lite');
   } catch (e) {}</script>
+  {% if (session.get('dev') or '')|length == 36 and (session.get('dev') or '').startswith('web-') %}
+  <script>// Сервер переніс старий короткий код цього браузера на новий 128-бітний (17.21): далі шлемо новий
+  try { var d = localStorage.getItem('crewhub_device'); if (d && /^web-[0-9a-f]{4,31}$/.test(d)) localStorage.setItem('crewhub_device', {{ session.get('dev')|tojson }}); } catch (e) {}</script>
+  {% endif %}
   {% block head %}{% endblock %}
 </head>
 <body>

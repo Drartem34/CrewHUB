@@ -46,6 +46,10 @@ class CrewHubBase(unittest.TestCase):
         patcher = mock.patch.object(lan, "gateway", lambda: None)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Фікстури тестів — короткі коди «web-1a2b3c4d»; їх перенесення на 128-бітні (17.21) перевіряє WebCodeMigrationTest
+        migr = mock.patch.object(core, "MIGRATE_WEB_CODES", False)
+        migr.start()
+        self.addCleanup(migr.stop)
         core.init_db()
         with core.connect() as c:
             c.execute("insert into networks(location_id, cidr, label) values (1, '203.0.113.0/28', 'тест')")

@@ -1848,5 +1848,134 @@ class DayoffBannerTest(CrewHubBase):
         self.assertNotIn("Попросити дей-офф", ivan.get("/me?tab=schedule").get_data(as_text=True))
 
 
+class WebCodeMigrationTest(CrewHubBase):
+    """17.21: старий короткий код браузера (web- + 8 hex, 32 біти) сервер сам переносить на новий 128-бітний."""
+    OLD = "web-0aa11bb2"
+    CHROME = ForeignDeviceTest.CHROME
+    BAD = ("login_other_device", "login_new_device", "shift_other_device", "shift_new_device", "account_hopping", "blocked_device")
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(core, "MIGRATE_WEB_CODES", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def legacy_session(self, phone="0937654321", key=OLD):
+        """Людина увійшла й почала зміну ще до 17.21: усе записано під старим кодом."""
+        c = core.app.test_client()
+        with mock.patch.object(core, "MIGRATE_WEB_CODES", False):
+            ForeignDeviceTest.bind(self, "olha", key)
+            r = c.post("/login", data={"username": phone, "password": "1234", "device_id": key}, headers={"User-Agent": self.CHROME})
+            self.assertEqual(r.status_code, 302)
+            res = self.ping(c, "start", key)
+            self.assertTrue(res["ok"], res)
+            self.assertNotIn("device", res)
+        return c
+
+    def ping(self, c, action, key):
+        return c.post(f"/api/clock/{action}", json={"device_id": key},
+                      headers={"X-Forwarded-For": WORK_IP, "User-Agent": self.CHROME}).get_json()
+
+    def rows(self, q, *args):
+        return [tuple(r) for r in self.sql(q, *args)]
+
+    def where(self, key):
+        return {f"{t}.{col}": self.sql(f"select count(*) from {t} where {col} = ?", key)[0][0] for t, col in core.DEVICE_COLUMNS}
+
+    def bad_events(self, after):
+        return [r[0] for r in self.sql("select event from conn_log where id > ? and event in (%s)" % ",".join("?" * len(self.BAD)),
+                                       after, *self.BAD)]
+
+    def test_ping_with_old_code_gets_new_code_and_history_moves(self):
+        c = self.legacy_session()
+        before = self.where(self.OLD)
+        for col in ("devices.device_key", "device_history.device_key", "remember_tokens.device", "shifts.device"):
+            self.assertGreater(before[col], 0, col)
+        last = self.sql("select coalesce(max(id), 0) from conn_log")[0][0]
+        shift = self.sql("select id, started_at from shifts where status != 'closed'")[0]
+        res = self.ping(c, "heartbeat", self.OLD)
+        new = res.get("device")
+        self.assertTrue(res["ok"], res)
+        self.assertRegex(new, r"^web-[0-9a-f]{32}$")
+        self.assertTrue(all(v == 0 for v in self.where(self.OLD).values()), self.where(self.OLD))  # старого коду ніде немає
+        after = self.where(new)
+        self.assertEqual({k: after[k] for k in before if k != "conn_log.device"}, {k: v for k, v in before.items() if k != "conn_log.device"})
+        self.assertGreaterEqual(after["conn_log.device"], before["conn_log.device"])
+        self.assertEqual(self.rows("select old, new from device_aliases"), [(self.OLD, new)])
+        # Зміна та сама й триває, людина в акаунті
+        self.assertEqual(self.rows("select id, started_at, status from shifts where status != 'closed'"), [(shift[0], shift[1], "active")])
+        self.assertEqual(res["shift"]["id"], shift[0])
+        # Новий код: відповідь уже без "device"; старий з іншої вкладки — той самий пристрій, без нового перенесення
+        res2 = self.ping(c, "heartbeat", new)
+        self.assertTrue(res2["ok"])
+        self.assertNotIn("device", res2)
+        other_tab = core.app.test_client()
+        other_tab.set_cookie(core.REMEMBER_COOKIE, c.get_cookie(core.REMEMBER_COOKIE).value)
+        res3 = self.ping(other_tab, "heartbeat", self.OLD)
+        self.assertTrue(res3["ok"], res3)
+        self.assertEqual(res3.get("device"), new)
+        self.assertEqual(res3["shift"]["id"], shift[0])
+        self.assertEqual(len(self.sql("select * from device_aliases")), 1)
+        self.assertEqual(self.where(self.OLD)["devices.device_key"], 0)
+        self.assertEqual(self.bad_events(last), [])  # не «чужий телефон», не «новий пристрій», не «різні акаунти»
+        page = c.get("/me").get_data(as_text=True)
+        self.assertNotIn("Ви в чужому акаунті", page)
+        self.assertIn(new, page)  # base.html перепише localStorage старого коду на новий
+
+    def test_page_load_migrates_session_code(self):
+        c = self.legacy_session()
+        page = c.get("/me").get_data(as_text=True)
+        new = self.sql("select new from device_aliases where old = ?", self.OLD)[0][0]
+        self.assertIn(f"localStorage.setItem('crewhub_device', {json.dumps(new)})", page)
+        self.assertEqual(self.where(self.OLD)["shifts.device"], 0)
+        self.assertEqual(self.ping(c, "heartbeat", self.OLD).get("device"), new)  # clock.js отримає новий код
+
+    def test_login_with_old_code_migrates(self):
+        with mock.patch.object(core, "MIGRATE_WEB_CODES", False):
+            ForeignDeviceTest.bind(self, "olha", self.OLD)
+        last = self.sql("select coalesce(max(id), 0) from conn_log")[0][0]
+        c = core.app.test_client()
+        r = c.post("/login", data={"username": "0937654321", "password": "1234", "device_id": self.OLD}, headers={"User-Agent": self.CHROME})
+        self.assertEqual(r.status_code, 302)
+        new = self.sql("select new from device_aliases where old = ?", self.OLD)[0][0]
+        self.assertEqual(self.rows("select device_key from devices"), [(new,)])
+        self.assertEqual(self.rows("select device from remember_tokens"), [(new,)])
+        self.assertEqual(self.bad_events(last), [])
+        res = self.ping(c, "start", self.OLD)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["device"], new)
+        self.assertEqual(self.rows("select device from shifts"), [(new,)])
+
+    def test_blocked_device_stays_blocked_after_migration(self):
+        c = self.legacy_session()
+        with core.connect() as db:
+            db.execute("insert into blocked_devices(device_key, label, created_at) values (?, 'тест', 0)", (self.OLD,))
+            db.commit()
+        core._blocked["at"] = 0.0
+        r = c.post("/api/clock/heartbeat", json={"device_id": self.OLD}, headers={"X-Forwarded-For": WORK_IP, "User-Agent": self.CHROME})
+        self.assertEqual(r.status_code, 403)
+        new = self.sql("select new from device_aliases where old = ?", self.OLD)[0][0]
+        self.assertEqual(self.rows("select device_key from blocked_devices"), [(new,)])
+        for key in (self.OLD, new):  # ні старим, ні новим кодом не увійти
+            r = core.app.test_client().post("/login", data={"username": "0937654321", "password": "1234", "device_id": key},
+                                            headers={"User-Agent": self.CHROME})
+            self.assertEqual(r.status_code, 403, key)
+
+    def test_app_and_new_codes_are_not_migrated(self):
+        app_ua = ForeignDeviceTest.IVAN_PHONE
+        c = core.app.test_client()
+        self.assertEqual(c.post("/login", data={"username": "0671234567", "password": "1234"}, headers={"User-Agent": app_ua}).status_code, 302)
+        res = c.post("/api/clock/start", json={}, headers={"X-Forwarded-For": WORK_IP, "User-Agent": app_ua}).get_json()
+        self.assertTrue(res["ok"], res)
+        self.assertNotIn("device", res)
+        new = "web-" + "ab" * 16
+        c2 = core.app.test_client()
+        c2.post("/login", data={"username": "0937654321", "password": "1234", "device_id": new}, headers={"User-Agent": self.CHROME})
+        self.assertNotIn("device", self.ping(c2, "check", new))
+        self.assertEqual(self.sql("select count(*) from device_aliases")[0][0], 0)
+        self.assertFalse(core.old_web_key(new))
+        self.assertFalse(core.old_web_key("app-ivanphone001"))
+
+
 if __name__ == "__main__":
     unittest.main()

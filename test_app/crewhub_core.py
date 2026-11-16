@@ -344,6 +344,9 @@ create index if not exists device_history_mac on device_history(mac);
 -- блокує: в однакових телефонів він однаковий. Такий пристрій не увійде, не зареєструється і не почне зміну
 create table if not exists blocked_devices (id integer primary key, device_key text, mac text, fingerprint text,
   label text, reason text, user_id integer, created_by integer, created_at integer not null);
+-- Старі короткі коди браузера (web- + 8 hex, 32 біти) → новий 128-бітний (17.21): код переноситься в усіх таблицях,
+-- а старий, якщо його надішле ще не оновлена вкладка, впізнається як той самий пристрій
+create table if not exists device_aliases (old text primary key, new text not null, created_at integer not null);
 -- Спільні MAC (17.13): за одним MAC кілька телефонів — підсилювач Wi-Fi підміняє MAC телефонів своїм, або другий
 -- роутер на точці ховає всі телефони за своїм IP і MAC. Такий MAC не впізнає телефон — людей розрізняємо за кодом
 -- пристрою, відбитком і акаунтом
@@ -1033,9 +1036,10 @@ def zone_error(net):
     return None
 
 
-def device_key(sent=None):
+def device_key(sent=None, alias=True):
     """Стабільний ідентифікатор телефона. Застосунок CrewHub додає його до User-Agent (CrewHubDevice/...),
-    браузер — випадковий id з localStorage. IP для цього не годиться: у Wi-Fi він щоразу інший."""
+    браузер — випадковий id з localStorage. IP для цього не годиться: у Wi-Fi він щоразу інший.
+    Старий короткий код браузера, уже перенесений на новий (device_aliases), повертається новим (17.21)."""
     ua = request.headers.get("User-Agent") or ""
     m = re.search(r"CrewHubDevice/([\w-]{6,64})", ua)
     if m:
@@ -1044,8 +1048,50 @@ def device_key(sent=None):
     # Браузер: «web-1a2b3c4d» (старі сторінки слали ще « · Win32» — платформу відкидаємо, ключ той самий,
     # що запам'ятала реєстрація; інакше автозміна в браузері ніколи не впізнавала «свій» телефон)
     if m := re.match(r"(web-[0-9a-f]{4,32})(?![0-9a-f])", sent):
-        return m.group(1)
+        return device_alias(db(), m.group(1)) if alias else m.group(1)
     return sent[:80] if re.fullmatch(r"[\w .:-]{4,80}", sent) else None
+
+
+# Де лежить код пристрою: усі місця, куди переноситься старий код браузера (17.21)
+DEVICE_COLUMNS = (("devices", "device_key"), ("device_history", "device_key"), ("remember_tokens", "device"),
+                  ("shifts", "device"), ("blocked_devices", "device_key"), ("conn_log", "device"))
+
+
+MIGRATE_WEB_CODES = True  # тести з короткими кодами-фікстурами вимикають (крім тестів самої міграції)
+
+
+def old_web_key(key):
+    """Старий код браузера: «web-» + 4…31 hex (до 17.20 — 8 hex, 32 біти). Новий — «web-» + 32 hex. Застосунок
+    («app-…», код з User-Agent) не мігрує: його код задає сам застосунок."""
+    return MIGRATE_WEB_CODES and bool(key) and bool(re.fullmatch(r"web-[0-9a-f]{4,31}", key))
+
+
+def device_alias(conn, key):
+    """Новий код для старого вже перенесеного коду браузера, інакше той самий код."""
+    if old_web_key(key):
+        r = conn.execute("select new from device_aliases where old = ?", (key,)).fetchone()
+        if r:
+            return r[0]
+    return key
+
+
+def migrate_device(conn, old):
+    """Старий короткий код браузера → новий 128-бітний: переносить його в усіх таблицях (DEVICE_COLUMNS) однією
+    транзакцією (комітить викликач, під _lock) і запам'ятовує old→new. Повертає новий код (або той самий, якщо
+    код не старий). Повторний виклик зі старим кодом повертає вже виданий новий."""
+    if not old_web_key(old):
+        return old
+    if (new := device_alias(conn, old)) != old:
+        return new
+    new = "web-" + secrets.token_hex(16)
+    for table, col in DEVICE_COLUMNS:
+        conn.execute(f"update {table} set {col} = ? where {col} = ?", (new, old))
+    conn.execute("insert into device_aliases(old, new, created_at) values (?, ?, ?)", (old, new, now()))
+    _blocked["at"] = 0.0  # кеш заблокованих — з новим кодом
+    for ip, v in list(_mac_pending.items()):
+        if v[1] == old:
+            _mac_pending[ip] = (v[0], new, v[2])
+    return new
 
 
 FP_RE = re.compile(r"[0-9a-f]{8,32}")
@@ -4393,6 +4439,20 @@ def _remember_login():
 
 
 @app.before_request
+def _migrate_session_device():
+    """Код браузера, запам'ятований при вході, ще старий короткий — переносимо на новий 128-бітний уже на першій
+    сторінці (17.21); base.html запише його в localStorage. Людина лишається в акаунті, зміна триває."""
+    dev = session.get("dev")
+    if not session.get("uid") or request.endpoint == "static" or not old_web_key(dev):
+        return
+    with _lock:
+        conn = db()
+        new = migrate_device(conn, dev)
+        conn.commit()
+    session["dev"] = new
+
+
+@app.before_request
 def _blocked_guard():
     """Пристрій заблокували, поки людина в акаунті: на наступній же сторінці — вихід і пояснення."""
     if not session.get("uid") or request.endpoint in ("static", "login", "logout", "health", "hello", "service_worker"):
@@ -4471,6 +4531,8 @@ def login():
                 # «Запам'ятати мене»: один раз увійшов — далі входить сам, навіть якщо IP зміниться
                 with _lock:
                     conn = db()
+                    key = migrate_device(conn, key)  # старий короткий код браузера → новий 128-бітний (17.21)
+                    session["dev"] = key  # сторінка запише його в localStorage (base.html)
                     observe_mac(conn, u["id"], key, fp, ip)  # кілька телефонів за одним MAC — він більше не впізнає
                     mac = client_mac(ip, cached_only=True)
                     # Пристрій не власника (телефон колеги чи невідомий) — підозріло: у журнал і сповіщення
@@ -4862,7 +4924,12 @@ def api_clock(action):
     mac = client_mac(client_ip())  # до блокування: читання ARP може тривати
     with _lock:
         conn = db()
-        key = device_key(body.get("device_id"))
+        # Старий короткий код браузера → новий 128-бітний (17.21): історія, зміна, блок переносяться, сторінка
+        # отримує новий код у відповіді ("device") і далі шле його. Старий код з іншої вкладки — той самий пристрій
+        sent = device_key(body.get("device_id"), alias=False)
+        key = migrate_device(conn, sent)
+        if key != sent and session.get("dev") in (sent, None):
+            session["dev"] = key
         if row := device_blocked(conn, key, mac, clean_fp(body.get("fp")) or session.get("fp")):
             blocked_attempt(conn, row, client_ip(), key, mac, f"зміна ({action})", current_user()["id"])
             conn.commit()
@@ -4884,6 +4951,8 @@ def api_clock(action):
             note_battery(conn, res["shift"]["id"], body)
         # Застосунок (2.4) будить людину сповіщенням «відключився від Wi-Fi» лише в її робочий час (17.17)
         res["in_work_time"] = bool(work_window(conn, current_user()["id"], now()))
+        if key != sent:
+            res["device"] = key  # clock.js запише в localStorage['crewhub_device']
         conn.commit()
     return jsonify(res)
 
@@ -5131,6 +5200,7 @@ def admin_device_rewrite(uid):
         return redirect(url_for("admin_employee", uid=uid))
     with _lock:
         conn = db()
+        key = device_alias(conn, key)  # старий код, уже перенесений на новий (17.21)
         conn.execute("select 1 from users where id = ?", (uid,)).fetchone() or abort(404)
         other = conn.execute("select u.full_name from devices d join users u on u.id = d.user_id where d.device_key = ? and d.user_id != ?",
                              (key, uid)).fetchone()
@@ -5202,7 +5272,7 @@ def admin_device_block():
     if pick and len(pick) == 4:
         f = {**f.to_dict(), "device_key": pick[0], "mac": pick[1], "user_id": pick[2], "label": pick[3]}
     key = (f.get("device_key") or "").strip()[:80] or None
-    key = key if key and re.fullmatch(r"[\w .:-]{4,80}", key) else None
+    key = device_alias(db(), key) if key and re.fullmatch(r"[\w .:-]{4,80}", key) else None  # старий код → новий (17.21)
     mac = (f.get("mac") or "").strip().lower().replace("-", ":") or None
     mac = mac if mac and MAC_RE.fullmatch(mac) else None
     if not key and not mac:
