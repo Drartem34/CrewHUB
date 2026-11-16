@@ -188,14 +188,13 @@ if __name__ == "__main__":
     # Другий запуск на тому ж порту: два «контролери Wi-Fi» і два бекапи на одній базі заважали б один одному.
     # Питаємо, чи хтось уже слухає порт (а не пробуємо його зайняти: після падіння старі з'єднання ще хвилину
     # висять у TIME_WAIT, і тоді автоперезапуск помилково вирішив би, що сервер уже працює)
-    import socket
-    try:
-        socket.create_connection(("127.0.0.1", PORT), timeout=2).close()
-    except OSError:
-        pass  # порт вільний — запускаємось
-    else:
-        print(f"{Colors.RED} Порт {PORT} уже зайнято: CrewHub (чи інша програма) вже працює. Другий запуск не потрібен.{Colors.RESET}")
-        sys.exit(0)  # 0 — щоб start.sh/start.bat не перезапускали його по колу
+    # Якщо це наш же CrewHub у фоні (після оновлення, з іншого вікна) — пропонуємо перезапустити його тут
+    # (--takeover — без питання); чужу програму не чіпаємо
+    import takeover
+    if takeover.port_busy(PORT, timeout=2):
+        from tls import FALLBACK_PORT
+        if not takeover.handle_busy_port(PORT, Colors, extra_ports=(FALLBACK_PORT,), force="--takeover" in sys.argv[1:]):
+            sys.exit(0)  # 0 — щоб start.sh/start.bat не перезапускали його по колу
 
     try:
         moved = migrate_legacy_data()
