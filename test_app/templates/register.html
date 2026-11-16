@@ -70,7 +70,7 @@
   (function () {
     const f = document.getElementById("regForm"); if (!f) return;
     // Той самий id пристрою, що й у годиннику зміни: сервер запам'ятає цей телефон як телефон людини
-    try { let id = localStorage.getItem("crewhub_device"); if (!id) { id = "web-" + Math.random().toString(16).slice(2, 10); localStorage.setItem("crewhub_device", id); } f.device_id.value = id; } catch (e) {}
+    try { let id = localStorage.getItem("crewhub_device"); if (!id) { id = "web-" + (window.crypto && crypto.getRandomValues ? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("") : Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 10)); localStorage.setItem("crewhub_device", id); } f.device_id.value = id; } catch (e) {}
     const norm = (raw) => {
       let d = raw.replace(/\D/g, "");
       if (d.length === 10 && d[0] === "0") d = "38" + d; else if (d.length === 9) d = "380" + d;

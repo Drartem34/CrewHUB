@@ -1571,5 +1571,125 @@ class RouterOutage1717Test(ScenarioBase):
             self.assertEqual(self.shift(u)["status"], "paused", u)  # роутер відповідає — люди справді пішли
         self.assertFalse(self.sql("select 1 from conn_log where event = 'network_downtime'"))
 
+
+class SameMacTwoPeople1720Test(ScenarioBase):
+    """17.20 (випадок з життя: Паша і Віка за другим роутером TP-Link): у кількох людей той самий MAC і навіть той самий IP
+    (NAT). Пристрій — це код пристрою; MAC лише підказка. Різні коди за одним MAC — це не «вхід у різні акаунти», не
+    «підбір пароля», не «чужий телефон» і не підстава блокувати; зміни не змішуються. Справжня зміна акаунтів з
+    одного пристрою (той самий код) ловиться й далі."""
+
+    def setUp(self):
+        super().setUp()
+        core._mac_seen.clear()
+        core._shared.update(at=0.0, set=set())
+        core._blocked["at"] = 0.0
+        self.addCleanup(core._shared.update, at=0.0, set=set())
+        with core.connect() as c:  # найсуворіші правила: чужий телефон не пускає в акаунт, 2 акаунти за годину — підозріло
+            c.execute("update settings set value = 'block_login' where key = 'foreign_phone_action'")
+            c.execute("update settings set value = '2' where key = 'suspicious_accounts_hour'")
+            c.commit()
+        self.tick(9, 30)
+        self.pasha = Phone(self.net, 30)
+        self.vika = Phone(self.net, 31)
+        del self.net[self.vika.ip]
+        self.vika.ip, self.vika.mac = self.pasha.ip, self.pasha.mac  # той самий IP і MAC роутера, свій код і відбиток
+
+    def restart(self):
+        """Сервер перезапустили: пам'ять про MAC (_mac_seen) зникла — лишилась лише база."""
+        core._mac_seen.clear()
+        core._shared.update(at=0.0, set=set())
+
+    def suspicious(self):
+        return self.sql("select event from conn_log where event in ('account_hopping', 'brute_force', 'blocked_device',"
+                        " 'login_other_device', 'shift_other_device')")
+
+    def test_both_login_and_work_without_blocks_or_mixing(self):
+        self.pasha.login(IVAN)
+        self.restart()  # навіть після перезапуску (між входами) MAC роутера впізнається за історією пристроїв
+        self.vika.login(OLHA)
+        self.assertEqual(self.suspicious(), [])
+        self.assertEqual([r[0] for r in self.sql("select mac from shared_macs")], [self.pasha.mac])
+        for p in (self.pasha, self.vika):
+            self.assertTrue(p.clock("start")["ok"])
+        ivan, olha = self.shift("ivan"), self.shift("olha")
+        self.assertNotEqual(ivan["id"], olha["id"])
+        self.assertEqual((ivan["device"], olha["device"]), (self.pasha.key, self.vika.key))
+        self.assertEqual((ivan["device_flag"], olha["device_flag"]), (None, None))
+        self.tick(11)
+        self.vika.clock("heartbeat")  # пінг Віки продовжує лише її зміну
+        self.assertEqual(self.shift("olha")["last_seen_at"], self.at(11))
+        self.assertEqual(self.shift("ivan")["last_seen_at"], self.at(9, 30))
+        self.tick(11, 5)
+        self.assertTrue(self.vika.clock("stop")["ok"])
+        self.assertEqual((self.shift("olha")["status"], self.shift("ivan")["status"]), ("closed", "active"))
+        self.assertEqual(self.pasha.clock("heartbeat")["shift"]["status"], "active")
+        # кожен — свій пристрій: в історії пристроїв людини лише її код
+        self.assertEqual(sorted(tuple(r) for r in self.sql("select u.username, h.device_key from device_history h join users u on u.id = h.user_id"
+                                                           " where u.username in ('ivan', 'olha')")),
+                         [("ivan", self.pasha.key), ("olha", self.vika.key)])
+        self.assertEqual(self.suspicious(), [])
+
+    def test_colleague_typos_are_not_password_guessing(self):
+        self.pasha.login(IVAN)
+        self.vika.login(OLHA)
+        for p, who in ((self.vika, OLHA), (self.pasha, IVAN), (self.vika, OLHA), (self.pasha, IVAN), (self.vika, OLHA)):
+            r = p.req("post", "/login", data={"username": who, "password": "wrong", "device_id": p.key, "fp": p.fp})
+            self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.sql("select count(*) from conn_log where event = 'brute_force'")[0][0], 0)
+        self.pasha.login(IVAN)
+        self.vika.login(OLHA)  # обидва входять далі
+        # справжній підбір з одного пристрою за тим самим роутером — ловиться
+        for who in (IVAN, OLHA, IVAN, "0500000001", OLHA):
+            self.pasha.req("post", "/login", data={"username": who, "password": "wrong", "device_id": self.pasha.key, "fp": self.pasha.fp})
+        self.assertEqual([tuple(r) for r in self.sql("select device from conn_log where event = 'brute_force'")], [(self.pasha.key,)])
+
+    def test_real_hopping_from_one_device_is_still_caught(self):
+        with core.connect() as c:  # (з block_login вхід у чужий акаунт відмовляє ще до перевірки — тут «позначати»)
+            c.execute("update settings set value = 'flag' where key = 'foreign_phone_action'")
+            c.commit()
+        self.vika.login(OLHA)
+        self.pasha.login(IVAN)
+        self.assertEqual(self.suspicious(), [])
+        self.pasha.logout()
+        r = self.pasha.req("post", "/login", data={"username": OLHA, "password": "1234", "device_id": self.pasha.key, "fp": self.pasha.fp})
+        row = self.sql("select device, details from conn_log where event = 'account_hopping'")
+        self.assertEqual(len(row), 1)
+        self.assertEqual(row[0][0], self.pasha.key)  # винуватець — телефон Паші, а не телефон Віки за тим самим MAC
+        self.assertIn("Іван Петренко", row[0][1])
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(len(self.events("olha", "login_other_device")), 1)  # акаунт Віки на телефоні Паші — чужий, як і раніше
+        self.vika.logout()
+        self.vika.login(OLHA)  # а сама Віка зі свого телефона — без «чужого телефона»
+        self.assertEqual(len(self.events("olha", "login_other_device")), 1)
+
+    def test_blocking_one_phone_behind_router_spares_colleague(self):
+        self.pasha.login(IVAN)
+        admin = Phone(self.net, 99, ua=PC).login("admin", "admin123")
+        page = admin.req("get", "/admin?tab=logs").get_data(as_text=True)
+        csrf = re.search(r'name="crewhub-csrf" content="([^"]+)"', page)[1]
+        # адмін блокує телефон Паші, поки сервер ще не бачив за цим MAC нікого іншого: блок і за кодом, і за MAC
+        admin.req("post", "/admin/devices/block", data={"csrf": csrf, "mac": self.pasha.mac, "device_key": self.pasha.key},
+                  headers={"Origin": "http://localhost"})
+        self.assertEqual(tuple(self.sql("select device_key, mac from blocked_devices")[0]), (self.pasha.key, self.pasha.mac))
+        core._blocked["at"] = 0.0
+        self.vika.login(OLHA)  # Віка за тим самим роутером — свій код і свій відбиток: не заблокована
+        self.assertTrue(self.vika.clock("start")["ok"])
+        self.assertEqual(self.vika.req("get", "/me").status_code, 200)
+        r = self.pasha.req("post", "/login", data={"username": IVAN, "password": "1234", "device_id": self.pasha.key, "fp": self.pasha.fp})
+        self.assertEqual(r.status_code, 403)  # а телефон Паші — заблокований
+
+    def test_router_mac_does_not_keep_shift_of_who_left(self):
+        # Лише Паша на зміні, але за його MAC уже заходила Віка зі свого телефона: MAC — роутер, він «на місці» завжди
+        self.pasha.login(IVAN)
+        self.assertTrue(self.pasha.clock("start")["ok"])
+        with core.connect() as c:  # сервер упізнав MAC зміни Паші (як фонова перевірка)
+            c.execute("update shifts set mac = ? where status != 'closed'", (self.pasha.mac,))
+            c.commit()
+        self.restart()
+        self.vika.login(OLHA)
+        core.presence_step()
+        self.assertEqual([r[0] for r in self.sql("select mac from shared_macs")], [self.pasha.mac])
+        self.assertIsNone(self.shift("ivan")["mac"])  # зміну Паші тримає лише його власний телефон
+
 if __name__ == "__main__":
     unittest.main()

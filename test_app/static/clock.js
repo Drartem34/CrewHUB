@@ -9,7 +9,8 @@
       // Safari на iPhone сам стирає сховище сайту (тиждень без відвідин, «Очистити історію») — код цього браузера
       // сервер пам'ятає з входу, повертаємо його, а не робимо новий: інакше телефон став би «новим пристроєм»
       if (!id && window.CREWHUB && CREWHUB.device) id = CREWHUB.device;
-      if (!id) id = "web-" + Math.random().toString(16).slice(2, 10);
+      // Новий код — 128 випадкових біт (17.20): головний ідентифікатор телефона; MAC за другим роутером у всіх однаковий
+      if (!id) id = "web-" + (window.crypto && crypto.getRandomValues ? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("") : Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 10));
       localStorage.setItem("crewhub_device", id);
       return id;  // той самий id, що надіслала реєстрація: за ним сервер упізнає телефон людини
     } catch (e) { return "web"; }

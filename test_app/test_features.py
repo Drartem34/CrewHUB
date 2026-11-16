@@ -585,14 +585,23 @@ class ForeignDeviceTest(CrewHubBase):
         self.assertEqual(self.sql("select count(*) from devices where device_key like 'app-%'")[0][0], 0)
 
     def test_colleagues_mac_means_colleagues_phone(self):
-        # Іванів телефон з новим кодом (очистили браузер) — MAC видає, чий це телефон
+        # Іванів телефон з новим кодом (очистили браузер) — MAC разом з тим самим відбитком видає, чий це телефон
         self.mark("ivan", "app-ivanphone001", self.FP_IVAN, self.MAC_IVAN)
         self.bind("olha", "web-0aa11bb2")
-        self.login_mac("0937654321", self.MAC_IVAN, device_id="web-31313131")
+        self.login_mac("0937654321", self.MAC_IVAN, device_id="web-31313131", fp=self.FP_IVAN)
         self.assertIn(("login_other_device", 0), self.events("olha"))
         details = self.sql("select details from conn_log where event = 'login_other_device'")[0][0]
         self.assertIn("Іван Петренко", details)
         self.assertIn(self.MAC_IVAN, details)
+
+    def test_same_mac_without_fingerprint_is_not_colleagues_phone(self):
+        # 17.20: той самий MAC, але інший код пристрою й невідомий відбиток — MAC лише підказка (за другим роутером
+        # він однаковий у всіх), тож це не «телефон Івана», а лише новий пристрій Ольги
+        self.mark("ivan", "app-ivanphone001", self.FP_IVAN, self.MAC_IVAN)
+        self.bind("olha", "web-0aa11bb2")
+        self.login_mac("0937654321", self.MAC_IVAN, device_id="web-31313131")
+        self.assertNotIn(("login_other_device", 0), self.events("olha"))
+        self.assertIn(("login_new_device", 0), self.events("olha"))
 
     def test_shared_mac_behind_extender_is_not_an_accusation(self):
         # Підсилювач Wi-Fi підставляє свій MAC за всіх: MAC той самий, відбитки різні — це не Іванів телефон

@@ -1174,6 +1174,13 @@ def observe_mac(conn, user_id, key, fp, ip):
     if len(_mac_seen) > 5000:
         _mac_seen.clear()
     if not other:
+        # Пам'ять _mac_seen живе лише до перезапуску сервера. Історія пристроїв — у базі: якщо за годину за цим MAC
+        # уже були інші люди з інших пристроїв, MAC — роутер/NAT і після перезапуску теж (17.20)
+        if user_id and mac not in shared_macs() and router_mac(conn, mac, (user_id, key, fp), history_only=True):
+            ids = [r[0] for r in conn.execute("select distinct user_id from device_history where mac = ? and last_at > ?",
+                                              (mac, now() - MAC_PEERS_WINDOW))]
+            mark_shared(conn, mac, "різні люди з різних пристроїв за одним MAC (роутер чи NAT)",
+                        list(dict.fromkeys([user_id, *ids])), ip, key)
         return
     mark_shared(conn, mac, why, [user_id, other[1][2]], ip, key)
 
@@ -1278,16 +1285,50 @@ def note_usage(conn, user_id, key, fp=None, mac=None, phone=None, ip=None):
 
 def _device_where(key, fp, mac):
     """Умова «той самий пристрій» для SQL ({key} — назва колонки коду): той самий код, або (код новий —
-    очистили браузер) той самий MAC, якщо відбиток не суперечить (як у версії 17.1): Wi-Fi-підсилювач
-    підставляє свій MAC за всі телефони за ним — тоді MAC однаковий, а відбитки різні."""
+    очистили браузер) той самий MAC І той самий відбиток. Головне — код пристрою; MAC лише підказка (17.20):
+    за другим роутером чи підсилювачем (NAT) у кількох людей однаковий MAC, і раніше MAC з невідомим відбитком
+    робив телефон Віки «телефоном Паші» — чужий акаунт, блок входу, змішані зміни."""
     conds, args = [], []
     if key:
         conds.append("x.{key} = ?")
         args.append(key)
-    if mac:
-        conds.append("(x.mac = ? and (? is null or x.fingerprint is null or x.fingerprint = ?))")
-        args += [mac, fp, fp]
+    if mac and fp:
+        conds.append("(x.mac = ? and x.fingerprint = ?)")
+        args += [mac, fp]
     return " or ".join(conds), args
+
+
+MAC_PEERS_WINDOW = 3600  # с: за цей час різні люди з різних пристроїв за одним MAC — це роутер/NAT, а не телефон
+
+
+def router_mac(conn, mac, also=None, history_only=False):
+    """Чи MAC належить не телефону, а роутеру/NAT/підсилювачу, за яким кілька людей (17.20): спільний (shared_macs),
+    підсилювач (repeater_macs) або в історії пристроїв за годину він є в різних людей з різних пристроїв (різний
+    код і не той самий відбиток). Такий MAC нікого не впізнає: ні вхід у різні акаунти, ні підбір пароля, ні
+    блокування за ним не рахуються — кожен працює під своїм кодом пристрою. Один пристрій (той самий код) у
+    різних акаунтах роутером не робить — це справжня «зміна акаунтів», і її далі ловить check_account_hopping."""
+    if not mac:
+        return False
+    if not history_only and (mac in shared_macs() or mac in repeater_macs()):
+        return True
+    rows = [dict(r) for r in conn.execute("select user_id, device_key, fingerprint from device_history where mac = ? and last_at > ?",
+                                          (mac, now() - MAC_PEERS_WINDOW))]
+    if also:  # (хто, код, відбиток) поточного запиту — його ще не записано в історію
+        rows.append(dict(zip(("user_id", "device_key", "fingerprint"), also)))
+    for i, a in enumerate(rows):
+        for b in rows[i + 1:]:
+            # Як different_devices: різні люди, різні коди одного виду (браузер — браузер) і обидва відбитки відомі й різні.
+            # Без відбитка чи браузер і застосунок — не відомо (це може бути один телефон: колега в «версії для ПК»)
+            if a["user_id"] != b["user_id"] and a["device_key"] and b["device_key"] and a["device_key"] != b["device_key"] \
+                    and a["device_key"][:4] == b["device_key"][:4] \
+                    and a["fingerprint"] and b["fingerprint"] and a["fingerprint"] != b["fingerprint"]:
+                return True
+    return False
+
+
+def id_mac(conn, mac):
+    """MAC як допоміжна ознака пристрою: сам MAC або None, якщо за ним роутер (router_mac)."""
+    return None if router_mac(conn, mac) else mac
 
 
 def first_user(conn, key, fp=None, mac=None, staff=True):
@@ -1732,11 +1773,30 @@ def blocked_rows(conn):
     return _blocked["rows"]
 
 
-def device_blocked(conn, key=None, mac=None):
-    """Рядок blocked_devices, якщо цей пристрій заблоковано — за кодом пристрою або MAC («залізо»), інакше None."""
-    for r in blocked_rows(conn):
-        if (key and r["device_key"] == key) or (mac and r["mac"] == mac):
+def device_blocked(conn, key=None, mac=None, fp=None):
+    """Рядок blocked_devices, якщо цей пристрій заблоковано — за кодом пристрою або MAC («залізо»), інакше None.
+    За MAC — лише якщо це MAC телефона, а не роутера/NAT (router_mac), і пристрій з іншим кодом не має іншого
+    відбитка, ніж заблокований: інакше блок одного телефона за другим роутером блокував би всіх колег за ним (17.20).
+    Заблокований телефон з очищеним браузером (новий код, той самий відбиток і MAC) — заблокований і далі."""
+    rows = blocked_rows(conn)
+    for r in rows:
+        if key and r["device_key"] == key:
             return r
+    hits = [r for r in rows if mac and r["mac"] == mac]
+    if not hits:
+        return None
+    router = router_mac(conn, mac)
+    for r in hits:
+        known = {r["fingerprint"], *(x[0] for x in conn.execute(
+            "select fingerprint from device_history where device_key = ?", (r["device_key"] or "",)))} - {None}
+        if router:
+            # MAC роутера сам нікого не впізнає — лише разом з відбитком заблокованого пристрою (як _device_where)
+            if fp and fp in known:
+                return r
+            continue
+        if fp and key and r["device_key"] and known and fp not in known:
+            continue  # інший пристрій (свій код і свій відбиток) за тим самим MAC — не той, що заблокували
+        return r
     return None
 
 
@@ -1764,14 +1824,18 @@ def note_failed_login(conn, user, ident, key, mac, ip):
     if mac:
         details["MAC"] = mac
     log_clock(conn, user["id"] if user else None, None, "login_failed", ip, None, False, key, details)
-    # Той самий пристрій: той самий код чи MAC; IP — лише якщо він не спільний (не тунель, де всі з 127.0.0.1)
+    # Той самий пристрій — за кодом пристрою (17.20). MAC і IP — лише для запитів без коду (скрипт, старий клієнт) і
+    # лише якщо за ними не роутер/NAT: за другим роутером у всіх колег один MAC і один IP, і чужі помилки входу
+    # не роблять «підбір пароля» з телефона людини. IP тунелю (усі з 127.0.0.1) не рахується, як і раніше
+    hint = id_mac(conn, mac)
     rows = conn.execute("select details from conn_log where event = 'login_failed' and created_at > ? and"
-                        " ((? is not null and device = ?) or (? is not null and details like ?) or (? = 0 and ip = ?))",
-                        (t - 900, key, key, mac, f'%"MAC": "{mac}"%', int(_shared_ip(ip)), ip)).fetchall()
+                        " ((? is not null and device = ?) or ((? is null or device is null) and"
+                        " ((? is not null and details like ?) or (? = 0 and ip = ?))))",
+                        (t - 900, key, key, key, hint, f'%"MAC": "{hint}"%', int(_shared_ip(ip) or (bool(mac) and not hint)), ip)).fetchall()
     if len(rows) < setting_int("suspicious_failed_logins", conn):
         return
-    if conn.execute("select 1 from conn_log where event = 'brute_force' and created_at > ? and (device = ? or ip = ?)",
-                    (t - 1800, key or "", ip)).fetchone():
+    if conn.execute("select 1 from conn_log where event = 'brute_force' and created_at > ? and"
+                    " ((? is not null and device = ?) or (? is null and ip = ?))", (t - 1800, key, key, key, ip)).fetchone():
         return
     tried = []
     for (d,) in rows:
@@ -1787,19 +1851,23 @@ def note_failed_login(conn, user, ident, key, mac, ip):
                  f"{', '.join(tried[:8])}. Заблокувати пристрій можна в «Огляді» → «Безпека сьогодні»")
 
 
-def check_account_hopping(conn, user, key, mac, ip):
+def check_account_hopping(conn, user, key, mac, ip, fp=None):
     """Після входу: з цього пристрою за годину заходили в suspicious_accounts_hour різних акаунтів — підозріло
-    (хтось «перебирає» акаунти чи відмічає колег). У журнал і керівникам, раз на годину на пристрій."""
+    (хтось «перебирає» акаунти чи відмічає колег). У журнал і керівникам, раз на годину на пристрій.
+    Пристрій — це код пристрою (17.20); MAC — лише разом з тим самим відбитком (очистили браузер) і лише MAC телефона,
+    не роутера: за другим роутером у колег один MAC, але різні коди — це не «вхід у різні акаунти»."""
     t = now()
-    if not (key or mac):
+    hint = id_mac(conn, mac) if (fp or not key) else None
+    if not (key or hint):
         return
     rows = conn.execute("select distinct u.id, u.full_name from device_history h join users u on u.id = h.user_id"
-                        " where h.last_at > ? and (h.device_key = ? or (? is not null and h.mac = ?))",
-                        (t - 3600, key or "", mac, mac)).fetchall()
+                        " where h.last_at > ? and ((? is not null and h.device_key = ?) or"
+                        " (? is not null and h.mac = ? and (? is null or h.fingerprint = ?)))",
+                        (t - 3600, key, key, hint, hint, fp, fp)).fetchall()
     if len(rows) < setting_int("suspicious_accounts_hour", conn):
         return
-    if conn.execute("select 1 from conn_log where event = 'account_hopping' and created_at > ? and (device = ? or ip = ?)",
-                    (t - 3600, key or "", ip)).fetchone():
+    if conn.execute("select 1 from conn_log where event = 'account_hopping' and created_at > ? and"
+                    " ((? is not null and device = ?) or (? is null and ip = ?))", (t - 3600, key, key, key, ip)).fetchone():
         return
     dev, names = device_name(), ", ".join(r["full_name"] for r in rows)
     details = {"пристрій": dev, "акаунтів за годину": len(rows), "акаунти": names}
@@ -3422,6 +3490,11 @@ def presence_step():
                 if mac not in shared_macs():
                     mark_shared(conn, mac, "на зміні кілька людей з одним MAC", [int(x) for x in ids.split(",")])
             mark_repeaters(conn)
+            # Відкрита зміна лише одна, але за її MAC за годину заходили й інші люди з інших пристроїв — це роутер/NAT:
+            # він «на місці» завжди і тримав би зміну людині, яка вже пішла (17.20)
+            for mac, uid in conn.execute("select mac, user_id from shifts where status != 'closed' and mac is not null").fetchall():
+                if mac not in shared_macs() and router_mac(conn, mac, history_only=True):
+                    mark_shared(conn, mac, "різні люди з різних пристроїв за одним MAC (роутер чи NAT)", [uid])
             conn.commit()
             # Відкриті зміни, що мовчать: активні або на паузі через Wi-Fi. Паузу зміни з застосунку не чіпаємо —
             # застосунок сам знає, коли телефон вийшов з мережі, і поверне зміну точніше.
@@ -4299,8 +4372,8 @@ def _remember_login():
     with _lock:
         conn = db()
         uid = remember_user(conn, cookie, client_ip())
-        tok = uid and conn.execute("select device, mac from remember_tokens where selector = ?", (cookie.split(":", 1)[0],)).fetchone()
-        if tok and device_blocked(conn, tok["device"], client_mac(client_ip(), cached_only=True) or tok["mac"]):
+        tok = uid and conn.execute("select device, mac, fingerprint from remember_tokens where selector = ?", (cookie.split(":", 1)[0],)).fetchone()
+        if tok and device_blocked(conn, tok["device"], client_mac(client_ip(), cached_only=True) or tok["mac"], tok["fingerprint"]):
             uid = None  # заблокований пристрій сам не входить (вхід з паролем покаже, чому)
         if uid:  # токен видали на чужому телефоні — та сама плашка «Ви в чужому акаунті», що й після входу з паролем
             t = conn.execute("select device, fingerprint, mac from remember_tokens where selector = ?", (cookie.split(":", 1)[0],)).fetchone()
@@ -4312,6 +4385,8 @@ def _remember_login():
         session.permanent = True
         if tok and (tok["device"] or "").startswith("web-"):
             session["dev"] = tok["device"]  # код пристрою цього браузера: сторінка поверне його, якщо Safari стер сховище сайту
+        if tok and tok["fingerprint"]:
+            session["fp"] = tok["fingerprint"]  # відбиток: блок за MAC роутера не зачіпає колег (17.20)
         if owner:
             session["foreign_owner"] = owner
         g.pop("user", None)
@@ -4327,13 +4402,13 @@ def _blocked_guard():
         return
     key = device_key() or session.get("dev")  # застосунок — код у User-Agent, браузер — код, запам'ятований при вході
     mac = client_mac(client_ip(), cached_only=True)
-    row = device_blocked(conn, key, mac)
+    row = device_blocked(conn, key, mac, session.get("fp"))
     if not row:
         return
     with _lock:
         conn = db()
         blocked_attempt(conn, row, client_ip(), key, mac, "робота в акаунті", session.get("uid"))
-        for col, v in (("device", key), ("mac", mac)):
+        for col, v in (("device", key), ("mac", id_mac(conn, mac))):  # MAC роутера — колег за ним не викидаємо (17.20)
             if v:
                 conn.execute(f"delete from remember_tokens where {col} = ?", (v,))
         conn.commit()
@@ -4368,7 +4443,7 @@ def login():
         key, fp, mac = device_key(request.form.get("device_id")), clean_fp(request.form.get("fp")), client_mac(ip)
         with _lock:
             conn = db()
-            if row := device_blocked(conn, key, mac):  # заблокований адміном пристрій не входить ні в який акаунт
+            if row := device_blocked(conn, key, mac, fp):  # заблокований адміном пристрій не входить ні в який акаунт
                 blocked_attempt(conn, row, ip, key, mac, "вхід", u["id"] if u else None)
                 conn.commit()
                 flash("Цей пристрій заблоковано адміністратором")
@@ -4390,6 +4465,7 @@ def login():
                 session.clear()
                 session["uid"] = u["id"]
                 session["dev"] = key  # код пристрою браузера (він лише у формі): за ним блокування діє на всіх сторінках
+                session["fp"] = fp  # і відбиток: за MAC роутера блок не зачіпає колег з іншим відбитком (17.20)
                 session.permanent = True
                 resp = redirect(url_for("index"))
                 # «Запам'ятати мене»: один раз увійшов — далі входить сам, навіть якщо IP зміниться
@@ -4412,7 +4488,7 @@ def login():
                     note_usage(conn, u["id"], key, fp, mac)
                     if not mac:
                         want_mac(ip, u["id"], key)  # MAC ще не підтверджено — підтвердить фонова перевірка (17.15)
-                    check_account_hopping(conn, u, key, mac, ip)
+                    check_account_hopping(conn, u, key, mac, ip, fp)
                     val = issue_remember(conn, u["id"], key, device_name(), client_ip(), fp, mac)
                     conn.commit()
                 return set_remember_cookie(resp, val)
@@ -4436,7 +4512,7 @@ def register():
         reg_mac = client_mac(client_ip())  # до блокування: читання ARP може тривати
         with _lock:
             conn = db()
-            if row := device_blocked(conn, device_key(form.get("device_id")), reg_mac):
+            if row := device_blocked(conn, device_key(form.get("device_id")), reg_mac, clean_fp(form.get("fp"))):
                 blocked_attempt(conn, row, client_ip(), device_key(form.get("device_id")), reg_mac, "реєстрація")
                 conn.commit()
                 flash("Цей пристрій заблоковано адміністратором")
@@ -4787,7 +4863,7 @@ def api_clock(action):
     with _lock:
         conn = db()
         key = device_key(body.get("device_id"))
-        if row := device_blocked(conn, key, mac):
+        if row := device_blocked(conn, key, mac, clean_fp(body.get("fp")) or session.get("fp")):
             blocked_attempt(conn, row, client_ip(), key, mac, f"зміна ({action})", current_user()["id"])
             conn.commit()
             return jsonify({"ok": False, "error": "Цей пристрій заблоковано адміністратором"}), 403
@@ -5132,7 +5208,7 @@ def admin_device_block():
     if not key and not mac:
         flash("Немає ні коду пристрою, ні MAC — блокувати нічого")
         return redirect(back)
-    if mac and mac in shared_macs():
+    if mac and router_mac(db(), mac):
         flash(f"MAC {mac} спільний для кількох телефонів (підсилювач чи роутер) — блокую лише за кодом пристрою")
         mac = None
         if not key:
@@ -5151,7 +5227,7 @@ def admin_device_block():
                            " values (?, ?, ?, ?, ?, ?, ?, ?)",
                            (key, mac, clean_fp(f.get("fingerprint")), label, " ".join((f.get("reason") or "").split())[:200] or None,
                             parse_int(f.get("user_id")), current_user()["id"], now()))
-        for col, v in (("device", key), ("mac", mac)):  # «запам'ятати мене» на цьому пристрої — більше не діє
+        for col, v in (("device", key), ("mac", id_mac(conn, mac))):  # MAC роутера — колег за ним не викидаємо (17.20)  # «запам'ятати мене» на цьому пристрої — більше не діє
             if v:
                 conn.execute(f"delete from remember_tokens where {col} = ?", (v,))
         audit(conn, current_user()["id"], "INSERT", "blocked_devices", cur.lastrowid, parse_int(f.get("user_id")),
@@ -5221,8 +5297,12 @@ def block_candidates(conn):
     out, seen, t = [], set(), now()
     shared = shared_macs()
 
+    routers = {}
+
     def add(key, mac, uid, label):
-        mac = mac if mac and mac not in shared else None
+        if mac and mac not in routers:
+            routers[mac] = mac in shared or router_mac(conn, mac)
+        mac = mac if mac and not routers[mac] else None
         if (not key and not mac) or (key, mac) in seen or device_blocked(conn, key, mac):
             return
         seen.add((key, mac))
