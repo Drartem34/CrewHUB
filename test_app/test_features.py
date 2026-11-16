@@ -1308,6 +1308,38 @@ class HttpsDuckdnsTest(CrewHubBase):
         app = self.client.get("/login", headers={"User-Agent": "Mozilla/5.0 CrewHubApp/2.4"})  # застосунок — не перекидаємо
         self.assertNotIn("crewhub-https", app.get_data(as_text=True))
 
+    def test_silent_connections_do_not_block_https(self):
+        """17.19.1: з'єднання, що відкрились і мовчать (передпідключення Chrome, слабкий Wi-Fi), раніше блокували прийом
+        усіх нових на 10 с кожне — у людей «сайт недоступний». Тепер нові клієнти обслуговуються одразу, keep-alive живе."""
+        import ssl
+        import socket
+        import time
+        self.tls.save_cert("crewhub.duckdns.org", *_self_signed())
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            port = sk.getsockname()[1]
+        self.assertEqual(self.tls.start_server(port), port)
+        held = [socket.create_connection(("127.0.0.1", port)) for _ in range(30)]  # TCP є, TLS не почато
+        junk = socket.create_connection(("127.0.0.1", port))
+        junk.sendall(b"GET / HTTP/1.1\r\n\r\n")  # звичайний http на https-порт — закривається лише він
+        held.append(junk)
+        self.addCleanup(lambda: [s.close() for s in held])
+        ctx = ssl.create_default_context()
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        t = time.time()
+        with ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5), server_hostname="crewhub.duckdns.org") as s:
+            for _ in range(2):  # два запити в одному з'єднанні (keep-alive)
+                s.sendall(b"GET /health HTTP/1.1\r\nHost: crewhub.duckdns.org\r\n\r\n")
+                buf = b""
+                while b"\r\n\r\n" not in buf:
+                    buf += s.recv(4096)
+                head, body = buf.split(b"\r\n\r\n", 1)
+                self.assertTrue(head.startswith(b"HTTP/1.1 200"), head)
+                n = int(next(ln.split(b":", 1)[1] for ln in head.split(b"\r\n") if ln.lower().startswith(b"content-length")))
+                while len(body) < n:
+                    body += s.recv(4096)
+        self.assertLess(time.time() - t, 3)
+
     def test_step_updates_duckdns_gets_cert_and_starts(self):
         with core.connect() as c:
             for k, v in (("https_enabled", "1"), ("https_domain", "crewhub"), ("https_port", "443")):

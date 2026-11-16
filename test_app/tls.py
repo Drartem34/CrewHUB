@@ -277,15 +277,85 @@ def save_cert(domain, cert_pem, key_pem):
 
 
 # ── Сервер з шифруванням ──────────────────────────────────────────────────
+def _lazy_classes():
+    """HTTPS-сервер cheroot без TLS-рукостискання в потоці, який приймає з'єднання (17.19.1): (Server, SSL-адаптер).
+
+    Звичайний BuiltinSSLAdapter робить рукостискання одразу після accept() — у єдиному потоці прийому, з таймаутом 10 с.
+    Одне з'єднання, що відкрилось, але мовчить (передпідключення Chrome, телефон на слабкому Wi-Fi, перевірка «чи
+    відкривається https» на сторінці), зупиняло прийом УСІХ нових з'єднань до 10 с, кілька таких — на хвилини: у людей
+    браузер показував «Не вдається отримати доступ до сайту», хоча сервер працював. Тепер нове з'єднання чекає перших
+    байтів у селекторі cheroot (як вільне keep-alive, без потоку; мовчить довше за timeout — закривається), а
+    рукостискання робить робочий потік, коли телефон щось надіслав; невдале — тихо закриває лише це з'єднання."""
+    import ssl
+    from cheroot import errors, wsgi
+    from cheroot.ssl.builtin import BuiltinSSLAdapter
+
+    class LazyTLSSocket(ssl.SSLSocket):
+        _crewhub_hs = False
+
+        def _crewhub_handshake(self):
+            if not self._crewhub_hs:
+                self._crewhub_hs = True
+                try:
+                    self.do_handshake()
+                except OSError as e:  # ssl.SSLError, обрив, таймаут — закрити лише це з'єднання
+                    raise errors.FatalSSLAlert(*e.args) from e
+
+        def recv_into(self, *a, **kw):
+            self._crewhub_handshake()
+            return super().recv_into(*a, **kw)
+
+        def recv(self, *a, **kw):
+            self._crewhub_handshake()
+            return super().recv(*a, **kw)
+
+        def send(self, *a, **kw):
+            self._crewhub_handshake()
+            return super().send(*a, **kw)
+
+        def sendall(self, *a, **kw):
+            self._crewhub_handshake()
+            return super().sendall(*a, **kw)
+
+    class LazyHandshakeAdapter(BuiltinSSLAdapter):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.context.sslsocket_class = LazyTLSSocket
+
+        def wrap(self, sock):
+            try:
+                s = self.context.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+            except OSError as e:
+                raise errors.FatalSSLAlert(*e.args) from e
+            return s, {"wsgi.url_scheme": "https", "HTTPS": "on"}
+
+    class LazyServer(wsgi.Server):
+        # Вільні з'єднання в селекторі (keep-alive і ті, що чекають перших байтів) — без потоків, майже нічого не коштують.
+        # Стандартних 10 замало: Chrome тримає до 6 з'єднань на телефон, і понад ліміт сервер рвав keep-alive
+        keep_alive_conn_limit = 256
+
+        def process_conn(self, conn):
+            # Щойно прийняте з'єднання (рукостискання ще не було) — у селектор до перших байтів, не в робочий потік
+            if getattr(conn.socket, "_crewhub_hs", True) is False and not getattr(conn, "_crewhub_parked", False):
+                conn._crewhub_parked = True
+                try:
+                    self.put_conn(conn)
+                    return
+                except Exception:  # noqa: BLE001 — не вийшло поставити в селектор: як раніше, одразу в чергу
+                    pass
+            super().process_conn(conn)
+
+    return LazyServer, LazyHandshakeAdapter
+
+
 def start_server(port, app=None):
     """HTTPS-сервер (cheroot) поруч зі звичайним: порт port, якщо не вийде — FALLBACK_PORT. Повертає фактичний порт."""
-    from cheroot import wsgi
-    from cheroot.ssl.builtin import BuiltinSSLAdapter
+    server_cls, adapter = _lazy_classes()
     cert, key, _dom = paths()
     last = None
     for p in dict.fromkeys((port, FALLBACK_PORT)):
-        srv = wsgi.Server(("0.0.0.0", p), app or core.app, numthreads=16, server_name="crewhub")
-        srv.ssl_adapter = BuiltinSSLAdapter(cert, key)
+        srv = server_cls(("0.0.0.0", p), app or core.app, numthreads=16, server_name="crewhub")
+        srv.ssl_adapter = adapter(cert, key)
         try:
             srv.prepare()
         except OSError as e:  # зайнятий чи без прав (Linux: порти до 1024 — лише root)
