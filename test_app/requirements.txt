@@ -5,6 +5,8 @@ rich>=13.0
 # шифрування (HTTPS з DuckDNS і Let's Encrypt, 17.18): без них сервер працює по http, як раніше
 cryptography>=42
 cheroot>=10
+# сповіщення на телефон і в браузер (Web Push, 17.19): без неї сервер працює як раніше, пуші вимкнено
+pywebpush>=2.0
 # необов'язково:
 # flask-limiter
 # pinggy

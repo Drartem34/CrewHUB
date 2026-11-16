@@ -260,7 +260,7 @@ def setting_label(key):
 ROLES = {"employee": "Працівник", "teamlead": "Тімлід", "moderator": "Модератор", "admin": "Адміністратор"}
 STAFF_ROLES = ("moderator", "admin")                # повне керування (вкладки «Керування»)
 DAYOFF_ROLES = ("teamlead", "moderator", "admin")   # дають і редагують дей-оффи
-VERSION = "17.18"  # версія сервера — видно в «Правилах» і у вікні сервера (щоб знати, чи оновлення справді запустилось)
+VERSION = "17.19"  # версія сервера — видно в «Правилах» і у вікні сервера (щоб знати, чи оновлення справді запустилось)
 DAYOFF_PICK_DAYS = 3                                # стільки днів після дозволу людина може обрати день
 STATUSES = {"active": "Активний", "vacation": "У відпустці", "sick_leave": "На лікарняному", "dismissed": "Звільнений",
             "pending": "Чекає підтвердження"}
@@ -324,6 +324,10 @@ create table if not exists audit (id integer primary key, actor_id integer, acti
 create table if not exists notifications (id integer primary key, user_id integer not null, title text not null,
   body text, created_at integer not null, is_read integer not null default 0);
 create table if not exists meta (key text primary key, value text not null);
+-- Web Push (17.19): браузери/iPhone, де людина натиснула «Увімкнути сповіщення» (див. push.py)
+create table if not exists push_subscriptions (id integer primary key, user_id integer not null references users(id) on delete cascade,
+  endpoint text not null unique, p256dh text not null, auth text not null, ua text, created_at integer not null, last_ok_at integer);
+create index if not exists push_subscriptions_user on push_subscriptions(user_id);
 -- Телефони людей: запам'ятовуються під час реєстрації (або перший, з якого прийшов автопінг).
 -- Автозміна вмикається лише з телефона, прив'язаного до людини. IP у Wi-Fi змінюється, тож ключ — ідентифікатор пристрою
 create table if not exists devices (id integer primary key, user_id integer not null references users(id) on delete cascade,
@@ -779,6 +783,24 @@ def init_db(seed=True):
             conn.execute("update users set must_change_password = 1 where id = ?", (a["id"],))
     conn.commit()
     conn.close()
+    setup_push()
+
+
+def _push_subject():
+    try:
+        import tls
+        return tls.https_url()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def setup_push():
+    """Web Push (17.19): ключі VAPID лежать поруч із базою; без pywebpush пуші просто вимкнено."""
+    try:
+        import push
+        push.setup(os.path.dirname(os.path.abspath(DB_PATH)), connect, _lock, _push_subject)
+    except Exception:  # noqa: BLE001 — пуші ніколи не заважають запуску сервера
+        log.exception("Пуші не налаштовано")
 
 
 def seed_demo_history(conn):
@@ -848,9 +870,27 @@ def diff(old, new):
     return {k: [old.get(k), v] for k, v in new.items() if str(old.get(k)) != str(v)}
 
 
-def notify(conn, user_id, title, body=""):
+def notify(conn, user_id, title, body="", url=None):
+    """Сповіщення в дзвіночку застосунку + системний пуш на пристрої людини, де ввімкнено сповіщення (17.19).
+    Пуш лише стає в чергу фонового потоку — запит не чекає."""
     conn.execute("insert into notifications(user_id, title, body, created_at) values (?, ?, ?, ?)",
                  (user_id, title, body, now()))
+    try:
+        import push
+        push.send(user_id, title, body, url or "/", conn=conn)
+    except Exception:  # noqa: BLE001 — пуш ніколи не ламає основну дію
+        log.exception("Пуш не поставлено в чергу")
+
+
+def fmt_day_range(a, b=None):
+    """«12.11.2026» чи «12.11–14.11.2026» для тексту сповіщень."""
+    try:
+        x, y = date.fromisoformat(a), date.fromisoformat(b or a)
+    except (TypeError, ValueError):
+        return " – ".join(v for v in (a, b) if v)
+    if x == y:
+        return f"{x:%d.%m.%Y}"
+    return f"{x:%d.%m}–{y:%d.%m.%Y}" if x.year == y.year else f"{x:%d.%m.%Y}–{y:%d.%m.%Y}"
 
 
 def notify_staff(conn, title, body="", roles=STAFF_ROLES):
@@ -4280,7 +4320,7 @@ def _remember_login():
 @app.before_request
 def _blocked_guard():
     """Пристрій заблокували, поки людина в акаунті: на наступній же сторінці — вихід і пояснення."""
-    if not session.get("uid") or request.endpoint in ("static", "login", "logout", "health", "hello"):
+    if not session.get("uid") or request.endpoint in ("static", "login", "logout", "health", "hello", "service_worker"):
         return
     conn = db()
     if not blocked_rows(conn):
@@ -4309,7 +4349,7 @@ def _blocked_guard():
 def _force_password_change():
     # Після скидання паролю адміном працівник спершу задає свій
     u = current_user() if session.get("uid") else None
-    if u and u["must_change_password"] and request.endpoint not in ("password_change", "logout", "static"):
+    if u and u["must_change_password"] and request.endpoint not in ("password_change", "logout", "static", "service_worker"):
         if request.path.startswith("/api/"):
             return jsonify({"ok": False, "error": "Спершу змініть тимчасовий пароль"}), 403
         return redirect(url_for("password_change"))
@@ -4651,6 +4691,89 @@ def notifications_read():
         db().execute("update notifications set is_read = 1 where user_id = ?", (current_user()["id"],))
         db().commit()
     return redirect(request.referrer or url_for("index"))
+
+
+# ---------------------------------------------------------------------------
+# Web Push (17.19): системні сповіщення в браузер і на iPhone (PWA). Логіка — push.py
+# ---------------------------------------------------------------------------
+@app.route("/sw.js")
+def service_worker():
+    """Service worker роздається з кореня, щоб його scope був увесь сайт («/»), а не лише /static/."""
+    resp = send_file(os.path.join(BASE_DIR, "static", "sw.js"), mimetype="text/javascript", max_age=0)
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/push/vapid-public-key")
+def push_public_key():
+    import push
+    return jsonify({"ok": True, "enabled": push.enabled(), "key": push.public_key()})
+
+
+def _push_user():
+    u = current_user()
+    if not u:
+        return None, (jsonify({"ok": False, "error": "Потрібно увійти"}), 401)
+    return u, None
+
+
+@app.post("/push/subscribe")
+def push_subscribe():
+    import push
+    u, err = _push_user()
+    if err:
+        return err
+    if not push.enabled():
+        return jsonify({"ok": False, "error": "Сповіщення на сервері вимкнено (немає pywebpush)"}), 503
+    data = request.get_json(silent=True) or {}
+    with _lock:
+        conn = db()
+        if not push.save_subscription(conn, u["id"], data.get("subscription", data), now(), request.headers.get("User-Agent")):
+            return jsonify({"ok": False, "error": "Неправильна підписка"}), 400
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.post("/push/unsubscribe")
+def push_unsubscribe():
+    import push
+    u, err = _push_user()
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    endpoint = data.get("endpoint") or (data.get("subscription") or {}).get("endpoint")
+    if not isinstance(endpoint, str):
+        return jsonify({"ok": False, "error": "Немає адреси підписки"}), 400
+    with _lock:
+        conn = db()
+        n = push.remove_subscription(conn, u["id"], endpoint)
+        conn.commit()
+    return jsonify({"ok": True, "removed": n})
+
+
+_push_tests = Throttle()
+
+
+@app.post("/push/test")
+def push_test():
+    """Перевірочне сповіщення собі — кнопка «Перевірити» після ввімкнення."""
+    import push
+    u, err = _push_user()
+    if err:
+        return err
+    if not push.enabled():
+        return jsonify({"ok": False, "error": "Сповіщення на сервері вимкнено"}), 503
+    if _push_tests.recent(u["id"], 60)[0] >= 5:
+        return jsonify({"ok": False, "error": "Забагато перевірок — спробуйте за хвилину"}), 429
+    _push_tests.add(u["id"])
+    with _lock:
+        conn = db()
+        has = conn.execute("select count(*) from push_subscriptions where user_id = ?", (u["id"],)).fetchone()[0]
+    if not has:
+        return jsonify({"ok": False, "error": "На жодному пристрої сповіщення ще не ввімкнено"}), 400
+    push.send(u["id"], "CrewHub: перевірка", "Сповіщення працюють. Сюди прийде відповідь на відпустку, дей-офф чи штраф.", "/me?tab=app")
+    return jsonify({"ok": True, "devices": has})
 
 
 # ---------------------------------------------------------------------------
@@ -5309,13 +5432,13 @@ def team_dayoff():
                     conn.execute("update requests set status = 'approved', reviewer_id = ? where id = ?", (actor["id"], r["id"]))
                     apply_absence(conn, conn.execute("select * from requests where id = ?", (r["id"],)).fetchone())
                     audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"status": ["pending", "approved"]})
-                    notify(conn, r["user_id"], "Дей-офф погоджено", r["starts_on"])
+                    notify(conn, r["user_id"], "Дей-офф погоджено", fmt_day_range(r["starts_on"]), url="/me?tab=schedule")
             elif action == "approve":
                 grant_dayoff(conn, r, actor)
             else:
                 conn.execute("update requests set status = 'rejected', reviewer_id = ? where id = ?", (actor["id"], r["id"]))
                 audit(conn, actor["id"], "UPDATE", "requests", r["id"], r["user_id"], {"status": ["pending", "rejected"]})
-                notify(conn, r["user_id"], "Дей-офф не дозволено", f.get("comment") or "")
+                notify(conn, r["user_id"], "Дей-офф не дозволено", f.get("comment") or "", url="/me?tab=requests")
         elif action == "grant":
             uid = conn.execute("select id from users where id = ? and id != ? and status not in ('dismissed', 'pending')",
                                (f.get("user_id"), actor["id"])).fetchone() or abort(400)
@@ -6157,6 +6280,8 @@ def admin_adjustment():
                            (uid, amount, reason, day, current_user()["id"], now()))
         audit(conn, current_user()["id"], "INSERT", "adjustments", cur.lastrowid, uid,
               {"amount": [None, amount], "reason": [None, reason]})
+        notify(conn, uid, "Вам виписано штраф" if amount < 0 else "Вам нараховано бонус",
+               f"{fmt_money(abs(amount))} за {fmt_day_range(day)}: {reason}", url="/me?tab=timesheet")
         conn.commit()
     return redirect(url_for("admin_employee", uid=uid))
 
@@ -6174,6 +6299,8 @@ def admin_adjustment_delete(aid):
         conn.execute("delete from adjustments where id = ?", (aid,))
         audit(conn, current_user()["id"], "DELETE", "adjustments", aid, a["user_id"],
               {"amount": [a["amount"], None], "reason": [a["reason"], None]})
+        notify(conn, a["user_id"], "Штраф скасовано" if a["amount"] < 0 else "Бонус скасовано",
+               f"{fmt_money(abs(a['amount']))}: {a['reason']}", url="/me?tab=timesheet")
         conn.commit()
     flash("Скасовано")
     return redirect(url_for("admin_employee", uid=a["user_id"]))
@@ -6234,7 +6361,11 @@ def admin_request(rid, decision):
         conn.execute("update requests set status = ?, reviewer_id = ?, review_comment = ? where id = ?",
                      ("approved" if approve else "rejected", actor["id"], comment, rid))
         audit(conn, actor["id"], "UPDATE", "requests", rid, r["user_id"], {"status": ["pending", "approved" if approve else "rejected"]})
-        notify(conn, r["user_id"], "Запит схвалено" if approve else "Запит відхилено", comment or REQUEST_TYPES[r["type"]])
+        what = REQUEST_TYPES[r["type"]]
+        if r["type"] in ABSENCE_TYPES and r["starts_on"]:
+            what += f" {fmt_day_range(r['starts_on'], r['ends_on'])}"
+        notify(conn, r["user_id"], "Запит схвалено" if approve else "Запит відхилено",
+               what + (f". {comment}" if comment else ""), url="/me?tab=requests")
         conn.commit()
     return redirect(url_for("admin", tab="requests"))
 

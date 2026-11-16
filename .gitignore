@@ -3,6 +3,8 @@ test_app/crewhub_test.db*
 test_app/*.db
 test_app/*.db-*
 test_app/server_id.txt
+# Ключ сповіщень (Web Push, 17.19) — лежить поруч із базою, секрет
+vapid_private.pem*
 test_app/backups/
 test_app/people/
 test_app/logs/

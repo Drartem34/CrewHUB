@@ -1,11 +1,19 @@
 {
+  "id": "/",
   "name": "CrewHub",
   "short_name": "CrewHub",
   "description": "Облік змін з перевіркою робочого Wi-Fi",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#e8173d",
   "lang": "uk",
-  "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+  "icons": [
+    {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    {"src": "/static/icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ]
 }

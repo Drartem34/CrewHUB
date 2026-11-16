@@ -1,0 +1,19 @@
+{# Web Push (17.19): кнопка «Увімкнути сповіщення». compact — коротка картка на «Зміні» (ховається, коли вже ввімкнено),
+   інакше — повна картка в «Налаштуваннях додатку». Усю логіку виконує static/push.js; без JS картка не видна. #}
+{% if not in_app %}
+<div class="card push-card" data-push-card data-compact="{{ '1' if compact else '0' }}" hidden>
+  <div class="card-head"><h3>{{ icon('bell') }} Сповіщення на телефон</h3>
+    {% if compact %}<button type="button" class="sm ghost" data-push-later>Не зараз</button>{% endif %}</div>
+  <p class="muted small" style="margin:0 0 10px" data-push-state>Відповідь на відпустку чи дей-офф, штраф або бонус прийде як звичайне сповіщення телефона — навіть коли CrewHub закрито.</p>
+  <div class="banner info" data-push-ios hidden>{{ icon('phone') }}<div><b>На iPhone спершу додайте CrewHub на екран «Додому».</b>
+    Натисніть «Поділитися» <span aria-hidden="true">⬆︎</span> внизу Safari → «На початковий екран» → «Додати».
+    Потім відкрийте CrewHub з цієї іконки й натисніть тут «Увімкнути сповіщення». Потрібна iOS 16.4 або новіша.</div></div>
+  <div class="banner info" data-push-http hidden>{{ icon('shield') }}<div>Сповіщення працюють лише через захищене з'єднання (https).
+    {% if https_url %}<a href="{{ https_url }}{{ request.full_path if request.query_string else request.path }}">Відкрити захищену адресу</a>{% else %}Попросіть адміністратора ввімкнути шифрування (HTTPS) у «Правилах».{% endif %}</div></div>
+  <div class="btn-row">
+    <button type="button" class="primary" data-push-on hidden>{{ icon('bell', 'sm') }}Увімкнути сповіщення</button>
+    <button type="button" class="sm" data-push-test hidden>{{ icon('send', 'sm') }}Перевірити</button>
+    <button type="button" class="sm ghost" data-push-off hidden>Вимкнути на цьому пристрої</button>
+  </div>
+</div>
+{% endif %}

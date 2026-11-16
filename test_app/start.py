@@ -245,6 +245,9 @@ if __name__ == "__main__":
     tls.start()
     print_status("Шифрування HTTPS (фон)", tls.available(), "коли ввімкнено в «Правилах»" if tls.available() else "pip install cryptography cheroot",
                  optional=True)
+    import push
+    print_status("Сповіщення на телефон (Web Push)", push.enabled(),
+                 "працюють лише по HTTPS" if push.enabled() else "pip install pywebpush", optional=True)
     try:
         import waitress
     except ImportError:
